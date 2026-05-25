@@ -135,12 +135,19 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "checkpoint": {
-          const msg = message ?? `wip: checkpoint-${smRef.current.activeSpecId ?? "unknown"}`;
+          if (!smRef.current.activeSpecId) {
+            return {
+              content: [{ type: "text" as const, text: "Error: Cannot checkpoint without an active spec. Save the spec with pi_coder_save_spec first." }],
+              details: { success: false, error: "No active spec ID — save spec before checkpointing" },
+              isError: true,
+            };
+          }
+          const msg = message ?? `wip: checkpoint-${smRef.current.activeSpecId}`;
           result = await gitOps.checkpoint(msg);
           // Store the ref in the state machine
           if (result.success && result.ref) {
             smRef.current.setActiveSpec(
-              smRef.current.activeSpecId ?? "unknown",
+              smRef.current.activeSpecId,
               result.ref,
             );
           }
@@ -461,7 +468,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     promptGuidelines: [
       "Use pi_coder_advance_fsm when you have finished the current state's work and are ready to move on.",
       "IDLE → SPEC_WORK: Start a new TDD cycle. You can then delegate to the researcher.",
-      "SPEC_WORK → SPEC_APPROVED: Present the spec to the user for approval via interview.",
+      "SPEC_WORK → SPEC_APPROVED: You MUST save the spec with pi_coder_save_spec FIRST. Then present it to the user for approval via interview. Advancing without saving will be blocked.",
       "SPEC_APPROVED → GIT_CHECKPOINT: The user approved the spec. Time to checkpoint.",
       "TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed. Advance to the next implementation unit's RED phase.",
       "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
@@ -493,9 +500,54 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         };
       }
 
+      // Guard: SPEC_WORK → SPEC_APPROVED requires a saved spec
+      // (Only checked for this specific legal transition)
+      if (previousState === "SPEC_WORK" && targetState === "SPEC_APPROVED" && !smRef.current.activeSpecId) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Cannot advance to SPEC_APPROVED without a saved spec. " +
+              "Save the spec with pi_coder_save_spec first, then advance. " +
+              "The spec file is the authoritative record for implementor and reviewer.",
+          }],
+          details: {
+            success: false,
+            error: "No active spec — save with pi_coder_save_spec before advancing to SPEC_APPROVED",
+            previousState,
+            validTargets: smRef.current.getValidTransitions(),
+          },
+          isError: true,
+        };
+      }
+
+      // Guard: Post-SPEC_APPROVED states require an active spec
+      // Only applies to legal transitions from states past spec approval
+      const postSpecStates: FSMState[] = [
+        "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
+        "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
+        "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL", "MERGING", "COMPLETE",
+      ];
+      // Check if this is a legally traversable post-spec state
+      const validTargets = smRef.current.getValidTransitions();
+      if (postSpecStates.includes(targetState as FSMState) && validTargets.includes(targetState as FSMState) && !smRef.current.activeSpecId) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Cannot advance to ${targetState} without a saved spec. ` +
+              "Save the spec with pi_coder_save_spec first.",
+          }],
+          details: {
+            success: false,
+            error: `No active spec — save with pi_coder_save_spec before advancing to ${targetState}`,
+            previousState,
+            validTargets,
+          },
+          isError: true,
+        };
+      }
+
       try {
         smRef.current.transition(targetState as FSMState);
-
         // Provide contextual guidance so the orchestrator knows what to do next
         const nextActionHints: Partial<Record<FSMState, string>> = {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",

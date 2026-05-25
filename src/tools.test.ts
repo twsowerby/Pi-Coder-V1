@@ -225,6 +225,10 @@ function advanceToState(sm: StateMachine, target: FSMState): void {
   for (let i = 0; i < idx; i++) {
     sm.transition(path[i + 1]);
   }
+  // Set active spec once past SPEC_WORK, so tools that require it work
+  if (sm.currentState !== "IDLE" && sm.currentState !== "SPEC_WORK") {
+    sm.setActiveSpec("test-spec");
+  }
 }
 
 /** Call a tool's execute method and return the result. */
@@ -556,11 +560,25 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
   it("advances SPEC_WORK → SPEC_APPROVED", async () => {
     const { tools, sm } = setupMocks();
     sm.transition("SPEC_WORK");
+    sm.setActiveSpec("test-spec"); // Required guard: spec must be saved
     const result = await executeTool(tools, "pi_coder_advance_fsm", {
       targetState: "SPEC_APPROVED",
     });
     assert.ok(!result.isError, "Should succeed");
     assert.strictEqual(sm.currentState, "SPEC_APPROVED");
+  });
+
+  it("blocks SPEC_WORK → SPEC_APPROVED without saved spec", async () => {
+    const { tools, sm } = setupMocks();
+    sm.transition("SPEC_WORK");
+    // No setActiveSpec — simulates orchestrator forgetting to save
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "SPEC_APPROVED",
+    });
+    assert.ok(result.isError, "Should be error");
+    assert.strictEqual(sm.currentState, "SPEC_WORK", "State should not change");
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("pi_coder_save_spec"), `Should mention save_spec tool, got: ${content}`);
   });
 
   it("rejects illegal transition with valid options", async () => {
@@ -616,6 +634,7 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
   it("includes GREEN_WRITE delegation hint", async () => {
     const { tools, sm } = setupMocks();
     sm.transition("SPEC_WORK");
+    sm.setActiveSpec("test-spec");
     sm.transition("SPEC_APPROVED");
     sm.transition("GIT_CHECKPOINT");
     sm.transition("TDD_RED_WRITE");

@@ -2,7 +2,7 @@
 name: orchestrator
 package: pi-coder
 description: TDD orchestrator that delegates all implementation to subagents, managing the state machine lifecycle from research through delivery
-tools: ls, find, grep, subagent, pi_coder_git, pi_coder_run_tests, upsert_knowledge, pi_coder_advance_fsm, interview
+tools: ls, find, grep, subagent, pi_coder_git, pi_coder_run_tests, upsert_knowledge, pi_coder_advance_fsm, pi_coder_save_spec, pi_coder_read_spec, interview, intercom
 systemPromptMode: replace
 inheritProjectContext: false
 defaultContext: fresh
