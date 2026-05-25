@@ -382,29 +382,36 @@ Ask the user for intervention. Do not automatically loop again. Options to prese
 
 ## Knowledge Consolidation
 
-After a spec completes (FSM in COMPLETE), review the cycle for learnings worth persisting:
+The knowledge system stores **cross-cutting project rules and gotchas** — things an agent needs to know BEFORE starting work, that are NOT discoverable from the spec or the code alone.
+
+### Purpose of `.pi-coder/knowledge/`
+
+Knowledge files are pre-task reference material. They tell future agents "here's what you need to know before you start" — conventions, landmines, and integration quirks that would otherwise be learned through costly trial and error.
 
 ### Persist these:
 
 - **Project conventions** the implementor had to discover through trial and error (e.g., "All API routes must use the shared error handler in `src/middleware/error-handler.ts`")
-- **Gotchas** the reviewer caught that future implementors should avoid (e.g., "The ORM does not cascade deletes — you must delete children explicitly")
-- **API patterns** that are not obvious from the code alone (e.g., "Auth tokens are stored in cookies, not headers")
-- **Architecture decisions** that constrain future work (e.g., "The payment module is tightly coupled to Stripe — do not introduce alternative providers without refactoring")
+- **Debugging gotchas** — false paths that wasted time (e.g., "The test runner requires `-- isolation` flag or tests leak state between files")
+- **Integration conflicts** — libraries that don't play well together (e.g., "Library X mutates prototypes, breaking Library Y's type checks — always load X after Y")
+- **Architecture constraints** that aren't obvious from the code (e.g., "The payment module is tightly coupled to Stripe — do not introduce alternative providers without refactoring")
+- **Environment or tooling quirks** (e.g., "Hot reload breaks when importing from `src/lib/constants` — always restart the dev server after changes there")
 
 ### Do NOT persist these:
 
-- Task-specific decisions that only apply to the current spec
-- Temporary workarounds with a known fix coming
-- One-off choices with no broader relevance
-- Anything that would be obvious from reading the code directly
+- **Cycle summaries** — "what was implemented in cycle 3" is redundant with the spec file in `.pi-coder/specs/`
+- **Implementation records** — "added X, modified Y" is in the spec and git history
+- **Task-specific decisions** — decisions that only apply to the current spec
+- **Temporary workarounds** with a known fix coming
+- **One-off choices** with no broader relevance
+- **Anything obvious from reading the code directly**
 
 ### How to persist:
 
-1. Call `upsert_knowledge` with a descriptive filename (e.g., `error-handling-patterns.md`, `supabase-auth-flow.md`)
+1. Call `upsert_knowledge` with a descriptive filename (e.g., `error-handling-patterns.md`, `supabase-auth-flow.md`, `library-x-y-conflict.md`)
 2. Write the content as clear, actionable directives — "Always X", "Never Y", "When doing Z, also do W"
 3. Include specific file paths so future agents know where to look
 
-You may also persist knowledge mid-cycle if the reviewer identifies knowledge extraction candidates — do not wait until COMPLETE if valuable information surfaces during review.
+You may also persist knowledge mid-cycle if the reviewer identifies knowledge extraction candidates — do not wait until COMPLETE if valuable information surfaces during review. However, do NOT persist cycle summaries — the spec file already records what was done.
 
 ---
 
