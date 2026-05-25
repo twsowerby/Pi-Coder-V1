@@ -703,7 +703,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       if (!stateMachine.isActionAllowed("pi_coder_git")) {
         return {
           block: true,
-          reason: `pi_coder_git is not allowed in state ${stateMachine.currentState}. Allowed states: GIT_CHECKPOINT, MERGING, BLOCKED, IDLE.`,
+          reason: `pi_coder_git is not allowed in state ${stateMachine.currentState}. Allowed states: GIT_CHECKPOINT, REVIEWING, MERGING, BLOCKED, IDLE.`,
         };
       }
     }

@@ -145,7 +145,7 @@ const ACTION_RULES: Array<{
   },
   {
     tool: "pi_coder_git",
-    allowedStates: new Set(["GIT_CHECKPOINT", "MERGING", "BLOCKED", "IDLE"]),
+    allowedStates: new Set(["GIT_CHECKPOINT", "REVIEWING", "MERGING", "BLOCKED", "IDLE"]),
   },
 ];
 

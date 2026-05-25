@@ -377,11 +377,11 @@ describe("Phase 3: Action Guards", () => {
   });
 
   describe("isActionAllowed - pi_coder_git", () => {
-    const allowedStates: FSMState[] = ["GIT_CHECKPOINT", "MERGING", "BLOCKED", "IDLE"];
+    const allowedStates: FSMState[] = ["GIT_CHECKPOINT", "REVIEWING", "MERGING", "BLOCKED", "IDLE"];
     const blockedStates: FSMState[] = [
       "SPEC_WORK", "SPEC_APPROVED",
       "TDD_RED_WRITE", "TDD_RED_VALIDATE", "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE",
-      "REVIEWING", "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL",
+      "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL",
     ];
 
     for (const state of allowedStates) {
