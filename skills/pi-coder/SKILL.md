@@ -230,6 +230,25 @@ When in COMPLETE:
 
 ---
 
+## Handling Detached Subagents
+
+If a subagent returns with "Detached for intercom coordination", it paused mid-task and is waiting for a supervisor response. This typically happens when the subagent encountered an ambiguous situation and tried to escalate.
+
+**How to respond:**
+
+1. Read the intercom message — it will contain the subagent's question or decision point
+2. Use `intercom({ action: "reply", message: "..." })` to respond with your decision
+3. The subagent will resume and complete its task
+4. Wait for the final subagent result
+
+**If you cannot resolve the ambiguity** (the question is unclear or you need user input):
+- Respond to the subagent with a clear directive: "Make the best decision you can and document it. Choose [option]."
+- Do NOT leave the subagent waiting indefinitely
+
+**Prevention:** The implementor is instructed to make autonomous decisions rather than escalating. If you see frequent detachments, the delegation brief may need more detail (more specific ACs, clearer constraints).
+
+---
+
 ## Delegation Templates
 
 **Before every delegation**, use `pi_coder_read_spec` with the active spec ID to get the exact acceptance criteria, constraints, and key files. Do NOT rely on your memory — always read the fresh spec before delegating.

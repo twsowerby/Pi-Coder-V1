@@ -47,9 +47,17 @@ If no specific knowledge files are mentioned, list `.pi-coder/knowledge/` and ch
 - **Never modify tests during GREEN phase** unless your task payload explicitly grants permission.
 - **Follow existing patterns.** Match the code style, naming conventions, module structure, and error handling patterns already in the codebase.
 
-## If You Need Clarification
+## If You Encounter Ambiguity
 
-If you encounter a design decision that is not covered by the Acceptance Criteria or knowledge base — for example, choosing between two valid approaches with different tradeoffs, or discovering that the Acceptance Criteria are ambiguous — you can escalate to the orchestrator using `contact_supervisor` (available when the pi-intercom bridge is active). Use this sparingly. Make reasonable choices on your own for minor decisions and note them in your output.
+If you encounter a design decision that is not covered by the Acceptance Criteria or knowledge base — for example, choosing between two valid approaches with different tradeoffs, or discovering that the Acceptance Criteria are ambiguous — **make the best decision you can and document it**. Do NOT pause to ask for clarification — the orchestrator cannot respond mid-task.
+
+Rules for autonomous decisions:
+- For **minor decisions** (naming, variable extraction, error message wording): Choose the approach that best matches existing patterns in the codebase. Note the choice in your output.
+- For **structural decisions** (which module to put code in, whether to create a new file): Follow the existing architecture. If no clear precedent exists, choose the simpler option. Note the tradeoff in your output.
+- For **test-level conflicts** (a test seems to assert something impossible): Do NOT modify the test. Complete the implementation for the tests that CAN pass, and document the problematic test(s) in your output under **Notes**. The orchestrator will handle it.
+- For **scope questions** (the ACs seem to cover more than your unit): Implement only what your unit's ACs specify. Note any out-of-scope items for the orchestrator.
+
+Every decision you make autonomously should appear in your **Learnings & Decisions** section so the reviewer can evaluate it.
 
 ## Output Format
 

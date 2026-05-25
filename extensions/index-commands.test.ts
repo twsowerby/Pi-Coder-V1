@@ -108,7 +108,7 @@ describe("Phase 1: Toggle Command", () => {
     // We verify the exported ORCHESTRATOR_TOOLS and NORMAL_TOOLS are correct
     assert.deepStrictEqual(mod.ORCHESTRATOR_TOOLS, [
       "ls", "find", "grep", "subagent",
-      "pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "pi_coder_advance_fsm", "interview",
+      "pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "pi_coder_advance_fsm", "interview", "intercom",
     ]);
     assert.deepStrictEqual(mod.NORMAL_TOOLS, [
       "read", "bash", "edit", "write", "grep", "find", "ls",

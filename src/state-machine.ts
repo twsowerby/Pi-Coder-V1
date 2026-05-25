@@ -151,7 +151,7 @@ const ACTION_RULES: Array<{
 ];
 
 /** Tools allowed in any state. */
-const ALWAYS_ALLOWED = new Set(["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "ls", "find", "grep", "pi_coder_advance_fsm"]);
+const ALWAYS_ALLOWED = new Set(["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm"]);
 
 // ---------------------------------------------------------------------------
 // Nudge expectations

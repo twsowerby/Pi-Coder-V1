@@ -47,6 +47,7 @@ export const ORCHESTRATOR_TOOLS = [
   "pi_coder_read_spec",
   "pi_coder_advance_fsm",
   "interview",
+  "intercom",
 ];
 
 /** Tools available when pi-coder is toggled off (normal pi mode). Exported for use by Spec 10 commands. */
