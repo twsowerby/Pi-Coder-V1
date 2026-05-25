@@ -85,6 +85,22 @@ let sessionCtx: ExtensionContext | null = null;
 /** Whether a pi-coder subagent is currently running (for UI indicator). */
 let subagentRunning = false;
 
+/** Live subagent progress data — updated via `tool_execution_update` events. */
+interface SubagentActivity {
+  agent: string;
+  task: string;
+  currentTool: string | undefined;
+  currentToolArgs: string | undefined;
+  currentPath: string | undefined;
+  toolCount: number;
+  turnCount: number | undefined;
+  tokens: number;
+  durationMs: number;
+  recentTools: Array<{ tool: string; args: string }>;
+  lastUpdatedAt: number;
+}
+let subagentActivity: SubagentActivity | null = null;
+
 // ---------------------------------------------------------------------------
 // UI Refresh — updates widget, status line, and working indicator
 // ---------------------------------------------------------------------------
@@ -135,6 +151,7 @@ function refreshUI(): void {
   if (!piCoderActive) {
     // Pi-coder OFF — clear everything
     ctx.ui.setWidget("pi-coder-state", undefined);
+    ctx.ui.setWidget("pi-coder-subagent", undefined);
     ctx.ui.setStatus("pi-coder", undefined);
     ctx.ui.setWorkingIndicator(); // restore default
     return;
@@ -160,7 +177,7 @@ function refreshUI(): void {
     widgetLine += theme.fg("dim", `  loop: `) + theme.fg("muted", String(loopCount)) + theme.fg("dim", `/${config.maxLoops}`);
   }
   if (subagentRunning) {
-    widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶ delegating");
+    widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
   }
 
   ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
@@ -204,6 +221,82 @@ function refreshUI(): void {
       intervalMs: 600,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Subagent Activity Widget — live progress via tool_execution_update
+// ---------------------------------------------------------------------------
+
+/** Format duration from ms to human-readable string. */
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  return `${mins}m${remSecs}s`;
+}
+
+/** Format token count to human-readable. */
+function formatTokenCount(tokens: number): string {
+  if (tokens < 1000) return `${tokens}`;
+  if (tokens < 1000000) return `${(tokens / 1000).toFixed(1)}k`;
+  return `${(tokens / 1000000).toFixed(1)}M`;
+}
+
+/** Refresh the pi-coder-subagent widget based on current subagentActivity. */
+function refreshSubagentWidget(): void {
+  if (!sessionCtx) return;
+  const ctx = sessionCtx;
+
+  if (!piCoderActive || !subagentRunning || !subagentActivity) {
+    // No active subagent — clear the widget
+    ctx.ui.setWidget("pi-coder-subagent", undefined);
+    return;
+  }
+
+  const theme = ctx.ui.theme;
+  const a = subagentActivity;
+
+  // Line 1: Agent name + spec/unit context
+  const specId = stateMachine.activeSpecId;
+  let header = theme.fg("accent", `▶ ${a.agent}`);
+  if (specId) {
+    header += theme.fg("dim", `  spec: `) + theme.fg("muted", specId);
+  }
+
+  // Line 2: Task brief (truncated)
+  const taskLen = a.task.length;
+  const maxTaskLen = 120;
+  const taskPreview = taskLen <= maxTaskLen
+    ? a.task
+    : `${a.task.slice(0, maxTaskLen)}…`;
+  const taskLine = theme.fg("dim", `  ⏴  Task: `) + theme.fg("muted", taskPreview.replace(/\n/g, " "));
+
+  // Line 3: Current tool + stats
+  let activityLine = theme.fg("dim", `  ⏴  `);
+  if (a.currentTool) {
+    activityLine += theme.fg("accent", a.currentTool);
+    if (a.currentPath) {
+      // Show just the filename, not full path
+      const fileName = a.currentPath.split("/").pop() ?? a.currentPath;
+      activityLine += theme.fg("dim", `: `) + theme.fg("muted", fileName);
+    }
+    if (a.durationMs > 0) {
+      activityLine += theme.fg("dim", ` (${formatDurationMs(a.durationMs)})`);
+    }
+    activityLine += theme.fg("dim", ` · `);
+  }
+  // Stats
+  const stats: string[] = [];
+  if (a.toolCount > 0) stats.push(`${a.toolCount} tool${a.toolCount !== 1 ? "s" : ""}`);
+  if (a.turnCount !== undefined && a.turnCount > 0) stats.push(`${a.turnCount} turn${a.turnCount !== 1 ? "s" : ""}`);
+  if (a.tokens > 0) stats.push(`${formatTokenCount(a.tokens)} tok`);
+  if (stats.length > 0) {
+    activityLine += theme.fg("dim", stats.join(theme.fg("dim", ` · `)));
+  }
+
+  ctx.ui.setWidget("pi-coder-subagent", [header, taskLine, activityLine], { placement: "aboveEditor" });
 }
 
 // Module dependencies — set up during extension init
@@ -669,6 +762,91 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             { deliverAs: "steer", triggerTurn: false },
           );
         }
+      });
+    }
+
+    // Listen for live subagent progress updates (tool_execution_update)
+    // This is the real-time firehose — fires on every onUpdate callback from
+    // the subagent tool, giving us the full AgentProgress data.
+    if (subagentsAvailable) {
+      pi.events.on("tool_execution_update", (data: unknown) => {
+        if (!piCoderActive) return;
+        const event = data as { toolName: string; partialResult: unknown };
+        if (event.toolName !== "subagent") return;
+
+        // The partialResult is AgentToolResult<Details> from pi-subagents.
+        // We extract the first progress entry for single-agent runs.
+        const result = event.partialResult as {
+          details?: {
+            progress?: Array<{
+              agent: string;
+              task: string;
+              status: string;
+              currentTool?: string;
+              currentToolArgs?: string;
+              currentPath?: string;
+              toolCount: number;
+              turnCount?: number;
+              tokens: number;
+              durationMs: number;
+              recentTools?: Array<{ tool: string; args: string }>;
+              lastActivityAt?: number;
+            }>;
+            results?: Array<{
+              agent: string;
+              task: string;
+              progress?: {
+                agent: string;
+                task: string;
+                status: string;
+                currentTool?: string;
+                currentToolArgs?: string;
+                currentPath?: string;
+                toolCount: number;
+                turnCount?: number;
+                tokens: number;
+                durationMs: number;
+                recentTools?: Array<{ tool: string; args: string }>;
+                lastActivityAt?: number;
+              };
+            }>;
+          };
+        } | null;
+
+        if (!result?.details) return;
+
+        // Try to get progress from the progress array first, then from results
+        const progress = result.details.progress?.[0]
+          ?? result.details.results?.[0]?.progress;
+
+        if (!progress || progress.status !== "running") return;
+
+        subagentActivity = {
+          agent: progress.agent,
+          task: progress.task,
+          currentTool: progress.currentTool,
+          currentToolArgs: progress.currentToolArgs,
+          currentPath: progress.currentPath,
+          toolCount: progress.toolCount,
+          turnCount: progress.turnCount,
+          tokens: progress.tokens,
+          durationMs: progress.durationMs,
+          recentTools: progress.recentTools ?? [],
+          lastUpdatedAt: progress.lastActivityAt ?? Date.now(),
+        };
+
+        // Update the subagent widget
+        refreshSubagentWidget();
+      });
+
+      // When a subagent tool finishes executing, immediately clear the activity widget
+      pi.events.on("tool_execution_end", (data: unknown) => {
+        const event = data as { toolName: string };
+        if (event.toolName !== "subagent") return;
+        // The subagentActivity will be fully cleared in the tool_result handler,
+        // but we can clear the widget immediately for snappier UX
+        subagentActivity = null;
+        refreshSubagentWidget();
       });
     }
 
@@ -1224,6 +1402,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       subagentStartTime = null;
       lastSubagentAgent = null;
       subagentRunning = false;
+      subagentActivity = null;
       // Note: refreshUI() is called at the end of tool_result handler
 
       // Check for review result in subagent output (if we're in REVIEWING state)
