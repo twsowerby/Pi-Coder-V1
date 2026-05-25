@@ -1405,6 +1405,41 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       subagentActivity = null;
       // Note: refreshUI() is called at the end of tool_result handler
 
+      // Show completion summary notification for subagent results
+      // Extract duration and task brief from the full details
+      const subDetails = details as {
+        results?: Array<{
+          agent: string;
+          task: string;
+          exitCode: number;
+          usage?: { turns?: number };
+          progress?: { durationMs?: number; toolCount?: number; tokens?: number; status?: string };
+          progressSummary?: { durationMs?: number; toolCount?: number; tokens?: number };
+        }>;
+        mode?: string;
+      } | null;
+
+      if (subDetails?.results?.length) {
+        for (const r of subDetails.results) {
+          const prog = r.progress ?? r.progressSummary;
+          const duration = prog?.durationMs ?? 0;
+          const toolCount = prog?.toolCount ?? 0;
+          const turns = r.usage?.turns;
+          const tokens = prog?.tokens ?? 0;
+          const statusIcon = r.exitCode === 0 ? "✓" : "✗";
+          const taskBrief = r.task.length > 60 ? `${r.task.slice(0, 60)}…` : r.task;
+
+          const stats: string[] = [];
+          if (toolCount > 0) stats.push(`${toolCount} tool${toolCount !== 1 ? "s" : ""}`);
+          if (turns) stats.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
+          if (tokens > 0) stats.push(`${formatTokenCount(tokens)} tok`);
+          if (duration > 0) stats.push(formatDurationMs(duration));
+
+          const summary = `${statusIcon} ${r.agent} ${stats.length > 0 ? `· ${stats.join(" · ")}` : ""} — ${taskBrief.replace(/\n/g, " ")}`;
+          sessionCtx?.ui.notify(summary, r.exitCode === 0 ? "info" : "error");
+        }
+      }
+
       // Check for review result in subagent output (if we're in REVIEWING state)
       if (currentState === "REVIEWING") {
         const reviewVerdict = extractReviewVerdict(details);
