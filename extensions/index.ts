@@ -101,6 +101,9 @@ interface SubagentActivity {
 }
 let subagentActivity: SubagentActivity | null = null;
 
+/** Timer that re-renders the subagent widget to update elapsed duration. */
+let subagentWidgetTimer: ReturnType<typeof setInterval> | null = null;
+
 // ---------------------------------------------------------------------------
 // UI Refresh — updates widget, status line, and working indicator
 // ---------------------------------------------------------------------------
@@ -292,8 +295,18 @@ function refreshSubagentWidget(): void {
   if (a.toolCount > 0) stats.push(`${a.toolCount} tool${a.toolCount !== 1 ? "s" : ""}`);
   if (a.turnCount !== undefined && a.turnCount > 0) stats.push(`${a.turnCount} turn${a.turnCount !== 1 ? "s" : ""}`);
   if (a.tokens > 0) stats.push(`${formatTokenCount(a.tokens)} tok`);
+  // Fallback duration from subagentStartTime if tool_execution_update isn't providing it
+  const elapsed = subagentStartTime !== null ? Date.now() - subagentStartTime : 0;
+  if (a.durationMs > 0) {
+    // Provided by tool_execution_update — use it
+  } else if (elapsed > 0) {
+    stats.push(formatDurationMs(elapsed));
+  }
   if (stats.length > 0) {
     activityLine += theme.fg("dim", stats.join(theme.fg("dim", ` · `)));
+  } else {
+    // No stats at all — show a thinking indicator
+    activityLine += theme.fg("dim", "thinking…");
   }
 
   ctx.ui.setWidget("pi-coder-subagent", [header, taskLine, activityLine], { placement: "aboveEditor" });
@@ -772,6 +785,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       pi.events.on("tool_execution_update", (data: unknown) => {
         if (!piCoderActive) return;
         const event = data as { toolName: string; partialResult: unknown };
+
+        // Debug: log every tool_execution_update to understand the data flow
+        logEvent("tool_execution_update_debug", {
+          toolName: event.toolName,
+          hasPartialResult: event.partialResult != null,
+          partialResultType: typeof event.partialResult,
+          partialResultKeys: event.partialResult && typeof event.partialResult === "object"
+            ? Object.keys(event.partialResult as Record<string, unknown>)
+            : [],
+        });
+
         if (event.toolName !== "subagent") return;
 
         // The partialResult is AgentToolResult<Details> from pi-subagents.
@@ -812,6 +836,21 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             }>;
           };
         } | null;
+
+        // Debug: log the subagent partialResult structure
+        logEvent("subagent_update_debug", {
+          hasResult: result != null,
+          hasDetails: result?.details != null,
+          detailsKeys: result?.details ? Object.keys(result.details) : [],
+          progressCount: result?.details?.progress?.length,
+          resultsCount: result?.details?.results?.length,
+          firstResultProgress: result?.details?.results?.[0]?.progress
+            ? { agent: result.details.results[0].progress.agent, status: result.details.results[0].progress.status }
+            : undefined,
+          firstProgress: result?.details?.progress?.[0]
+            ? { agent: result.details.progress[0].agent, status: result.details.progress[0].status, currentTool: result.details.progress[0].currentTool }
+            : undefined,
+        });
 
         if (!result?.details) return;
 
@@ -1152,7 +1191,45 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         // Update UI to show subagent running
         subagentRunning = true;
+
+        // Capture task from tool_call input for the subagent widget
+        const taskInput = typeof (input as Record<string, unknown>).task === "string"
+          ? ((input as Record<string, unknown>).task as string)
+          : "";
+
+        // Populate subagentActivity immediately from tool_call data
+        // This gives us the task brief and agent name right away.
+        // If tool_execution_update fires, it will enhance with live progress.
+        subagentActivity = {
+          agent: targetAgent,
+          task: taskInput,
+          currentTool: undefined,
+          currentToolArgs: undefined,
+          currentPath: undefined,
+          toolCount: 0,
+          turnCount: undefined,
+          tokens: 0,
+          durationMs: 0,
+          recentTools: [],
+          lastUpdatedAt: Date.now(),
+        };
+
         refreshUI();
+        refreshSubagentWidget();
+
+        // Start a timer to update the subagent widget periodically (for elapsed duration)
+        if (subagentWidgetTimer) clearInterval(subagentWidgetTimer);
+        subagentWidgetTimer = setInterval(() => {
+          if (subagentRunning && subagentActivity) {
+            refreshSubagentWidget();
+          } else {
+            // Subagent ended — clean up timer
+            if (subagentWidgetTimer) {
+              clearInterval(subagentWidgetTimer);
+              subagentWidgetTimer = null;
+            }
+          }
+        }, 2000); // Update every 2 seconds
 
         // Log subagent delegation
         const taskStr = typeof (input as Record<string, unknown>).task === "string"
@@ -1403,6 +1480,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       lastSubagentAgent = null;
       subagentRunning = false;
       subagentActivity = null;
+      // Stop the subagent widget timer
+      if (subagentWidgetTimer) {
+        clearInterval(subagentWidgetTimer);
+        subagentWidgetTimer = null;
+      }
       // Note: refreshUI() is called at the end of tool_result handler
 
       // Show completion summary notification for subagent results
