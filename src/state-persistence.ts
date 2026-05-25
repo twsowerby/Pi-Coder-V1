@@ -1,17 +1,19 @@
 /**
  * State Persistence for Pi Coder v1.
  *
- * Persists the FSM state to `.pi-coder/state.json` so that cycles survive
- * session crashes and user-initiated context clears. On init, the extension
- * reads this file to restore the state machine; on every transition or toggle,
- * the extension writes it back (atomic tmp+rename).
+ * Two persistence layers:
  *
- * Shape:
- *   { version, piCoderActive, fsm: { currentState, activeSpecId, loopCount, gitRef }, updatedAt }
+ * 1. Global state (`.pi-coder/state.json`) — slim pointer:
+ *    { version, piCoderActive, activeSpecId, updatedAt }
+ *    Tells the extension which spec is active and whether orchestrator mode is on.
  *
- * The spec file is already on disk (.pi-coder/specs/), the knowledge files
- * are on disk, the JSONL log is on disk. This file stores only what would
- * otherwise be lost: the in-memory FSM snapshot and the toggle state.
+ * 2. Per-spec state (`.pi-coder/specs/{id}/state.json`) — FSM + evidence:
+ *    { version, currentState, loopCount, gitRef, evidence, createdAt, updatedAt }
+ *    Lives alongside spec.md in the spec directory. The authoritative source
+ *    for the FSM state during an active spec lifecycle.
+ *
+ * All writes are atomic (write to tmp, then rename) so a crash mid-write
+ * leaves the previous state intact.
  */
 
 import { join } from "node:path";
@@ -22,38 +24,7 @@ import {
   rename,
   mkdir,
 } from "node:fs/promises";
-import type { FSMState } from "./types.ts";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface PersistedFSM {
-  currentState: FSMState;
-  activeSpecId: string | null;
-  loopCount: number;
-  gitRef: string | null;
-}
-
-export interface PersistedState {
-  /** Schema version — increment on breaking changes */
-  version: 1;
-  /** Whether orchestrator mode is active */
-  piCoderActive: boolean;
-  /** FSM snapshot */
-  fsm: PersistedFSM;
-  /** ISO timestamp of last write */
-  updatedAt: string;
-}
-
-export interface IntegrityCheckResult {
-  /** True if no errors (warnings are advisory) */
-  valid: boolean;
-  /** Advisory notes (e.g. terminal state, stale) */
-  warnings: string[];
-  /** Blocking issues (e.g. spec file missing when specId is set) */
-  errors: string[];
-}
+import type { FSMState, GlobalState, SpecState } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -62,70 +33,66 @@ export interface IntegrityCheckResult {
 const STATE_FILENAME = "state.json";
 const TEMP_FILENAME = "state.json.tmp";
 
+const VALID_STATES: Set<string> = new Set<FSMState>([
+  "IDLE", "SPEC_WORK", "SPEC_APPROVED",
+  "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
+  "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
+  "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL", "MERGING",
+  "COMPLETE", "BLOCKED",
+]);
+
 // ---------------------------------------------------------------------------
-// StatePersistence class
+// GlobalStatePersistence
 // ---------------------------------------------------------------------------
 
+export interface IntegrityCheckResult {
+  /** True if no errors (warnings are advisory) */
+  valid: boolean;
+  /** Advisory notes (e.g. terminal state, stale) */
+  warnings: string[];
+  /** Blocking issues (e.g. spec directory missing) */
+  errors: string[];
+}
+
 /**
- * Reads and writes `.pi-coder/state.json`.
- *
- * All writes are atomic (write to tmp, then rename) so a crash mid-write
- * leaves the previous state intact.
+ * Reads and writes `.pi-coder/state.json` — the global pointer.
  */
-export class StatePersistence {
-  private readonly stateDir: string;
+export class GlobalStatePersistence {
+  private readonly piCoderDir: string;
   private readonly specsDir: string;
 
   constructor(piCoderDir: string) {
-    this.stateDir = piCoderDir;
+    this.piCoderDir = piCoderDir;
     this.specsDir = join(piCoderDir, "specs");
   }
 
-  /** Full path to state.json */
+  /** Full path to global state.json */
   get statePath(): string {
-    return join(this.stateDir, STATE_FILENAME);
+    return join(this.piCoderDir, STATE_FILENAME);
   }
 
-  // ---- Write ----
-
-  /**
-   * Persist state to disk. Atomic via tmp+rename.
-   * Safe to call from fire-and-forget contexts.
-   */
-  async save(state: PersistedState): Promise<void> {
-    await mkdir(this.stateDir, { recursive: true });
-    const tempPath = join(this.stateDir, TEMP_FILENAME);
+  /** Save global state. Atomic via tmp+rename. */
+  async save(state: GlobalState): Promise<void> {
+    await mkdir(this.piCoderDir, { recursive: true });
+    const tempPath = join(this.piCoderDir, TEMP_FILENAME);
     const content = JSON.stringify(state, null, 2) + "\n";
     await writeFile(tempPath, content, "utf-8");
     await rename(tempPath, this.statePath);
   }
 
-  // ---- Read ----
-
-  /**
-   * Load persisted state from disk. Returns null if:
-   * - File doesn't exist (fresh start)
-   * - File can't be parsed (corrupt — treat as missing)
-   * - Version is not 1 (future schema — don't guess)
-   */
-  async load(): Promise<PersistedState | null> {
+  /** Load global state. Returns null if missing, corrupt, or wrong version. */
+  async load(): Promise<GlobalState | null> {
     try {
       const content = await readFile(this.statePath, "utf-8");
       const parsed = JSON.parse(content);
-      if (!isValidPersistedState(parsed)) return null;
+      if (!isValidGlobalState(parsed)) return null;
       return parsed;
     } catch {
-      // ENOENT, parse error, etc. — treat as "no state"
       return null;
     }
   }
 
-  // ---- Delete ----
-
-  /**
-   * Remove state.json. No-op if the file doesn't exist.
-   * Called on /pi-coder reset or when a cycle completes cleanly.
-   */
+  /** Remove global state.json. No-op if missing. */
   async delete(): Promise<void> {
     try {
       await unlink(this.statePath);
@@ -137,39 +104,23 @@ export class StatePersistence {
     }
   }
 
-  // ---- Integrity ----
-
   /**
-   * Verify the persisted state against the filesystem.
-   *
-   * Checks:
-   * - If activeSpecId is set, does the spec file exist?
-   * - If currentState is IDLE or COMPLETE, flag as "no resume needed"
-   *
-   * Does NOT check git ref validity (needs git access, done in extension init).
-   * Returns a result with errors (blocking) and warnings (advisory).
+   * Verify global state against the filesystem.
+   * Checks: does the spec directory exist when activeSpecId is set?
    */
-  async checkIntegrity(state: PersistedState): Promise<IntegrityCheckResult> {
+  async checkIntegrity(state: GlobalState): Promise<IntegrityCheckResult> {
     const warnings: string[] = [];
     const errors: string[] = [];
 
-    // Spec file exists when specId is set
-    if (state.fsm.activeSpecId) {
-      const specPath = join(this.specsDir, `${state.fsm.activeSpecId}.md`);
+    if (state.activeSpecId) {
+      const specDirPath = join(this.specsDir, state.activeSpecId);
       try {
-        await readFile(specPath, "utf-8");
+        await readFile(join(specDirPath, "spec.md"), "utf-8");
       } catch {
         errors.push(
-          `Spec file missing: .pi-coder/specs/${state.fsm.activeSpecId}.md`,
+          `Spec directory missing or incomplete: .pi-coder/specs/${state.activeSpecId}/`,
         );
       }
-    }
-
-    // Terminal states — no cycle to resume
-    if (state.fsm.currentState === "IDLE" || state.fsm.currentState === "COMPLETE") {
-      warnings.push(
-        `State is ${state.fsm.currentState} — no cycle to resume`,
-      );
     }
 
     return {
@@ -181,42 +132,112 @@ export class StatePersistence {
 }
 
 // ---------------------------------------------------------------------------
+// SpecStatePersistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads and writes `.pi-coder/specs/{id}/state.json` — per-spec FSM state.
+ */
+export class SpecStatePersistence {
+  /**
+   * Save per-spec state. Atomic via tmp+rename.
+   * @param specsDir - The `.pi-coder/specs/` directory
+   * @param specId - The spec ID (directory name)
+   * @param state - The spec state to persist
+   */
+  static async save(specsDir: string, specId: string, state: SpecState): Promise<void> {
+    const specDir = join(specsDir, specId);
+    await mkdir(specDir, { recursive: true });
+    const tempPath = join(specDir, TEMP_FILENAME);
+    const content = JSON.stringify(state, null, 2) + "\n";
+    await writeFile(tempPath, content, "utf-8");
+    await rename(tempPath, join(specDir, STATE_FILENAME));
+  }
+
+  /** Load per-spec state. Returns null if missing, corrupt, or wrong version. */
+  static async load(specsDir: string, specId: string): Promise<SpecState | null> {
+    const statePath = join(specsDir, specId, STATE_FILENAME);
+    try {
+      const content = await readFile(statePath, "utf-8");
+      const parsed = JSON.parse(content);
+      if (!isValidSpecState(parsed)) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Delete per-spec state.json. No-op if missing. */
+  static async delete(specsDir: string, specId: string): Promise<void> {
+    const statePath = join(specsDir, specId, STATE_FILENAME);
+    try {
+      await unlink(statePath);
+    } catch (err: unknown) {
+      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw err;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-const VALID_STATES: Set<string> = new Set<FSMState>([
-  "IDLE", "SPEC_WORK", "SPEC_APPROVED",
-  "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
-  "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
-  "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL", "MERGING",
-  "COMPLETE", "BLOCKED",
-]);
-
-/**
- * Validate the shape of a parsed PersistedState.
- * Returns true if it looks correct, false otherwise.
- */
-function isValidPersistedState(value: unknown): value is PersistedState {
+function isValidGlobalState(value: unknown): value is GlobalState {
   if (!value || typeof value !== "object") return false;
   const obj = value as Record<string, unknown>;
 
-  // Version
   if (obj.version !== 1) return false;
-
-  // piCoderActive
   if (typeof obj.piCoderActive !== "boolean") return false;
-
-  // fsm
-  if (!obj.fsm || typeof obj.fsm !== "object") return false;
-  const fsm = obj.fsm as Record<string, unknown>;
-  if (typeof fsm.currentState !== "string") return false;
-  if (!VALID_STATES.has(fsm.currentState)) return false;
-  if (fsm.activeSpecId !== null && typeof fsm.activeSpecId !== "string") return false;
-  if (typeof fsm.loopCount !== "number") return false;
-  if (fsm.gitRef !== null && typeof fsm.gitRef !== "string") return false;
-
-  // updatedAt
+  if (obj.activeSpecId !== null && typeof obj.activeSpecId !== "string") return false;
   if (typeof obj.updatedAt !== "string") return false;
 
   return true;
 }
+
+function isValidSpecState(value: unknown): value is SpecState {
+  if (!value || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+
+  if (obj.version !== 1) return false;
+  if (typeof obj.currentState !== "string") return false;
+  if (!VALID_STATES.has(obj.currentState)) return false;
+  if (typeof obj.loopCount !== "number") return false;
+  if (obj.gitRef !== null && typeof obj.gitRef !== "string") return false;
+  if (!Array.isArray(obj.evidence)) return false;
+  if (typeof obj.createdAt !== "string") return false;
+  if (typeof obj.updatedAt !== "string") return false;
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Backward compat: PersistedFSM / PersistedState for migration
+// ---------------------------------------------------------------------------
+
+/**
+ * @deprecated Use GlobalState + SpecState instead.
+ * Kept for transition period only.
+ */
+export interface PersistedFSM {
+  currentState: FSMState;
+  activeSpecId: string | null;
+  loopCount: number;
+  gitRef: string | null;
+}
+
+/**
+ * @deprecated Use GlobalState + SpecState instead.
+ * Kept for transition period only.
+ */
+export interface PersistedState {
+  version: 1;
+  piCoderActive: boolean;
+  fsm: PersistedFSM;
+  updatedAt: string;
+}
+
+// Re-export VALID_STATES for backward compat with old tests
+export { VALID_STATES };

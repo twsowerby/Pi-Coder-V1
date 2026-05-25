@@ -19,8 +19,8 @@ import { GitOperations } from "../src/git.ts";
 import { TddRunner } from "../src/tdd-runner.ts";
 import { KnowledgeStore } from "../src/knowledge.ts";
 import { SpecManager } from "../src/spec.ts";
-import { StatePersistence } from "../src/state-persistence.ts";
-import type { PersistedState } from "../src/state-persistence.ts";
+import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
+import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools } from "../src/tools.ts";
 import type { PiCoderConfig, FSMState } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
@@ -161,7 +161,7 @@ function refreshUI(): void {
   }
 
   const state = stateMachine.currentState;
-  const specId = stateMachine.activeSpecId;
+  const specId = activeSpecId;
   const loopCount = stateMachine.loopCount;
   const style = STATE_STYLE[state] ?? { icon: "●", color: "accent" as const };
   const label = STATE_LABEL[state] ?? state;
@@ -262,7 +262,7 @@ function refreshSubagentWidget(): void {
   const a = subagentActivity;
 
   // Line 1: Agent name + spec/unit context
-  const specId = stateMachine.activeSpecId;
+  const specId = activeSpecId;
   let header = theme.fg("accent", `▶ ${a.agent}`);
   if (specId) {
     header += theme.fg("dim", `  spec: `) + theme.fg("muted", specId);
@@ -337,8 +337,16 @@ let lifecycleStartTime: number | null = null;
 /** Track cumulative token usage across a spec lifecycle. */
 let lifecycleTokens = { input: 0, output: 0, total: 0 };
 
-/** State persistence instance — reads/writes .pi-coder/state.json. */
-let statePersistence: StatePersistence;
+let globalStatePersistence: GlobalStatePersistence;
+
+/** Module-level active spec ID. Set by pi_coder_save_spec, cleared on IDLE/COMPLETE. */
+let activeSpecId: string | null = null;
+
+/** Creation timestamp for the active spec's state.json. Set when spec is first saved. */
+let specStateCreatedAt: string | null = null;
+
+/** Project working directory — captured from session_start. */
+let projectCwd: string = process.cwd();
 
 /** Persist current FSM state to .pi-coder/state.json. Exported for use by commands. */
 /** Tracks in-flight persistState() call to prevent concurrent tmp+rename races. */
@@ -349,14 +357,35 @@ export async function persistState(): Promise<void> {
   // Wait for any in-flight save, then start ours.
   const prev = persistStatePromise.catch(() => {});
   const ourSave = prev.then(async () => {
-    const fsmJson = stateMachine.toJSON();
-    const state: PersistedState = {
+    const now = new Date().toISOString();
+
+    // 1. Save global state (pointer only)
+    const globalState: GlobalState = {
       version: 1,
       piCoderActive,
-      fsm: fsmJson,
-      updatedAt: new Date().toISOString(),
+      activeSpecId,
+      updatedAt: now,
     };
-    await statePersistence.save(state);
+    await globalStatePersistence.save(globalState);
+
+    // 2. Save per-spec state (FSM + evidence) if a spec is active
+    if (activeSpecId) {
+      const fsmJson = stateMachine.toJSON();
+      const specState: SpecState = {
+        version: 1,
+        currentState: fsmJson.currentState,
+        loopCount: fsmJson.loopCount,
+        gitRef: fsmJson.gitRef,
+        evidence: fsmJson.evidence,
+        createdAt: specStateCreatedAt ?? now,
+        updatedAt: now,
+      };
+      await SpecStatePersistence.save(
+        join(projectCwd, ".pi-coder", "specs"),
+        activeSpecId,
+        specState,
+      );
+    }
   });
   persistStatePromise = ourSave;
   return ourSave;
@@ -481,7 +510,7 @@ function buildOrchestratorPrompt(
   return template
     .replace("{{fsmDiagram}}", buildFSMDiagram())
     .replace("{{currentState}}", sm.currentState)
-    .replace("{{activeSpecId}}", sm.activeSpecId ?? "none")
+    .replace("{{activeSpecId}}", activeSpecId ?? "none")
     .replace("{{loopCount}}", String(sm.loopCount))
     .replace("{{maxLoops}}", String(config.maxLoops))
     .replace("{{toolList}}", toolList);
@@ -674,6 +703,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Capture ctx for UI refresh
     sessionCtx = ctx;
     const cwd = ctx.cwd;
+    projectCwd = cwd;
 
     // Load config
     config = loadConfig(cwd);
@@ -714,6 +744,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     registerTools(pi, {
       stateMachine: smRef,
+      activeSpecId: { get current() { return activeSpecId; } },
+      setActiveSpecId: (id: string | null) => { activeSpecId = id; },
       gitOps,
       tddRunner,
       knowledgeStore,
@@ -866,24 +898,45 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Initialize state persistence
     const piCoderDir = join(cwd, ".pi-coder");
-    statePersistence = new StatePersistence(piCoderDir);
+    globalStatePersistence = new GlobalStatePersistence(piCoderDir);
 
     // Restore persisted state from .pi-coder/state.json
-    const savedState = await statePersistence.load();
-    if (savedState) {
-      // Integrity check — verify spec file exists when specId is set
-      const integrity = await statePersistence.checkIntegrity(savedState);
+    const savedGlobalState = await globalStatePersistence.load();
+    if (savedGlobalState) {
+      // Integrity check — verify spec directory exists when specId is set
+      const integrity = await globalStatePersistence.checkIntegrity(savedGlobalState);
 
-      // Terminal states — no cycle to resume
-      const isTerminal = savedState.fsm.currentState === "IDLE" || savedState.fsm.currentState === "COMPLETE";
+      // Restore toggle — always honour explicit user choice
+      piCoderActive = savedGlobalState.piCoderActive;
 
-      if (!isTerminal && integrity.valid) {
-        // Restore FSM state
-        stateMachine = StateMachine.fromJSON(savedState.fsm, config);
+      // Restore active spec pointer
+      activeSpecId = savedGlobalState.activeSpecId;
 
-        // Restore toggle — honour explicit user choice
-        piCoderActive = savedState.piCoderActive;
-      } else if (!isTerminal && !integrity.valid) {
+      if (savedGlobalState.activeSpecId && integrity.valid) {
+        // Load per-spec state to restore the FSM
+        const specDir = join(cwd, ".pi-coder", "specs");
+        const specState = await SpecStatePersistence.load(specDir, savedGlobalState.activeSpecId);
+
+        if (specState) {
+          // Restore FSM from per-spec state
+          stateMachine = StateMachine.fromJSON({
+            currentState: specState.currentState,
+            loopCount: specState.loopCount,
+            gitRef: specState.gitRef,
+            evidence: specState.evidence,
+          }, config);
+          specStateCreatedAt = specState.createdAt;
+        } else {
+          // Spec directory exists but no state.json — corrupted
+          logEvent("state_restore", {
+            status: "spec_state_missing",
+            specId: savedGlobalState.activeSpecId,
+          });
+          // Clear the pointer and start fresh
+          activeSpecId = null;
+          await globalStatePersistence.delete();
+        }
+      } else if (savedGlobalState.activeSpecId && !integrity.valid) {
         // Integrity errors — log and steer, but don't restore cycle
         logEvent("state_restore", {
           status: "integrity_failed",
@@ -898,14 +951,12 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           },
           { deliverAs: "steer", triggerTurn: true },
         );
-        // Restore toggle state even on integrity failure
-        piCoderActive = savedState.piCoderActive;
-        // Delete the corrupt state file so it doesn't block future inits
-        await statePersistence.delete();
+        // Clear the pointer and delete the corrupt state file
+        activeSpecId = null;
+        await globalStatePersistence.delete();
       } else {
-        // Terminal state — keep toggle, don't restore cycle
-        piCoderActive = savedState.piCoderActive;
-        await statePersistence.delete();
+        // No active spec or terminal state — delete global state
+        await globalStatePersistence.delete();
       }
 
       if (integrity.warnings.length > 0) {
@@ -1213,7 +1264,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         logEvent("subagent_start", {
           agent: targetAgent,
           taskSummary: taskStr,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
           fsmState: stateMachine.currentState,
         });
 
@@ -1288,7 +1339,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           reason: validation.reason,
           passed: details2.testResult?.passed ?? null,
           failed: details2.testResult?.failed ?? null,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
         });
 
         if (validation.valid) {
@@ -1309,7 +1360,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           reason: validation.reason,
           passed: details2.testResult?.passed ?? null,
           failed: details2.testResult?.failed ?? null,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
         });
 
         if (validation.valid) {
@@ -1338,14 +1389,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           to: stateMachine.currentState,
           event: validation.valid ? "validation_passed" : "validation_failed",
           loopCount: stateMachine.loopCount,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
         });
 
         // Log lifecycle end on BLOCKED (RED tautology)
         if (stateMachine.currentState === "BLOCKED") {
           const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
           logEvent("lifecycle_end", {
-            specId: stateMachine.activeSpecId,
+            specId: activeSpecId,
             outcome: "BLOCKED",
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
@@ -1357,7 +1408,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           logEvent("circuit_breaker", {
             loopCount: stateMachine.loopCount,
             maxLoops: config.maxLoops,
-            specId: stateMachine.activeSpecId,
+            specId: activeSpecId,
           });
         }
       }
@@ -1382,7 +1433,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           to: "TDD_RED_WRITE",
           event: "checkpoint_complete",
           loopCount: stateMachine.loopCount,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
         });
         resetNudgeState(stateMachine.currentState);
         await persistState();
@@ -1406,10 +1457,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           to: "COMPLETE",
           event: "merge_complete",
           loopCount: stateMachine.loopCount,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
         });
         logEvent("lifecycle_end", {
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
           outcome: "COMPLETE",
           wallClockMs: lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null,
           totalTokens: { ...lifecycleTokens },
@@ -1447,7 +1498,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         durationMs,
         tokenUsage: tokenUsage ?? { input: 0, output: 0, total: 0 },
         outcome: "success", // If we reach tool_result, the subagent completed
-        specId: stateMachine.activeSpecId,
+        specId: activeSpecId,
       });
 
       // Subagent timing reset
@@ -1506,7 +1557,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             issueCount: reviewVerdict.issueCount,
             highSeverityCount: reviewVerdict.highSeverityCount,
             loopCount: stateMachine.loopCount,
-            specId: stateMachine.activeSpecId,
+            specId: activeSpecId,
           });
         }
       }
@@ -1519,7 +1570,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         lifecycleStartTime = Date.now();
         lifecycleTokens = { input: 0, output: 0, total: 0 };
         logEvent("lifecycle_start", {
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
           userRequest: "",
         });
       }
@@ -1531,14 +1582,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           to: stateMachine.currentState,
           event: "subagent_completed",
           loopCount: stateMachine.loopCount,
-          specId: stateMachine.activeSpecId,
+          specId: activeSpecId,
         });
 
         // Log lifecycle events on terminal transitions
         if (stateMachine.currentState === "COMPLETE") {
           const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
           logEvent("lifecycle_end", {
-            specId: stateMachine.activeSpecId,
+            specId: activeSpecId,
             outcome: "COMPLETE",
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
@@ -1550,7 +1601,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (stateMachine.currentState === "BLOCKED" && previousState === "TDD_RED_VALIDATE") {
           const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
           logEvent("lifecycle_end", {
-            specId: stateMachine.activeSpecId,
+            specId: activeSpecId,
             outcome: "BLOCKED",
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
@@ -1562,7 +1613,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           logEvent("circuit_breaker", {
             loopCount: stateMachine.loopCount,
             maxLoops: config.maxLoops,
-            specId: stateMachine.activeSpecId,
+            specId: activeSpecId,
           });
         }
       }

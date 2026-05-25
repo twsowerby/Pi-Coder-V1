@@ -10,10 +10,12 @@ import { join } from "node:path";
 import {
   readFile,
   writeFile,
-  unlink,
   readdir,
   mkdir,
+  rm,
+  access,
 } from "node:fs/promises";
+import { accessSync } from "node:fs";
 import type { SpecFile, ImplementationUnit } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -58,7 +60,9 @@ export function generateSpecId(
 /**
  * Manages spec files in a `.pi-coder/specs/` directory.
  *
- * Each spec is stored as `{dir}/{id}.md` — Markdown with YAML frontmatter.
+ * Each spec is stored as a directory containing:
+ * - `spec.md` — Markdown with YAML frontmatter (human-readable)
+ * - `state.json` — FSM state, evidence flags, git ref (machine-readable)
  */
 export class SpecManager {
   private readonly specsDir: string;
@@ -67,15 +71,42 @@ export class SpecManager {
     this.specsDir = specsDir;
   }
 
+  /** Get the directory path for a spec ID. */
+  getSpecDir(specId: string): string {
+    return join(this.specsDir, specId);
+  }
+
+  /** Check if a spec directory exists. */
+  specDirExists(specId: string): boolean {
+    // Sync check — used in integrity validation
+    try {
+      accessSync(join(this.specsDir, specId));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Async version of specDirExists. */
+  async specDirExistsAsync(specId: string): Promise<boolean> {
+    try {
+      await access(join(this.specsDir, specId));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Create a spec file. Serializes the SpecFile to Markdown + YAML frontmatter.
    * Returns the file path.
    */
   async createSpec(spec: SpecFile): Promise<string> {
-    await mkdir(this.specsDir, { recursive: true });
+    const specDir = this.getSpecDir(spec.id);
+    await mkdir(specDir, { recursive: true });
 
     const content = serializeSpec(spec);
-    const filePath = join(this.specsDir, `${spec.id}.md`);
+    const filePath = join(specDir, "spec.md");
     await writeFile(filePath, content, "utf-8");
     return filePath;
   }
@@ -84,7 +115,7 @@ export class SpecManager {
    * Read a spec file by ID. Returns null if the file doesn't exist.
    */
   async readSpec(specId: string): Promise<SpecFile | null> {
-    const filePath = join(this.specsDir, `${specId}.md`);
+    const filePath = join(this.getSpecDir(specId), "spec.md");
     try {
       const content = await readFile(filePath, "utf-8");
       return parseSpec(content);
@@ -101,7 +132,7 @@ export class SpecManager {
    * @internal
    */
   async readSpecRaw(specId: string): Promise<string> {
-    const filePath = join(this.specsDir, `${specId}.md`);
+    const filePath = join(this.getSpecDir(specId), "spec.md");
     return readFile(filePath, "utf-8");
   }
 
@@ -116,17 +147,17 @@ export class SpecManager {
     }
     const merged: SpecFile = { ...existing, ...updates };
     const content = serializeSpec(merged);
-    const filePath = join(this.specsDir, `${specId}.md`);
+    const filePath = join(this.getSpecDir(specId), "spec.md");
     await writeFile(filePath, content, "utf-8");
   }
 
   /**
-   * Delete a spec file. No-op if the file doesn't exist.
+   * Delete a spec directory. No-op if the directory doesn't exist.
    */
   async deleteSpec(specId: string): Promise<void> {
-    const filePath = join(this.specsDir, `${specId}.md`);
+    const specDir = this.getSpecDir(specId);
     try {
-      await unlink(filePath);
+      await rm(specDir, { recursive: true, force: true });
     } catch (err: unknown) {
       if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return; // Already gone — no error
@@ -136,14 +167,14 @@ export class SpecManager {
   }
 
   /**
-   * List all spec IDs in the specs directory (filename stems of .md files).
+   * List all spec IDs in the specs directory (subdirectory names).
    */
   async listSpecs(): Promise<string[]> {
     try {
-      const entries = await readdir(this.specsDir);
+      const entries = await readdir(this.specsDir, { withFileTypes: true });
       return entries
-        .filter((e) => e.endsWith(".md"))
-        .map((e) => e.slice(0, -3)) // Remove .md
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
         .sort();
     } catch (err: unknown) {
       if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {

@@ -29,6 +29,10 @@ export interface StateMachineRef {
 
 export interface ToolDependencies {
   stateMachine: StateMachineRef;
+  /** Getter for the module-level active spec ID. */
+  activeSpecId: { get current(): string | null };
+  /** Setter for the module-level active spec ID. */
+  setActiveSpecId: (id: string | null) => void;
   gitOps: GitOperations;
   tddRunner: TddRunner;
   knowledgeStore: KnowledgeStore;
@@ -79,7 +83,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
  * for system prompt inclusion.
  */
 export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
-  const { stateMachine: smRef, gitOps, tddRunner, knowledgeStore, specManager, config } = deps;
+  const { stateMachine: smRef, activeSpecId: activeSpecIdRef, setActiveSpecId, gitOps, tddRunner, knowledgeStore, specManager, config } = deps;
 
   // -------------------------------------------------------------------------
   // pi_coder_git
@@ -135,19 +139,19 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "checkpoint": {
-          if (!smRef.current.activeSpecId) {
+          if (!activeSpecIdRef.current) {
             return {
               content: [{ type: "text" as const, text: "Error: Cannot checkpoint without an active spec. Save the spec with pi_coder_save_spec first." }],
               details: { success: false, error: "No active spec ID — save spec before checkpointing" },
               isError: true,
             };
           }
-          const msg = message ?? `wip: checkpoint-${smRef.current.activeSpecId}`;
+          const msg = message ?? `wip: checkpoint-${activeSpecIdRef.current}`;
           result = await gitOps.checkpoint(msg);
           // Store the ref in the state machine
           if (result.success && result.ref) {
             smRef.current.setActiveSpec(
-              smRef.current.activeSpecId,
+              activeSpecIdRef.current,
               result.ref,
             );
           }
@@ -175,7 +179,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         }
         case "merge": {
           const currentBranchResult = await gitOps.getCurrentBranch();
-          const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${smRef.current.activeSpecId ?? "unknown"}`;
+          const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
           result = await gitOps.merge(featureBranch);
           break;
         }
@@ -357,10 +361,13 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
         const path = await specManager.createSpec(spec);
 
-        // Set the active spec ID on the state machine
-        if (smRef.current.activeSpecId !== params.id) {
-          smRef.current.setActiveSpec(params.id);
+        // Set the active spec ID at the module level
+        if (activeSpecIdRef.current !== params.id) {
+          setActiveSpecId(params.id);
         }
+
+        // Set evidence flag — spec is saved
+        smRef.current.setEvidence("spec_saved");
 
         return {
           content: [{ type: "text" as const, text: `Spec saved: ${params.id}\nPath: ${path}\n\nAcceptance Criteria: ${params.acceptanceCriteria.length}\nConstraints: ${params.constraints.length}\nKey Files: ${params.keyFiles.length}${params.implementationPlan ? `\nImplementation Units: ${params.implementationPlan.length}` : ""}` }],
@@ -500,54 +507,31 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         };
       }
 
-      // Guard: SPEC_WORK → SPEC_APPROVED requires a saved spec
-      // (Only checked for this specific legal transition)
-      if (previousState === "SPEC_WORK" && targetState === "SPEC_APPROVED" && !smRef.current.activeSpecId) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: "Cannot advance to SPEC_APPROVED without a saved spec. " +
-              "Save the spec with pi_coder_save_spec first, then advance. " +
-              "The spec file is the authoritative record for implementor and reviewer.",
-          }],
-          details: {
-            success: false,
-            error: "No active spec — save with pi_coder_save_spec before advancing to SPEC_APPROVED",
-            previousState,
-            validTargets: smRef.current.getValidTransitions(),
-          },
-          isError: true,
-        };
-      }
-
-      // Guard: Post-SPEC_APPROVED states require an active spec
-      // Only applies to legal transitions from states past spec approval
-      const postSpecStates: FSMState[] = [
-        "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
-        "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
-        "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL", "MERGING", "COMPLETE",
-      ];
-      // Check if this is a legally traversable post-spec state
-      const validTargets = smRef.current.getValidTransitions();
-      if (postSpecStates.includes(targetState as FSMState) && validTargets.includes(targetState as FSMState) && !smRef.current.activeSpecId) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Cannot advance to ${targetState} without a saved spec. ` +
-              "Save the spec with pi_coder_save_spec first.",
-          }],
-          details: {
-            success: false,
-            error: `No active spec — save with pi_coder_save_spec before advancing to ${targetState}`,
-            previousState,
-            validTargets,
-          },
-          isError: true,
-        };
-      }
+      // No ad-hoc guards here — the StateMachine.transition() method
+      // checks TRANSITION_GUARDS (evidence requirements) internally.
+      // If a guard fails, it returns a TransitionGuardError.
 
       try {
-        smRef.current.transition(targetState as FSMState);
+        const guardError = smRef.current.transition(targetState as FSMState);
+
+        // Handle transition guard errors (missing evidence)
+        if (guardError) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: guardError.message,
+            }],
+            details: {
+              success: false,
+              error: `Transition guard failed: ${guardError.missingEvidence.join(", ")}`,
+              missingEvidence: guardError.missingEvidence,
+              previousState,
+              validTargets: smRef.current.getValidTransitions(),
+            },
+            isError: true,
+          };
+        }
+
         // Provide contextual guidance so the orchestrator knows what to do next
         const nextActionHints: Partial<Record<FSMState, string>> = {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",

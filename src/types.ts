@@ -212,3 +212,52 @@ export interface KnowledgeEntry {
   /** Raw markdown content */
   content: string;
 }
+
+// ---------------------------------------------------------------------------
+// State Persistence Types
+// ---------------------------------------------------------------------------
+
+/**
+ * Evidence flags that tools set when they complete specific work.
+ * The StateMachine checks these before allowing transitions.
+ */
+export type EvidenceFlag =
+  | "spec_saved"
+  | "spec_user_approved"
+  | "test_run_this_state";
+
+/**
+ * Per-spec state persisted to `.pi-coder/specs/{id}/state.json`.
+ * Lives alongside `spec.md` in the spec directory.
+ */
+export interface SpecState {
+  /** Schema version */
+  version: 1;
+  /** Current FSM state */
+  currentState: FSMState;
+  /** Review loop count (increments on NEEDS_CHANGES → TDD_RED_WRITE) */
+  loopCount: number;
+  /** Pre-implementation git ref for rollback and diff */
+  gitRef: string | null;
+  /** Evidence flags set by tools during this spec's lifecycle */
+  evidence: EvidenceFlag[];
+  /** ISO timestamp of state creation */
+  createdAt: string;
+  /** ISO timestamp of last state update */
+  updatedAt: string;
+}
+
+/**
+ * Global state persisted to `.pi-coder/state.json`.
+ * Slim pointer: which spec is active and whether orchestrator mode is on.
+ */
+export interface GlobalState {
+  /** Schema version */
+  version: 1;
+  /** Whether orchestrator mode is active */
+  piCoderActive: boolean;
+  /** ID of the currently active spec, or null if no spec is in progress */
+  activeSpecId: string | null;
+  /** ISO timestamp of last write */
+  updatedAt: string;
+}

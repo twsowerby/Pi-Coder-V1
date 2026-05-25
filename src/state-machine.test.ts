@@ -10,7 +10,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { StateMachine } from "./state-machine.ts";
-import type { FSMState, PiCoderConfig } from "./types.ts";
+import type { FSMState, PiCoderConfig, EvidenceFlag } from "./types.ts";
 
 /** Default config for tests. */
 function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
@@ -33,6 +33,29 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
     },
     ...overrides,
   };
+}
+
+/**
+ * Force a transition, setting required evidence first.
+ * Throws if the transition returns a guard error.
+ */
+function forceTransition(sm: StateMachine, to: FSMState): void {
+  // Set evidence required for guarded transitions
+  const from = sm.currentState;
+  if (from === "SPEC_WORK" && to === "SPEC_APPROVED") {
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+  }
+  if (from === "TDD_RED_VALIDATE" && to === "TDD_GREEN_WRITE") {
+    sm.setEvidence("test_run_this_state");
+  }
+  if (from === "TDD_GREEN_VALIDATE") {
+    sm.setEvidence("test_run_this_state");
+  }
+  const result = sm.transition(to);
+  if (result) {
+    throw new Error(`Transition guard blocked ${from} → ${to}: ${result.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +91,7 @@ describe("Phase 1: State & Transition Table", () => {
         // Walk the FSM to the 'from' state
         walkToState(sm, from);
         assert.equal(sm.currentState, from);
-        sm.transition(to);
+        forceTransition(sm, to);
         assert.equal(sm.currentState, to);
       });
     }
@@ -84,7 +107,7 @@ describe("Phase 1: State & Transition Table", () => {
         const sm = new StateMachine(makeConfig());
         walkToState(sm, "BLOCKED");
         assert.equal(sm.currentState, "BLOCKED");
-        sm.transition(target);
+        forceTransition(sm, target);
         assert.equal(sm.currentState, target);
       }
     });
@@ -100,7 +123,7 @@ describe("Phase 1: State & Transition Table", () => {
       for (const from of states) {
         const sm = new StateMachine(makeConfig());
         walkToState(sm, from);
-        sm.transition("IDLE");
+        forceTransition(sm, "IDLE");
         assert.equal(sm.currentState, "IDLE");
       }
     });
@@ -174,7 +197,7 @@ describe("Phase 1: State & Transition Table", () => {
     it("should include the from/to states in the error message", () => {
       const sm = new StateMachine(makeConfig());
       try {
-        sm.transition("COMPLETE");
+        forceTransition(sm, "COMPLETE");
         assert.fail("Should have thrown");
       } catch (err) {
         const msg = (err as Error).message;
@@ -199,18 +222,18 @@ describe("Phase 2: Transition Side Effects", () => {
     it("should increment on NEEDS_CHANGES → TDD_RED_WRITE", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "REVIEWING");
-      sm.transition("NEEDS_CHANGES");
+      forceTransition(sm, "NEEDS_CHANGES");
       assert.equal(sm.loopCount, 0); // Not yet incremented; increments on the transition TO TDD_RED_WRITE
-      sm.transition("TDD_RED_WRITE");
+      forceTransition(sm, "TDD_RED_WRITE");
       assert.equal(sm.loopCount, 1);
     });
 
     it("should NOT increment on NEEDS_CHANGES → REVIEWING (non-functional fix)", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "REVIEWING");
-      sm.transition("NEEDS_CHANGES");
+      forceTransition(sm, "NEEDS_CHANGES");
       assert.equal(sm.loopCount, 0);
-      sm.transition("REVIEWING"); // Non-functional fix — skip RED/GREEN
+      forceTransition(sm, "REVIEWING"); // Non-functional fix — skip RED/GREEN
       assert.equal(sm.loopCount, 0); // Still 0, not incremented
     });
 
@@ -218,26 +241,26 @@ describe("Phase 2: Transition Side Effects", () => {
       const sm = new StateMachine(makeConfig());
       // Cycle 1
       walkToState(sm, "REVIEWING");
-      sm.transition("NEEDS_CHANGES");
-      sm.transition("TDD_RED_WRITE");
+      forceTransition(sm, "NEEDS_CHANGES");
+      forceTransition(sm, "TDD_RED_WRITE");
       assert.equal(sm.loopCount, 1);
       // Cycle 2
-      sm.transition("TDD_RED_VALIDATE");
-      sm.transition("TDD_GREEN_WRITE");
-      sm.transition("TDD_GREEN_VALIDATE");
-      sm.transition("REVIEWING");
-      sm.transition("NEEDS_CHANGES");
-      sm.transition("TDD_RED_WRITE");
+      forceTransition(sm, "TDD_RED_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "REVIEWING");
+      forceTransition(sm, "NEEDS_CHANGES");
+      forceTransition(sm, "TDD_RED_WRITE");
       assert.equal(sm.loopCount, 2);
     });
 
     it("should reset to 0 on IDLE entry", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "REVIEWING");
-      sm.transition("NEEDS_CHANGES");
-      sm.transition("TDD_RED_WRITE");
+      forceTransition(sm, "NEEDS_CHANGES");
+      forceTransition(sm, "TDD_RED_WRITE");
       assert.equal(sm.loopCount, 1);
-      sm.transition("IDLE"); // abort
+      forceTransition(sm, "IDLE"); // abort
       assert.equal(sm.loopCount, 0);
     });
 
@@ -245,7 +268,7 @@ describe("Phase 2: Transition Side Effects", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "TDD_GREEN_VALIDATE");
       assert.equal(sm.loopCount, 0);
-      sm.transition("TDD_RED_WRITE"); // next unit, not a review loop
+      forceTransition(sm, "TDD_RED_WRITE"); // next unit, not a review loop
       assert.equal(sm.loopCount, 0);
     });
   });
@@ -572,24 +595,25 @@ describe("Phase 3: Action Guards", () => {
 
 describe("Phase 4: Persistence", () => {
   describe("toJSON", () => {
-    it("should return a plain object with currentState, activeSpecId, loopCount, gitRef", () => {
+    it("should return a plain object with currentState, loopCount, gitRef, evidence", () => {
       const sm = new StateMachine(makeConfig());
       const json = sm.toJSON();
       assert.equal(json.currentState, "IDLE");
-      assert.equal(json.activeSpecId, null);
       assert.equal(json.loopCount, 0);
       assert.equal(json.gitRef, null);
+      assert.deepStrictEqual(json.evidence, []);
     });
 
     it("should reflect current state after transitions", () => {
       const sm = new StateMachine(makeConfig());
-      sm.setActiveSpec("auth-flow", "abc1234");
+      sm.setGitRef("abc1234");
       walkToState(sm, "REVIEWING");
       const json = sm.toJSON();
       assert.equal(json.currentState, "REVIEWING");
-      assert.equal(json.activeSpecId, "auth-flow");
       assert.equal(json.gitRef, "abc1234");
       assert.equal(json.loopCount, 0);
+      assert.ok(json.evidence.includes("spec_saved"));
+      assert.ok(json.evidence.includes("spec_user_approved"));
     });
 
     it("should reflect loop count after review cycles", () => {
@@ -601,27 +625,28 @@ describe("Phase 4: Persistence", () => {
   });
 
   describe("fromJSON", () => {
-    it("should restore IDLE state with no specId/gitRef", () => {
+    it("should restore IDLE state with no gitRef", () => {
       const sm = new StateMachine(makeConfig());
       const json = sm.toJSON();
       const restored = StateMachine.fromJSON(json, makeConfig());
       assert.equal(restored.currentState, "IDLE");
-      assert.equal(restored.activeSpecId, null);
       assert.equal(restored.gitRef, null);
       assert.equal(restored.loopCount, 0);
+      assert.deepStrictEqual(restored.getEvidence(), []);
     });
 
-    it("should restore a mid-lifecycle state", () => {
+    it("should restore a mid-lifecycle state with evidence", () => {
       const sm = new StateMachine(makeConfig());
-      sm.setActiveSpec("user-auth", "deadbeef");
+      sm.setGitRef("deadbeef");
       walkToState(sm, "TDD_GREEN_VALIDATE");
       fullReviewCycle(sm, 1); // Get some loop count
 
       const json = sm.toJSON();
       const restored = StateMachine.fromJSON(json, makeConfig());
       assert.equal(restored.currentState, "TDD_GREEN_VALIDATE");
-      assert.equal(restored.activeSpecId, "user-auth");
       assert.equal(restored.gitRef, "deadbeef");
+      // Evidence should be preserved
+      assert.ok(restored.getEvidence().includes("spec_saved"));
       // loopCount was 1 from fullReviewCycle but we walked past NEEDS_CHANGES without incrementing
       // because we went to TDD_GREEN_VALIDATE directly. Let's just check it's preserved.
       assert.equal(restored.loopCount, json.loopCount);
@@ -637,12 +662,14 @@ describe("Phase 4: Persistence", () => {
 
     it("should produce a machine that can continue transitioning", () => {
       const sm = new StateMachine(makeConfig());
-      sm.setActiveSpec("user-auth", "abc1234");
+      sm.setGitRef("abc1234");
       walkToState(sm, "TDD_RED_VALIDATE");
 
       const json = sm.toJSON();
       const restored = StateMachine.fromJSON(json, makeConfig());
-      // Should be able to transition from RED_VALIDATE → GREEN_WRITE
+      // Evidence is preserved from the original machine
+      // Need test_run_this_state to advance from RED_VALIDATE
+      restored.setEvidence("test_run_this_state");
       restored.transition("TDD_GREEN_WRITE");
       assert.equal(restored.currentState, "TDD_GREEN_WRITE");
     });
@@ -700,12 +727,12 @@ function walkToState(sm: StateMachine, target: FSMState): void {
   // Handle states not on the main happy path
   if (target === "BLOCKED") {
     walkToState(sm, "TDD_RED_VALIDATE");
-    sm.transition("BLOCKED");
+    forceTransition(sm, "BLOCKED");
     return;
   }
   if (target === "NEEDS_CHANGES") {
     walkToState(sm, "REVIEWING");
-    sm.transition("NEEDS_CHANGES");
+    forceTransition(sm, "NEEDS_CHANGES");
     return;
   }
 
@@ -714,7 +741,7 @@ function walkToState(sm: StateMachine, target: FSMState): void {
   // Walk from current state along the happy path
   for (let i = 0; i < targetIdx; i++) {
     if (sm.currentState === happyPath[i] && sm.currentState !== target) {
-      sm.transition(happyPath[i + 1]);
+      forceTransition(sm, happyPath[i + 1]);
     }
   }
 
@@ -736,13 +763,13 @@ function fullReviewCycle(sm: StateMachine, n: number): void {
   }
 
   for (let i = 0; i < n; i++) {
-    sm.transition("NEEDS_CHANGES");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
-    sm.transition("TDD_GREEN_VALIDATE");
+    forceTransition(sm, "NEEDS_CHANGES");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
     if (i < n - 1) {
-      sm.transition("REVIEWING");
+      forceTransition(sm, "REVIEWING");
     }
   }
 }

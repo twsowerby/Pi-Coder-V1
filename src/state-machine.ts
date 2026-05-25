@@ -11,9 +11,12 @@
  *
  * Manual advances use pi_coder_advance_fsm (orchestrator judgment).
  * Auto-transitions happen on tool_result (deterministic outcomes).
+ *
+ * Transition guards enforce that required work has been done before
+ * advancing (e.g., spec saved, user approved, tests run).
  */
 
-import type { FSMState, PiCoderConfig } from "./types.ts";
+import type { FSMState, PiCoderConfig, EvidenceFlag } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Transition Table
@@ -116,6 +119,68 @@ function buildTransitionMap(): Map<FSMState, FSMState[]> {
 const TRANSITION_MAP: Map<FSMState, FSMState[]> = buildTransitionMap();
 
 // ---------------------------------------------------------------------------
+// Transition Guards — evidence required for specific transitions
+// ---------------------------------------------------------------------------
+
+interface TransitionGuard {
+  from: FSMState;
+  to: FSMState;
+  requiredEvidence: EvidenceFlag[];
+  errorMessage: string;
+}
+
+/**
+ * Evidence required before specific transitions can proceed.
+ *
+ * This is the SINGLE source of truth for process invariants.
+ * If a guard exists here, the FSM enforces it — prompts guide but don't guard.
+ *
+ * Invariants enforced:
+ * - SPEC_WORK → SPEC_APPROVED: spec must be saved AND user-approved
+ * - TDD validation exits: tests must have been run in the current state
+ *
+ * Transitions NOT listed here have no evidence requirements — they're
+ * either manual (orchestrator judgment) or auto-transitions from
+ * deterministic tool results.
+ */
+const TRANSITION_GUARDS: TransitionGuard[] = [
+  {
+    from: "SPEC_WORK",
+    to: "SPEC_APPROVED",
+    requiredEvidence: ["spec_saved", "spec_user_approved"],
+    errorMessage:
+      "Cannot advance to SPEC_APPROVED. Required evidence missing:\n" +
+      "  - spec_saved: Save the spec with pi_coder_save_spec\n" +
+      "  - spec_user_approved: Get user approval via interview\n" +
+      "Both are non-negotiable. Save the spec, then present it for approval.",
+  },
+  {
+    from: "TDD_RED_VALIDATE",
+    to: "TDD_GREEN_WRITE",
+    requiredEvidence: ["test_run_this_state"],
+    errorMessage:
+      "Cannot advance past RED validation without running tests. " +
+      "Use pi_coder_run_tests to validate the RED phase first.",
+  },
+  {
+    from: "TDD_GREEN_VALIDATE",
+    to: "TDD_RED_WRITE",
+    requiredEvidence: ["test_run_this_state"],
+    errorMessage:
+      "Cannot advance past GREEN validation without running tests. " +
+      "Use pi_coder_run_tests to validate the GREEN phase first.",
+  },
+  {
+    from: "TDD_GREEN_VALIDATE",
+    to: "REVIEWING",
+    requiredEvidence: ["test_run_this_state"],
+    errorMessage:
+      "Cannot advance to REVIEWING without running GREEN validation tests. " +
+      "Use pi_coder_run_tests to validate the GREEN phase first.",
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Action Guards - which tools are allowed in which states
 // ---------------------------------------------------------------------------
 
@@ -182,21 +247,41 @@ const NUDE_EXPECTATIONS: Record<FSMState, NudgeExpectation> = {
 };
 
 // ---------------------------------------------------------------------------
+// Evidence flags that persist across state transitions
+// ---------------------------------------------------------------------------
+
+/** Evidence flags that survive transitions (cleared only on IDLE reset). */
+const PERSISTENT_EVIDENCE: Set<EvidenceFlag> = new Set(["spec_saved", "spec_user_approved"]);
+
+// ---------------------------------------------------------------------------
 // StateMachine Class
 // ---------------------------------------------------------------------------
 
 export interface StateMachineJSON {
   currentState: FSMState;
-  activeSpecId: string | null;
   loopCount: number;
   gitRef: string | null;
+  evidence: EvidenceFlag[];
+}
+
+/** Result of a failed transition guard check. */
+export interface TransitionGuardError {
+  /** The transition that was attempted */
+  from: FSMState;
+  to: FSMState;
+  /** Evidence flags that were required but missing */
+  missingEvidence: EvidenceFlag[];
+  /** Human-readable error message */
+  message: string;
 }
 
 export class StateMachine {
   private _currentState: FSMState = "IDLE";
+  /** @deprecated Use module-level activeSpecId instead. Kept for compat. */
   private _activeSpecId: string | null = null;
   private _loopCount: number = 0;
   private _gitRef: string | null = null;
+  private _evidence: Set<EvidenceFlag> = new Set();
   private readonly _config: PiCoderConfig;
 
   constructor(config: PiCoderConfig) {
@@ -209,6 +294,7 @@ export class StateMachine {
     return this._currentState;
   }
 
+  /** @deprecated Use module-level activeSpecId instead. */
   get activeSpecId(): string | null {
     return this._activeSpecId;
   }
@@ -221,15 +307,45 @@ export class StateMachine {
     return this._gitRef;
   }
 
+  // --- Evidence Management ---
+
+  /** Set an evidence flag. Tools call this when they complete work. */
+  setEvidence(flag: EvidenceFlag): void {
+    this._evidence.add(flag);
+  }
+
+  /** Check whether an evidence flag is set. */
+  hasEvidence(flag: EvidenceFlag): boolean {
+    return this._evidence.has(flag);
+  }
+
+  /** Get all current evidence flags. */
+  getEvidence(): EvidenceFlag[] {
+    return [...this._evidence];
+  }
+
+  /** Clear evidence flags that don't persist across state transitions. */
+  private clearTransientEvidence(): void {
+    for (const flag of this._evidence) {
+      if (!PERSISTENT_EVIDENCE.has(flag)) {
+        this._evidence.delete(flag);
+      }
+    }
+  }
+
   // --- Core Transition ---
 
   /**
-   * Transition to a new state. Validates the transition is legal.
-   * Throws a descriptive error on illegal transitions.
+   * Transition to a new state. Validates the transition is legal
+   * AND that all required evidence is present.
+   *
+   * Returns a TransitionGuardError if evidence is missing.
+   * Throws on illegal transitions (topology violations).
    */
-  transition(to: FSMState): void {
+  transition(to: FSMState): TransitionGuardError | void {
     const key: TransitionKey = `${this._currentState}→${to}`;
 
+    // 1. Check transition topology
     if (!TRANSITION_SET.has(key)) {
       const validTargets = TRANSITION_MAP.get(this._currentState) ?? [];
       throw new Error(
@@ -238,11 +354,34 @@ export class StateMachine {
       );
     }
 
+    // 2. Check transition guards (evidence requirements)
+    for (const guard of TRANSITION_GUARDS) {
+      if (guard.from === this._currentState && guard.to === to) {
+        const missing = guard.requiredEvidence.filter(
+          (flag) => !this._evidence.has(flag),
+        );
+        if (missing.length > 0) {
+          return {
+            from: this._currentState,
+            to,
+            missingEvidence: missing,
+            message: guard.errorMessage,
+          };
+        }
+      }
+    }
+
+    // 3. Apply transition
     const previousState = this._currentState;
     this._currentState = to;
 
     // Side effects
     this.applyTransitionSideEffects(previousState, to);
+
+    // Clear transient evidence (e.g., test_run_this_state)
+    this.clearTransientEvidence();
+
+    return undefined; // success
   }
 
   /**
@@ -261,9 +400,10 @@ export class StateMachine {
       this._loopCount++;
     }
 
-    // Reset loop counter on IDLE entry
+    // Reset loop counter and persistent evidence on IDLE entry
     if (to === "IDLE") {
       this._loopCount = 0;
+      this._evidence.clear();
     }
   }
 
@@ -275,6 +415,7 @@ export class StateMachine {
 
   // --- Spec & Git Tracking ---
 
+  /** @deprecated Use module-level activeSpecId instead. */
   setActiveSpec(specId: string, gitRef?: string): void {
     this._activeSpecId = specId;
     if (gitRef !== undefined) {
@@ -282,11 +423,17 @@ export class StateMachine {
     }
   }
 
+  /** Set the git ref independently (used after checkpoint). */
+  setGitRef(ref: string): void {
+    this._gitRef = ref;
+  }
+
   reset(): void {
     this._currentState = "IDLE";
     this._activeSpecId = null;
     this._loopCount = 0;
     this._gitRef = null;
+    this._evidence.clear();
   }
 
   // --- Action Guards ---
@@ -347,18 +494,18 @@ export class StateMachine {
   toJSON(): StateMachineJSON {
     return {
       currentState: this._currentState,
-      activeSpecId: this._activeSpecId,
       loopCount: this._loopCount,
       gitRef: this._gitRef,
+      evidence: [...this._evidence],
     };
   }
 
   static fromJSON(data: StateMachineJSON, config: PiCoderConfig): StateMachine {
     const sm = new StateMachine(config);
     sm._currentState = data.currentState;
-    sm._activeSpecId = data.activeSpecId;
     sm._loopCount = data.loopCount;
     sm._gitRef = data.gitRef;
+    sm._evidence = new Set(data.evidence ?? []);
     return sm;
   }
 }

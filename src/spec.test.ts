@@ -144,7 +144,7 @@ describe("SpecManager", () => {
   describe("createSpec", () => {
     it("should write a spec file to the specs directory", async () => {
       const path = await manager.createSpec(sampleSpec);
-      assert.strictEqual(path, join(tmpDir, "user-authentication.md"));
+      assert.strictEqual(path, join(tmpDir, "user-authentication", "spec.md"));
     });
 
     it("should create a file with YAML frontmatter", async () => {
