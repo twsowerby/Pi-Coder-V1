@@ -1317,6 +1317,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const { details } = event;
     const currentState = stateMachine.currentState;
 
+    // Evidence: interview tool completion in SPEC_WORK → spec_user_approved
+    if (toolName === "interview" && currentState === "SPEC_WORK") {
+      stateMachine.setEvidence("spec_user_approved");
+    }
+
     // Handle pi_coder_run_tests results
     if (toolName === "pi_coder_run_tests") {
       const details2 = details as {
@@ -1327,6 +1332,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       } | undefined;
 
       if (!details2?.validation) return; // Tool was blocked or errored
+
+      // Mark that tests were run in this state (evidence for transition guards)
+      stateMachine.setEvidence("test_run_this_state");
 
       const validation = details2.validation;
       const previousState = currentState;
@@ -1559,6 +1567,23 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             loopCount: stateMachine.loopCount,
             specId: activeSpecId,
           });
+
+          // AUTO-TRANSITION: review verdict drives next state
+          // This replaces the need for manual pi_coder_advance_fsm REVIEWING → APPROVED/NEEDS_CHANGES
+          const target = reviewVerdict.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
+          stateMachine.transition(target as FSMState);
+          const reviewSteer = reviewVerdict.verdict === "approved"
+            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
+            : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. `+
+              `Advance to TDD_RED_WRITE (functional fix) or REVIEWING (non-functional fix).`;
+
+          // Append to tool result content
+          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+            const textBlock = rawContent[0] as { type: "text"; text: string };
+            const appendedText = textBlock.text + reviewSteer;
+            // Don't return here — fall through to normal persist/refresh
+            (rawContent[0] as { type: "text"; text: string }).text = appendedText;
+          }
         }
       }
 
