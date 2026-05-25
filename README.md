@@ -20,7 +20,7 @@ The orchestrator follows this lifecycle:
 ```
 IDLE → SPEC_WORK → SPEC_APPROVED →
 GIT_CHECKPOINT → TDD_RED_WRITE → TDD_RED_VALIDATE →
-TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →
+TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →
 (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
 (NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED
 ```
@@ -312,25 +312,33 @@ Knowledge file naming rules: `.md` extension, 3-50 character stem, lowercase alp
 1. You make a request → orchestrator advances the FSM to SPEC_WORK
 2. Orchestrator delegates to researcher (can do multiple rounds)
 3. Orchestrator prunes research to only what's needed: acceptance criteria, constraints, key files
-4. Orchestrator drafts spec, presents for your approval via `interview`
-5. On approval: `pi_coder_advance_fsm` advances to SPEC_APPROVED, then git checkpoint creates a feature branch
+4. Orchestrator creates an **implementation plan** — breaking the spec into atomic units, each with its own ACs and key files
+5. Orchestrator presents the spec for approval via `interview` with **multiple focused questions** (scope, ACs, constraints, plan) — not one big dump
+6. On approval: `pi_coder_advance_fsm` advances to SPEC_APPROVED, then git checkpoint creates a feature branch
 
-### RED Phase
+### Per-Unit TDD Cycle
 
-1. Orchestrator delegates to implementor in **RED mode** — "write tests only"
-2. Implementor writes failing tests for the acceptance criteria
+Implementation happens **one unit at a time**. For each unit in the implementation plan:
+
+#### RED Phase (per unit)
+
+1. Orchestrator delegates to implementor in **RED mode** for **one unit only** — "write tests for these ACs"
+2. Implementor writes failing tests for that unit's acceptance criteria
 3. `pi_coder_run_tests` validates the tests — they **must fail** (that's the point)
 4. If tests pass unexpectedly → **RED_TAUTOLOGY** — the harness enters BLOCKED and presents three options:
    - **Continue anyway** — skip to GREEN for new behavior
    - **Rewrite tests** — loop back to RED with instruction to test only new behavior
    - **Abort spec** — rollback to checkpoint, return to IDLE
 
-### GREEN Phase
+#### GREEN Phase (per unit)
 
-1. Orchestrator delegates to implementor in **GREEN mode** — "write code to make tests pass"
+1. Orchestrator delegates to implementor in **GREEN mode** for **the same unit** — "write code to make these tests pass"
 2. Implementor writes implementation code (cannot modify tests without approval)
 3. `pi_coder_run_tests` validates — tests **must pass**
-4. If tests still fail → loop back to GREEN (up to `maxLoops`)
+4. If tests still fail → loop back to GREEN for the same unit
+5. If tests pass → orchestrator decides:
+   - **More units?** → `pi_coder_advance_fsm TDD_RED_WRITE` to start the next unit
+   - **All units done?** → `pi_coder_advance_fsm REVIEWING` to proceed to review
 
 ### Review
 
@@ -407,7 +415,7 @@ This prevents the LLM from accidentally delegating to a built-in `researcher` in
 
 ```bash
 npm install          # Install dependencies
-npm test             # Run test suite (466 tests)
+npm test             # Run test suite (472 tests)
 npm run typecheck    # TypeScript strict mode check
 ```
 
