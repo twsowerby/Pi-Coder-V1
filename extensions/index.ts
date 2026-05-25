@@ -11,7 +11,7 @@
  * Implements Spec 09 in 4 phases.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 
 import { StateMachine } from "../src/state-machine.ts";
@@ -78,6 +78,133 @@ export let nudgeState: NudgeState = {
   actionAttempted: false,
   lastNudgeLevel: 0,
 };
+
+/** Captured ExtensionContext from session_start — used by refreshUI(). */
+let sessionCtx: ExtensionContext | null = null;
+
+/** Whether a pi-coder subagent is currently running (for UI indicator). */
+let subagentRunning = false;
+
+// ---------------------------------------------------------------------------
+// UI Refresh — updates widget, status line, and working indicator
+// ---------------------------------------------------------------------------
+
+/** Visual styling for each FSM state group. */
+const STATE_STYLE: Record<string, { icon: string; color: "success" | "warning" | "error" | "accent" | "muted" | "dim" }> = {
+  IDLE:               { icon: "○", color: "dim" },
+  SPEC_WORK:          { icon: "●", color: "accent" },
+  SPEC_APPROVED:      { icon: "✓", color: "success" },
+  GIT_CHECKPOINT:     { icon: "⟳", color: "accent" },
+  TDD_RED_WRITE:      { icon: "●", color: "warning" },
+  TDD_RED_VALIDATE:   { icon: "●", color: "warning" },
+  TDD_GREEN_WRITE:    { icon: "●", color: "accent" },
+  TDD_GREEN_VALIDATE: { icon: "●", color: "accent" },
+  REVIEWING:          { icon: "◎", color: "accent" },
+  APPROVED:           { icon: "✓", color: "success" },
+  NEEDS_CHANGES:      { icon: "✗", color: "error" },
+  FINAL_APPROVAL:     { icon: "✓", color: "success" },
+  MERGING:            { icon: "⟳", color: "accent" },
+  COMPLETE:           { icon: "✓", color: "success" },
+  BLOCKED:            { icon: "⚠", color: "error" },
+};
+
+/** Friendly labels for FSM states. */
+const STATE_LABEL: Record<string, string> = {
+  IDLE:               "Idle",
+  SPEC_WORK:          "Spec Work",
+  SPEC_APPROVED:      "Spec Approved",
+  GIT_CHECKPOINT:     "Checkpoint",
+  TDD_RED_WRITE:      "RED",
+  TDD_RED_VALIDATE:   "RED Validate",
+  TDD_GREEN_WRITE:    "GREEN",
+  TDD_GREEN_VALIDATE: "GREEN Validate",
+  REVIEWING:          "Reviewing",
+  APPROVED:           "Approved",
+  NEEDS_CHANGES:      "Needs Changes",
+  FINAL_APPROVAL:     "Final Approval",
+  MERGING:           "Merging",
+  COMPLETE:           "Complete",
+  BLOCKED:            "Blocked",
+};
+
+/** Refresh all pi-coder UI surfaces based on current state. */
+function refreshUI(): void {
+  if (!sessionCtx) return;
+  const ctx = sessionCtx;
+
+  if (!piCoderActive) {
+    // Pi-coder OFF — clear everything
+    ctx.ui.setWidget("pi-coder-state", undefined);
+    ctx.ui.setStatus("pi-coder", undefined);
+    ctx.ui.setWorkingIndicator(); // restore default
+    return;
+  }
+
+  const state = stateMachine.currentState;
+  const specId = stateMachine.activeSpecId;
+  const loopCount = stateMachine.loopCount;
+  const style = STATE_STYLE[state] ?? { icon: "●", color: "accent" as const };
+  const label = STATE_LABEL[state] ?? state;
+  const theme = ctx.ui.theme;
+
+  // --- Widget above editor ---
+  const isTdd = state.startsWith("TDD_");
+  const showLoop = isTdd || state === "REVIEWING" || state === "NEEDS_CHANGES";
+
+  // Build widget line using theme colors (string-array overload — no TUI components needed)
+  let widgetLine = theme.fg(style.color, `${style.icon} ${label}`);
+  if (specId) {
+    widgetLine += theme.fg("dim", `  spec: `) + theme.fg("muted", specId);
+  }
+  if (showLoop && loopCount > 0) {
+    widgetLine += theme.fg("dim", `  loop: `) + theme.fg("muted", String(loopCount)) + theme.fg("dim", `/${config.maxLoops}`);
+  }
+  if (subagentRunning) {
+    widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶ delegating");
+  }
+
+  ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
+
+  // --- Footer status line ---
+  let statusText: string;
+  if (state === "BLOCKED") {
+    statusText = theme.fg("error", "⚠ blocked");
+  } else if (state === "COMPLETE") {
+    statusText = theme.fg("success", "✓ complete");
+  } else if (state === "IDLE") {
+    statusText = theme.fg("dim", "idle");
+  } else {
+    statusText = theme.fg(style.color, `${style.icon} ${label}`);
+    if (specId) {
+      statusText += theme.fg("dim", ` · ${specId}`);
+    }
+  }
+  ctx.ui.setStatus("pi-coder", statusText);
+
+  // --- Working indicator ---
+  if (subagentRunning) {
+    // Pulsing dot while subagent is active
+    ctx.ui.setWorkingIndicator({
+      frames: [
+        theme.fg("accent", "⏣"),
+        theme.fg("muted", "⏣"),
+      ],
+      intervalMs: 500,
+    });
+  } else if (state === "IDLE" || state === "COMPLETE" || state === "BLOCKED") {
+    // Restore default for terminal/waiting states
+    ctx.ui.setWorkingIndicator();
+  } else {
+    // Active orchestrator — gentle breathing dot
+    ctx.ui.setWorkingIndicator({
+      frames: [
+        theme.fg("accent", "●"),
+        theme.fg("muted", "●"),
+      ],
+      intervalMs: 600,
+    });
+  }
+}
 
 // Module dependencies — set up during extension init
 let gitOps: GitOperations;
@@ -438,6 +565,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("session_start", async (_event, ctx) => {
+    // Capture ctx for UI refresh
+    sessionCtx = ctx;
     const cwd = ctx.cwd;
 
     // Load config
@@ -602,7 +731,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     if (subagentsAvailable) {
       if (piCoderActive) {
         pi.setActiveTools(ORCHESTRATOR_TOOLS);
-        ctx.ui.setStatus("pi-coder", "🔧 pi-coder");
+        refreshUI();
       }
     } else {
       // Subagents not available — can't activate orchestrator mode
@@ -842,6 +971,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         // Track subagent timing
         subagentStartTime = Date.now();
         lastSubagentAgent = targetAgent;
+
+        // Update UI to show subagent running
+        subagentRunning = true;
+        refreshUI();
 
         // Log subagent delegation
         const taskStr = typeof (input as Record<string, unknown>).task === "string"
@@ -1090,6 +1223,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // Subagent timing reset
       subagentStartTime = null;
       lastSubagentAgent = null;
+      subagentRunning = false;
+      // Note: refreshUI() is called at the end of tool_result handler
 
       // Check for review result in subagent output (if we're in REVIEWING state)
       if (currentState === "REVIEWING") {
@@ -1174,6 +1309,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // (pi_coder_advance_fsm transitions inside execute(), pi_coder_git rollback too)
     await persistState();
 
+    // Refresh UI after any FSM state change
+    refreshUI();
+
     return undefined;
   });
 
@@ -1201,14 +1339,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         piCoderActive = true;
         pi.setActiveTools(ORCHESTRATOR_TOOLS);
-        ctx.ui.setStatus("pi-coder", "🔧 pi-coder");
+        refreshUI();
         ctx.ui.notify("Pi Coder: ON — Orchestrator mode active. Use /pi-coder to switch to normal mode.", "info");
         logEvent("command", { command: "toggle", result: "on" });
       } else {
         // Turning OFF
         piCoderActive = false;
         pi.setActiveTools(NORMAL_TOOLS);
-        ctx.ui.setStatus("pi-coder", undefined);
+        refreshUI();
         ctx.ui.notify("Pi Coder: OFF — Normal Pi mode. Use /pi-coder to re-activate.", "info");
         logEvent("command", { command: "toggle", result: "off" });
       }
