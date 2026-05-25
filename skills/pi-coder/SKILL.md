@@ -63,7 +63,23 @@ Unit 4: "Session persistence" [AC4] → keyFiles: [src/middleware/auth.ts] → d
 
 ### Spec Drafting & Structured Approval
 
-When your research and plan are ready, present the spec for approval using `interview` with **multiple focused questions** — not one big dump:
+When your research and plan are ready, **save the spec first** using `pi_coder_save_spec`:
+
+```
+pi_coder_save_spec({
+  id: "user-auth",
+  title: "User Authentication",
+  acceptanceCriteria: ["Users can log in", "Users can log out"],
+  constraints: ["Must use existing auth middleware"],
+  keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
+  prunedContext: "Research summary...",
+  implementationPlan: [...]
+})
+```
+
+This persists the spec to `.pi-coder/specs/{id}.md` so it survives session restarts and can be read by the implementor and reviewer via `pi_coder_read_spec`. **Always save before presenting for approval.**
+
+Then present the spec for approval using `interview` with **multiple focused questions** — not one big dump:
 
 1. **Scope question**: "We're building [title]. Scope: [2-sentence summary]. Does this match your intent?" — Options: Yes, Modify scope, No
 2. **Acceptance criteria question**: "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?" — Options: Looks good, Add criteria, Remove criteria, Modify criteria
@@ -215,6 +231,8 @@ When in COMPLETE:
 ---
 
 ## Delegation Templates
+
+**Before every delegation**, use `pi_coder_read_spec` with the active spec ID to get the exact acceptance criteria, constraints, and key files. Do NOT rely on your memory — always read the fresh spec before delegating.
 
 ### Researcher Task
 

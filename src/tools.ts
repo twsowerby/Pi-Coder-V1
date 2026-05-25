@@ -15,11 +15,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { FSMState, PiCoderConfig } from "./types.ts";
+import type { FSMState, PiCoderConfig, SpecFile } from "./types.ts";
 import { StateMachine } from "./state-machine.ts";
 import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
+import { SpecManager } from "./spec.ts";
 
 /** Dependencies injected from the extension main. */
 export interface StateMachineRef {
@@ -31,6 +32,7 @@ export interface ToolDependencies {
   gitOps: GitOperations;
   tddRunner: TddRunner;
   knowledgeStore: KnowledgeStore;
+  specManager: SpecManager;
   config: PiCoderConfig;
 }
 
@@ -77,7 +79,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
  * for system prompt inclusion.
  */
 export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
-  const { stateMachine: smRef, gitOps, tddRunner, knowledgeStore, config } = deps;
+  const { stateMachine: smRef, gitOps, tddRunner, knowledgeStore, specManager, config } = deps;
 
   // -------------------------------------------------------------------------
   // pi_coder_git
@@ -297,7 +299,155 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
   });
 
   // -------------------------------------------------------------------------
-  // pi_coder_advance_fsm
+  // pi_coder_save_spec
+  // -------------------------------------------------------------------------
+  pi.registerTool({
+    name: "pi_coder_save_spec",
+    label: "Save Spec",
+    description:
+      "Save a spec to .pi-coder/specs/{id}.md. Creates the file if it doesn't exist, updates it if it does. " +
+      "The spec file persists the acceptance criteria, constraints, key files, implementation plan, and pruned context. " +
+      "This is the authoritative record of what the TDD cycle is building.",
+    promptSnippet: "Persist the compiled spec to .pi-coder/specs/ for reference by implementor and reviewer",
+    promptGuidelines: [
+      "Save the spec after synthesizing research findings and before presenting for approval.",
+      "Update the spec with the implementation plan before starting the TDD cycle.",
+      "The spec ID becomes the git branch name — keep it short and descriptive (e.g., user-auth).",
+      "Include ALL acceptance criteria, constraints, and key files — implementor only sees what you put here.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({ description: "Spec ID — short, kebab-case identifier (e.g., user-auth). Becomes the git branch name." }),
+      title: Type.String({ description: "Human-readable spec title" }),
+      acceptanceCriteria: Type.Array(Type.String(), { description: "Specific, testable statements of what done looks like" }),
+      constraints: Type.Array(Type.String(), { description: "Hard boundaries the implementation must respect" }),
+      keyFiles: Type.Array(Type.String(), { description: "File paths relevant to this spec" }),
+      prunedContext: Type.String({ description: "Research summary, architecture notes, and codebase context the implementor needs" }),
+      implementationPlan: Type.Optional(Type.Array(Type.Object({
+        name: Type.String({ description: "Unit name" }),
+        acceptanceCriteriaIndices: Type.Array(Type.Number(), { description: "0-based indices into acceptanceCriteria array" }),
+        keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
+        dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
+      }), { description: "Ordered list of atomic implementation units" })),
+    }),
+
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      try {
+        const spec: SpecFile = {
+          id: params.id,
+          title: params.title,
+          acceptanceCriteria: params.acceptanceCriteria,
+          constraints: params.constraints,
+          keyFiles: params.keyFiles,
+          prunedContext: params.prunedContext,
+          implementationPlan: params.implementationPlan?.map((u) => ({
+            name: u.name,
+            acceptanceCriteriaIndices: u.acceptanceCriteriaIndices,
+            keyFiles: u.keyFiles,
+            dependsOn: u.dependsOn ?? [],
+          })) ?? [],
+          status: smRef.current.currentState as SpecFile["status"],
+        };
+
+        const path = await specManager.createSpec(spec);
+
+        // Set the active spec ID on the state machine
+        if (smRef.current.activeSpecId !== params.id) {
+          smRef.current.setActiveSpec(params.id);
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `Spec saved: ${params.id}\nPath: ${path}\n\nAcceptance Criteria: ${params.acceptanceCriteria.length}\nConstraints: ${params.constraints.length}\nKey Files: ${params.keyFiles.length}${params.implementationPlan ? `\nImplementation Units: ${params.implementationPlan.length}` : ""}` }],
+          details: { success: true, id: params.id, path },
+        };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error saving spec: ${error}` }],
+          details: { success: false, error },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // pi_coder_read_spec
+  // -------------------------------------------------------------------------
+  pi.registerTool({
+    name: "pi_coder_read_spec",
+    label: "Read Spec",
+    description:
+      "Read a spec file from .pi-coder/specs/{id}.md. Returns the full spec content " +
+      "including acceptance criteria, constraints, key files, implementation plan, and pruned context. " +
+      "Use this to refresh your memory or check the spec details during the TDD cycle.",
+    promptSnippet: "Read the spec file to review acceptance criteria and implementation plan",
+    promptGuidelines: [
+      "Read spec before debriefing the implementor — you need the exact ACs and key files for delegation.",
+      "Read spec before review — the reviewer needs to know what was specified.",
+      "Only read specs you need — don't read all specs at once.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({ description: "Spec ID to read" }),
+    }),
+
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      try {
+        const spec = await specManager.readSpec(params.id);
+        if (!spec) {
+          return {
+            content: [{ type: "text" as const, text: `Spec "${params.id}" not found. Use ls .pi-coder/specs/ to see available specs.` }],
+            details: { success: false, error: "not_found" },
+            isError: true,
+          };
+        }
+
+        const lines: string[] = [
+          `# ${spec.title}`,
+          `ID: ${spec.id}`,
+          `Status: ${spec.status}`,
+          "",
+          "## Acceptance Criteria",
+        ];
+        for (const ac of spec.acceptanceCriteria) {
+          lines.push(`- [ ] ${ac}`);
+        }
+        lines.push("", "## Constraints");
+        for (const c of spec.constraints) {
+          lines.push(`- ${c}`);
+        }
+        lines.push("", "## Key Files");
+        for (const f of spec.keyFiles) {
+          lines.push(`- ${f}`);
+        }
+        if (spec.implementationPlan.length > 0) {
+          lines.push("", "## Implementation Plan");
+          for (const unit of spec.implementationPlan) {
+            const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
+            const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
+            lines.push(`- **${unit.name}** [${acRefs}]${deps}`);
+            for (const f of unit.keyFiles) {
+              lines.push(`  - ${f}`);
+            }
+          }
+        }
+        lines.push("", "## Pruned Context");
+        lines.push(spec.prunedContext);
+
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: { success: true, id: spec.id, title: spec.title },
+        };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error reading spec: ${error}` }],
+          details: { success: false, error },
+          isError: true,
+        };
+      }
+    },
+  });
+
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "pi_coder_advance_fsm",

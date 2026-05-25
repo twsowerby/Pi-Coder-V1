@@ -43,6 +43,8 @@ export const ORCHESTRATOR_TOOLS = [
   "pi_coder_git",
   "pi_coder_run_tests",
   "upsert_knowledge",
+  "pi_coder_save_spec",
+  "pi_coder_read_spec",
   "pi_coder_advance_fsm",
   "interview",
 ];
@@ -479,6 +481,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       gitOps,
       tddRunner,
       knowledgeStore,
+      specManager,
       config,
     });
 

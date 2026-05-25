@@ -160,6 +160,34 @@ function createMockKnowledgeStore() {
   };
 }
 
+function createMockSpecManager() {
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  const specs = new Map<string, { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[] }>; status: string }>();
+  let createShouldThrow = false;
+  let createError = "Spec error";
+
+  return {
+    calls,
+    specs,
+    setCreateShouldThrow(should: boolean, error?: string) {
+      createShouldThrow = should;
+      createError = error ?? "Spec error";
+    },
+    specManager: {
+      async createSpec(spec: { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[] }>; status: string }) {
+        calls.push({ method: "createSpec", args: [spec] });
+        if (createShouldThrow) throw new Error(createError);
+        specs.set(spec.id, spec);
+        return `.pi-coder/specs/${spec.id}.md`;
+      },
+      async readSpec(id: string) {
+        calls.push({ method: "readSpec", args: [id] });
+        return specs.get(id) ?? null;
+      },
+    },
+  };
+}
+
 /** Build a full set of mock dependencies. */
 function setupMocks(config?: PiCoderConfig) {
   const cfg = config ?? makeConfig();
@@ -167,6 +195,7 @@ function setupMocks(config?: PiCoderConfig) {
   const mockGit = createMockGitOps();
   const mockTdd = createMockTddRunner();
   const mockKnowledge = createMockKnowledgeStore();
+  const mockSpec = createMockSpecManager();
   const { pi, tools } = createMockPi();
 
   const deps: ToolDependencies = {
@@ -174,12 +203,13 @@ function setupMocks(config?: PiCoderConfig) {
     gitOps: mockGit.gitOps as unknown as import("../git.js").GitOperations,
     tddRunner: mockTdd.tddRunner as unknown as import("../tdd-runner.js").TddRunner,
     knowledgeStore: mockKnowledge.knowledgeStore as unknown as import("../knowledge.js").KnowledgeStore,
+    specManager: mockSpec.specManager as unknown as import("../spec.js").SpecManager,
     config: cfg,
   };
 
   registerTools(pi as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI, deps);
 
-  return { sm, mockGit, mockTdd, mockKnowledge, tools, cfg };
+  return { sm, mockGit, mockTdd, mockKnowledge, mockSpec, tools, cfg };
 }
 
 /** Helper: advance the state machine through transitions to a target state. */
@@ -215,12 +245,14 @@ describe("Phase 1: Tool Registration Framework", () => {
     assert.ok(tools.has("pi_coder_run_tests"), "pi_coder_run_tests not registered");
     assert.ok(tools.has("upsert_knowledge"), "upsert_knowledge not registered");
     assert.ok(tools.has("pi_coder_advance_fsm"), "pi_coder_advance_fsm not registered");
-    assert.strictEqual(tools.size, 4, "Expected exactly 4 tools");
+    assert.ok(tools.has("pi_coder_save_spec"), "pi_coder_save_spec not registered");
+    assert.ok(tools.has("pi_coder_read_spec"), "pi_coder_read_spec not registered");
+    assert.strictEqual(tools.size, 6, "Expected exactly 6 tools");
   });
 
   it("each tool has a promptSnippet", () => {
     const { tools } = setupMocks();
-    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge"]) {
+    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec"]) {
       const tool = tools.get(name)!;
       assert.ok(tool.promptSnippet, `${name} missing promptSnippet`);
       assert.ok(typeof tool.promptSnippet === "string", `${name} promptSnippet must be string`);
@@ -230,7 +262,7 @@ describe("Phase 1: Tool Registration Framework", () => {
 
   it("each tool has promptGuidelines with 2-3 bullets", () => {
     const { tools } = setupMocks();
-    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge"]) {
+    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec"]) {
       const tool = tools.get(name)!;
       assert.ok(tool.promptGuidelines, `${name} missing promptGuidelines`);
       assert.ok(Array.isArray(tool.promptGuidelines), `${name} promptGuidelines must be array`);
@@ -243,7 +275,7 @@ describe("Phase 1: Tool Registration Framework", () => {
 
   it("each tool has a label and description", () => {
     const { tools } = setupMocks();
-    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge"]) {
+    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec"]) {
       const tool = tools.get(name)!;
       assert.ok(tool.label, `${name} missing label`);
       assert.ok(tool.description, `${name} missing description`);
@@ -252,7 +284,7 @@ describe("Phase 1: Tool Registration Framework", () => {
 
   it("each tool has parameter schemas", () => {
     const { tools } = setupMocks();
-    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge"]) {
+    for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec"]) {
       const tool = tools.get(name)!;
       assert.ok(tool.parameters, `${name} missing parameters schema`);
     }
@@ -596,5 +628,97 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     const content = (result.content as Array<{ text: string }>)[0].text;
     assert.ok(content.includes("TDD_GREEN_WRITE → TDD_GREEN_VALIDATE"), `Should include transition, got: ${content}`);
     assert.ok(content.includes("GREEN validation"), `Should mention GREEN validation, got: ${content}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6: pi_coder_save_spec / pi_coder_read_spec
+// ---------------------------------------------------------------------------
+
+describe("Phase 6: Spec File Tools", () => {
+  it("saves a spec and sets activeSpecId", async () => {
+    const { tools, sm, mockSpec } = setupMocks();
+    assert.strictEqual(sm.activeSpecId, null);
+    const result = await executeTool(tools, "pi_coder_save_spec", {
+      id: "user-auth",
+      title: "User Authentication",
+      acceptanceCriteria: ["Users can log in", "Users can log out"],
+      constraints: ["Must use existing auth middleware"],
+      keyFiles: ["src/auth.ts"],
+      prunedContext: "Auth module uses JWT tokens",
+      implementationPlan: [
+        { name: "Login flow", acceptanceCriteriaIndices: [0], keyFiles: ["src/auth.ts"], dependsOn: [] },
+        { name: "Logout flow", acceptanceCriteriaIndices: [1], keyFiles: ["src/auth.ts"], dependsOn: ["Login flow"] },
+      ],
+    });
+    assert.ok(!result.isError, "Should succeed");
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("user-auth"), `Should mention spec ID, got: ${content}`);
+    assert.strictEqual(sm.activeSpecId, "user-auth");
+    // Verify specManager was called
+    assert.strictEqual(mockSpec.calls.length, 1);
+    assert.strictEqual(mockSpec.calls[0].method, "createSpec");
+  });
+
+  it("saves a spec without implementation plan", async () => {
+    const { tools, sm } = setupMocks();
+    const result = await executeTool(tools, "pi_coder_save_spec", {
+      id: "simple-feature",
+      title: "Simple Feature",
+      acceptanceCriteria: ["Feature works"],
+      constraints: [],
+      keyFiles: ["src/feature.ts"],
+      prunedContext: "Simple feature context",
+    });
+    assert.ok(!result.isError, "Should succeed");
+    assert.strictEqual(sm.activeSpecId, "simple-feature");
+  });
+
+  it("reads a spec that was saved", async () => {
+    const { tools, mockSpec } = setupMocks();
+    // First save
+    await executeTool(tools, "pi_coder_save_spec", {
+      id: "user-auth",
+      title: "User Authentication",
+      acceptanceCriteria: ["Users can log in"],
+      constraints: ["Must use JWT"],
+      keyFiles: ["src/auth.ts"],
+      prunedContext: "Auth module uses JWT",
+    });
+    // Then read
+    const result = await executeTool(tools, "pi_coder_read_spec", {
+      id: "user-auth",
+    });
+    assert.ok(!result.isError, "Should succeed");
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("User Authentication"), `Should include title, got: ${content}`);
+    assert.ok(content.includes("Users can log in"), `Should include AC, got: ${content}`);
+    assert.ok(content.includes("Must use JWT"), `Should include constraint, got: ${content}`);
+  });
+
+  it("returns error when reading non-existent spec", async () => {
+    const { tools } = setupMocks();
+    const result = await executeTool(tools, "pi_coder_read_spec", {
+      id: "does-not-exist",
+    });
+    assert.ok(result.isError, "Should be error for missing spec");
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("not found"), `Should say not found, got: ${content}`);
+  });
+
+  it("handles save errors gracefully", async () => {
+    const { tools, mockSpec } = setupMocks();
+    mockSpec.setCreateShouldThrow(true, "Disk full");
+    const result = await executeTool(tools, "pi_coder_save_spec", {
+      id: "broken",
+      title: "Broken Spec",
+      acceptanceCriteria: [],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "",
+    });
+    assert.ok(result.isError, "Should be error for failed save");
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("Disk full"), `Should mention error, got: ${content}`);
   });
 });
