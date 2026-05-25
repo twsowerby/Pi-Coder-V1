@@ -209,6 +209,24 @@ function teardownFixture(): void {
 // Phase 1: Test Infrastructure
 // ---------------------------------------------------------------------------
 
+
+/** Force a transition with required evidence set. */
+function forceTransition(sm: StateMachine, to: FSMState): void {
+  const from = sm.currentState;
+  if (from === "SPEC_WORK" && to === "SPEC_APPROVED") {
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+  }
+  if (from === "TDD_RED_VALIDATE" && to === "TDD_GREEN_WRITE") {
+    sm.setEvidence("test_run_this_state");
+  }
+  if (from === "TDD_GREEN_VALIDATE") {
+    sm.setEvidence("test_run_this_state");
+  }
+  const result = sm.transition(to);
+  if (result) throw new Error("Guard blocked: " + result.message);
+}
+
 describe("Phase 1: Test Infrastructure", () => {
   beforeEach(() => {
     setupFixture();
@@ -274,7 +292,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.strictEqual(specId, "string-reversal-utility");
 
     // Transition: IDLE → SPEC_WORK
-    stateMachine.transition("SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_WORK");
     assert.strictEqual(stateMachine.currentState, "SPEC_WORK");
 
     // Researcher completes — stays in SPEC_WORK (multiple rounds possible)
@@ -315,11 +333,11 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.strictEqual(readSpec.constraints.length, 2);
 
     // Transition: SPEC_WORK → SPEC_APPROVED (spec ready for approval)
-    stateMachine.transition("SPEC_APPROVED");
+    forceTransition(stateMachine, "SPEC_APPROVED");
     assert.strictEqual(stateMachine.currentState, "SPEC_APPROVED");
 
     // --- Git Checkpoint ---
-    stateMachine.transition("GIT_CHECKPOINT");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
     assert.strictEqual(stateMachine.currentState, "GIT_CHECKPOINT");
 
     // Create branch and checkpoint
@@ -337,7 +355,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.ok(stateMachine.gitRef);
 
     // Transition: GIT_CHECKPOINT → TDD_RED_WRITE
-    stateMachine.transition("TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
     assert.strictEqual(stateMachine.currentState, "TDD_RED_WRITE");
 
     // --- RED Phase: Write Tests ---
@@ -345,7 +363,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     // The orchestrator delegates to pi-coder.implementor with task payload
 
     // Transition: TDD_RED_WRITE → TDD_RED_VALIDATE
-    stateMachine.transition("TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
     assert.strictEqual(stateMachine.currentState, "TDD_RED_VALIDATE");
 
     // Run tests — they MUST fail (RED phase)
@@ -362,14 +380,14 @@ describe("Phase 2: Happy Path Lifecycle", () => {
 
     // Auto-transition (extension tool_result handler logic):
     // RED_VALIDATE + tests fail → TDD_GREEN_WRITE
-    stateMachine.transition("TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
     assert.strictEqual(stateMachine.currentState, "TDD_GREEN_WRITE");
 
     // --- GREEN Phase: Write Code ---
     // Simulate: implementor writes implementation code (GREEN mode)
 
     // Transition: TDD_GREEN_WRITE → TDD_GREEN_VALIDATE
-    stateMachine.transition("TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
     assert.strictEqual(stateMachine.currentState, "TDD_GREEN_VALIDATE");
 
     // Run tests — they MUST pass (GREEN phase)
@@ -383,18 +401,18 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.ok(greenValidation.valid, "GREEN phase: test pass is valid");
 
     // Auto-transition: GREEN_VALIDATE + tests pass → REVIEWING
-    stateMachine.transition("REVIEWING");
+    forceTransition(stateMachine, "REVIEWING");
     assert.strictEqual(stateMachine.currentState, "REVIEWING");
 
     // --- Review ---
     // Simulate: reviewer approves the implementation
-    stateMachine.transition("APPROVED");
+    forceTransition(stateMachine, "APPROVED");
     assert.strictEqual(stateMachine.currentState, "APPROVED");
 
-    stateMachine.transition("FINAL_APPROVAL");
+    forceTransition(stateMachine, "FINAL_APPROVAL");
     assert.strictEqual(stateMachine.currentState, "FINAL_APPROVAL");
 
-    stateMachine.transition("MERGING");
+    forceTransition(stateMachine, "MERGING");
     assert.strictEqual(stateMachine.currentState, "MERGING");
 
     // Merge the feature branch
@@ -402,7 +420,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.ok(mergeResult.success);
 
     // Transition: MERGING → COMPLETE
-    stateMachine.transition("COMPLETE");
+    forceTransition(stateMachine, "COMPLETE");
     assert.strictEqual(stateMachine.currentState, "COMPLETE");
 
     // --- Cleanup ---
@@ -433,16 +451,16 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.ok(spec, "Spec should exist after creation");
 
     // Advance through several states
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
     spec = await specManager.readSpec(specId);
     assert.ok(spec, "Spec should exist during SPEC_APPROVED");
 
-    stateMachine.transition("GIT_CHECKPOINT");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
     spec = await specManager.readSpec(specId);
     assert.ok(spec, "Spec should exist during GIT_CHECKPOINT");
 
-    stateMachine.transition("TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
     spec = await specManager.readSpec(specId);
     assert.ok(spec, "Spec should exist during TDD_RED_WRITE");
 
@@ -454,9 +472,9 @@ describe("Phase 2: Happy Path Lifecycle", () => {
 
   it("stores git ref at checkpoint and it is available for reviewer briefing", async () => {
     const specId = "ref-tracking-test";
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
 
     // Create checkpoint
     const checkpointResult = await gitOps.checkpoint("wip: test-checkpoint");
@@ -482,12 +500,12 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.ok(knowledgeStore.exists("project-conventions.md"));
 
     // Transition to SPEC_WORK — knowledge still works
-    stateMachine.transition("SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_WORK");
     knowledgeStore.upsert("testing-patterns.md", "# Testing\n- Use vitest");
     assert.ok(knowledgeStore.exists("testing-patterns.md"));
 
     // Continue through the lifecycle — knowledge is always available
-    stateMachine.transition("SPEC_APPROVED");
+    forceTransition(stateMachine, "SPEC_APPROVED");
     const listedFiles = knowledgeStore.list();
     assert.strictEqual(listedFiles.length, 2);
     assert.ok(listedFiles.includes("project-conventions.md"));
@@ -543,11 +561,11 @@ describe("Phase 3: Failure & Edge Cases", () => {
 
   it("RED phase anomaly (tests pass) transitions to BLOCKED with RED_TAUTOLOGY", async () => {
     // Advance to TDD_RED_VALIDATE
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
-    stateMachine.transition("TDD_RED_WRITE");
-    stateMachine.transition("TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
     assert.strictEqual(stateMachine.currentState, "TDD_RED_VALIDATE");
 
     // Run tests — they PASS when they should FAIL (anomaly!)
@@ -562,76 +580,76 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.strictEqual(validation.reason, "RED_TAUTOLOGY");
 
     // Extension auto-transition: RED_VALIDATE + invalid → BLOCKED
-    stateMachine.transition("BLOCKED");
+    forceTransition(stateMachine, "BLOCKED");
     assert.strictEqual(stateMachine.currentState, "BLOCKED");
   });
 
   it("circuit breaker trips after maxLoops review cycles", () => {
     // Advance to REVIEWING
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
-    stateMachine.transition("TDD_RED_WRITE");
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
-    stateMachine.transition("TDD_GREEN_VALIDATE");
-    stateMachine.transition("REVIEWING");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "REVIEWING");
     assert.strictEqual(stateMachine.currentState, "REVIEWING");
     assert.strictEqual(stateMachine.loopCount, 0);
 
     // Cycle 1: NEEDS_CHANGES → TDD_RED_WRITE
-    stateMachine.transition("NEEDS_CHANGES");
-    stateMachine.transition("TDD_RED_WRITE");
+    forceTransition(stateMachine, "NEEDS_CHANGES");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
     assert.strictEqual(stateMachine.loopCount, 1);
     assert.ok(!stateMachine.circuitBreakerTripped(), "Should not trip after 1 cycle");
 
     // Advance back to REVIEWING for next cycle
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
-    stateMachine.transition("TDD_GREEN_VALIDATE");
-    stateMachine.transition("REVIEWING");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "REVIEWING");
 
     // Cycle 2: NEEDS_CHANGES → TDD_RED_WRITE
-    stateMachine.transition("NEEDS_CHANGES");
-    stateMachine.transition("TDD_RED_WRITE");
+    forceTransition(stateMachine, "NEEDS_CHANGES");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
     assert.strictEqual(stateMachine.loopCount, 2);
     assert.ok(!stateMachine.circuitBreakerTripped(), "Should not trip after 2 cycles");
 
     // Advance back to REVIEWING
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
-    stateMachine.transition("TDD_GREEN_VALIDATE");
-    stateMachine.transition("REVIEWING");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "REVIEWING");
 
     // Cycle 3: NEEDS_CHANGES → TDD_RED_WRITE
-    stateMachine.transition("NEEDS_CHANGES");
-    stateMachine.transition("TDD_RED_WRITE");
+    forceTransition(stateMachine, "NEEDS_CHANGES");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
     assert.strictEqual(stateMachine.loopCount, 3);
     assert.ok(stateMachine.circuitBreakerTripped(), "Should trip after 3 cycles (maxLoops)");
 
     // The fourth attempt should transition to BLOCKED
     // (In the extension, the reviewer handler checks circuitBreakerTripped before looping)
-    stateMachine.transition("IDLE"); // Reset
+    forceTransition(stateMachine, "IDLE"); // Reset
   });
 
   it("circuit breaker prevents further review loops — extension aborts to IDLE", () => {
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
-    stateMachine.transition("TDD_RED_WRITE");
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
-    stateMachine.transition("TDD_GREEN_VALIDATE");
-    stateMachine.transition("REVIEWING");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "REVIEWING");
 
     // Complete 3 full review cycles
     for (let i = 0; i < 3; i++) {
-      stateMachine.transition("NEEDS_CHANGES");
-      stateMachine.transition("TDD_RED_WRITE");
-      stateMachine.transition("TDD_RED_VALIDATE");
-      stateMachine.transition("TDD_GREEN_WRITE");
-      stateMachine.transition("TDD_GREEN_VALIDATE");
-      stateMachine.transition("REVIEWING");
+      forceTransition(stateMachine, "NEEDS_CHANGES");
+      forceTransition(stateMachine, "TDD_RED_WRITE");
+      forceTransition(stateMachine, "TDD_RED_VALIDATE");
+      forceTransition(stateMachine, "TDD_GREEN_WRITE");
+      forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
+      forceTransition(stateMachine, "REVIEWING");
     }
 
     assert.strictEqual(stateMachine.loopCount, 3);
@@ -640,27 +658,29 @@ describe("Phase 3: Failure & Edge Cases", () => {
     // When the circuit breaker trips, the extension handler does NOT
     // transition NEEDS_CHANGES → TDD_RED_WRITE again. Instead, it
     // presents options to the user. The any→IDLE abort path is always legal:
-    stateMachine.transition("IDLE");
+    forceTransition(stateMachine, "IDLE");
     assert.strictEqual(stateMachine.currentState, "IDLE");
     assert.strictEqual(stateMachine.loopCount, 0, "Loop count resets on IDLE");
   });
 
   it("toggle mid-cycle preserves FSM state", () => {
     // Start a TDD cycle
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
-    stateMachine.transition("TDD_RED_WRITE");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
 
     // Set spec info
     stateMachine.setActiveSpec("mid-cycle-spec", "abc1234");
     assert.strictEqual(stateMachine.currentState, "TDD_RED_WRITE");
-    assert.strictEqual(stateMachine.activeSpecId, "mid-cycle-spec");
+    // activeSpecId is now module-level, not on StateMachine
+    // Check evidence instead — spec should be saved if we got this far
+    assert.ok(stateMachine.hasEvidence("spec_saved"));
 
     // Simulate: toggle OFF (persist state)
     const snapshot: StateMachineJSON = stateMachine.toJSON();
     assert.strictEqual(snapshot.currentState, "TDD_RED_WRITE");
-    assert.strictEqual(snapshot.activeSpecId, "mid-cycle-spec");
+    assert.ok(snapshot.evidence.includes("spec_saved"));
     assert.strictEqual(snapshot.gitRef, "abc1234");
 
     // Simulate: toggle OFF — persistence is via appendEntry
@@ -672,7 +692,9 @@ describe("Phase 3: Failure & Edge Cases", () => {
     // Simulate: toggle ON — restore from persisted state
     const restoredMachine = StateMachine.fromJSON(persistedState.fsmState, config);
     assert.strictEqual(restoredMachine.currentState, "TDD_RED_WRITE");
-    assert.strictEqual(restoredMachine.activeSpecId, "mid-cycle-spec");
+    // activeSpecId is module-level, not in StateMachineJSON
+    // Check that evidence was preserved
+    assert.ok(restoredMachine.hasEvidence("spec_saved"));
     assert.strictEqual(restoredMachine.gitRef, "abc1234");
 
     // Can continue transitioning from the restored state
@@ -688,7 +710,7 @@ describe("Phase 3: Failure & Edge Cases", () => {
     // before_agent_start handler implements.
 
     // Advance to SPEC_WORK
-    stateMachine.transition("SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_WORK");
     assert.strictEqual(stateMachine.currentState, "SPEC_WORK");
 
     // Turn 0: nudge level 0 (just entered state)
@@ -759,18 +781,18 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.ok(!nudgeExpectation.shouldNudge);
 
     // COMPLETE
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
-    stateMachine.transition("TDD_RED_WRITE");
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
-    stateMachine.transition("TDD_GREEN_VALIDATE");
-    stateMachine.transition("REVIEWING");
-    stateMachine.transition("APPROVED");
-    stateMachine.transition("FINAL_APPROVAL");
-    stateMachine.transition("MERGING");
-    stateMachine.transition("COMPLETE");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "REVIEWING");
+    forceTransition(stateMachine, "APPROVED");
+    forceTransition(stateMachine, "FINAL_APPROVAL");
+    forceTransition(stateMachine, "MERGING");
+    forceTransition(stateMachine, "COMPLETE");
 
     nudgeExpectation = stateMachine.canNudge();
     assert.ok(!nudgeExpectation.shouldNudge);
@@ -778,13 +800,13 @@ describe("Phase 3: Failure & Edge Cases", () => {
 
   it("GREEN phase failure loops back to TDD_GREEN_WRITE", async () => {
     // Advance to TDD_GREEN_VALIDATE
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
-    stateMachine.transition("TDD_RED_WRITE");
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
-    stateMachine.transition("TDD_GREEN_VALIDATE");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_VALIDATE");
 
     // Run tests — they FAIL (GREEN phase failure)
     const failingExec = createMockExec({ exitCode: 1, output: "Tests  1 passed, 2 failed" });
@@ -798,15 +820,15 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.strictEqual(validation.reason, "GREEN_FAILED");
 
     // Extension auto-transition: GREEN_VALIDATE + fail → TDD_GREEN_WRITE
-    stateMachine.transition("TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
     assert.strictEqual(stateMachine.currentState, "TDD_GREEN_WRITE");
   });
 
   it("rollback from mid-cycle returns to IDLE", async () => {
     // Advance to TDD_GREEN_WRITE with checkpoint
-    stateMachine.transition("SPEC_WORK");
-    stateMachine.transition("SPEC_APPROVED");
-    stateMachine.transition("GIT_CHECKPOINT");
+    forceTransition(stateMachine, "SPEC_WORK");
+    forceTransition(stateMachine, "SPEC_APPROVED");
+    forceTransition(stateMachine, "GIT_CHECKPOINT");
 
     const checkpointResult = await gitOps.checkpoint("wip: test-checkpoint");
     assert.ok(checkpointResult.success);
@@ -815,9 +837,9 @@ describe("Phase 3: Failure & Edge Cases", () => {
       stateMachine.setActiveSpec("rollback-test", checkpointResult.ref);
     }
 
-    stateMachine.transition("TDD_RED_WRITE");
-    stateMachine.transition("TDD_RED_VALIDATE");
-    stateMachine.transition("TDD_GREEN_WRITE");
+    forceTransition(stateMachine, "TDD_RED_WRITE");
+    forceTransition(stateMachine, "TDD_RED_VALIDATE");
+    forceTransition(stateMachine, "TDD_GREEN_WRITE");
     assert.strictEqual(stateMachine.currentState, "TDD_GREEN_WRITE");
 
     // User rejects — rollback to pre-implementation checkpoint
@@ -825,7 +847,7 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.ok(rollbackResult.success);
 
     // FSM transitions to IDLE (like the pi_coder_git rollback handler does)
-    stateMachine.transition("IDLE");
+    forceTransition(stateMachine, "IDLE");
     assert.strictEqual(stateMachine.currentState, "IDLE");
   });
 

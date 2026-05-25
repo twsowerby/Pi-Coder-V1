@@ -12,6 +12,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import type { PiCoderConfig, FSMState } from "../src/types.ts";
 import { StateMachine } from "../src/state-machine.ts";
+import type { EvidenceFlag } from "../src/types.ts";
 import type { StateMachineJSON } from "../src/state-machine.ts";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,24 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
 // ---------------------------------------------------------------------------
 // Phase 1: Extension Foundation & Toggle State
 // ---------------------------------------------------------------------------
+
+
+/** Force a transition with required evidence set. */
+function forceTransition(sm: StateMachine, to: string): void {
+  const from = sm.currentState;
+  if (from === "SPEC_WORK" && to === "SPEC_APPROVED") {
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+  }
+  if (from === "TDD_RED_VALIDATE" && to === "TDD_GREEN_WRITE") {
+    sm.setEvidence("test_run_this_state");
+  }
+  if (from === "TDD_GREEN_VALIDATE") {
+    sm.setEvidence("test_run_this_state");
+  }
+  const result = sm.transition(to as any);
+  if (result) throw new Error("Guard blocked: " + result.message);
+}
 
 describe("Phase 1: Extension Foundation", () => {
   it("should export ORCHESTRATOR_TOOLS with the correct tool set", async () => {
@@ -108,7 +127,7 @@ describe("Phase 2: System Prompt", () => {
     assert.strictEqual(sm.canNudge().shouldNudge, false);
 
     // SPEC_WORK
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     assert.strictEqual(sm.canNudge().shouldNudge, true);
     assert.strictEqual(sm.canNudge().expectedTool, "subagent");
   });
@@ -149,11 +168,11 @@ describe("Phase 3: FSM Event Guards", () => {
   it("isActionAllowed allows pi_coder_run_tests in TDD_RED_VALIDATE", () => {
     const sm = new StateMachine(makeConfig());
     // Navigate to TDD_RED_VALIDATE
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
     assert.strictEqual(sm.isActionAllowed("pi_coder_run_tests"), true);
   });
 
@@ -163,7 +182,7 @@ describe("Phase 3: FSM Event Guards", () => {
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), false);
 
     // In SPEC_WORK, researcher delegation IS allowed
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), true);
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.implementor"), false);
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.reviewer"), false);
@@ -193,58 +212,58 @@ describe("Phase 3: FSM Event Guards", () => {
 describe("Phase 3: Auto-Transitions", () => {
   it("RED validate + tests fail → TDD_GREEN_WRITE", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
     // Simulate: tests fail (valid RED)
-    sm.transition("TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
     assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE");
   });
 
   it("RED validate + tests pass → BLOCKED", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
     // Simulate: tests pass (tautology)
-    sm.transition("BLOCKED");
+    forceTransition(sm, "BLOCKED");
     assert.strictEqual(sm.currentState, "BLOCKED");
   });
 
   it("GREEN validate + tests pass → REVIEWING", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
-    sm.transition("TDD_GREEN_VALIDATE");
-    sm.transition("REVIEWING");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
     assert.strictEqual(sm.currentState, "REVIEWING");
   });
 
   it("GREEN validate + tests fail → TDD_GREEN_WRITE (loop)", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
-    sm.transition("TDD_GREEN_VALIDATE");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
     // Tests still fail — loop back
-    sm.transition("TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
     assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE");
   });
 
   it("Subagent completion in SPEC_WORK stays in SPEC_WORK (multiple rounds)", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     // After researcher completes, FSM stays in SPEC_WORK — orchestrator can
     // delegate again or advance to SPEC_APPROVED via pi_coder_advance_fsm
     assert.strictEqual(sm.currentState, "SPEC_WORK");
@@ -252,24 +271,25 @@ describe("Phase 3: Auto-Transitions", () => {
 
   it("state machine serializes via toJSON", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     const json = sm.toJSON();
     assert.strictEqual(json.currentState, "SPEC_WORK");
-    assert.strictEqual(json.activeSpecId, null);
     assert.strictEqual(json.loopCount, 0);
+    assert.ok(Array.isArray(json.evidence));
   });
 
   it("state machine restores via fromJSON", () => {
     const config = makeConfig();
     const sm = new StateMachine(config);
-    sm.transition("SPEC_WORK");
-    sm.setActiveSpec("my-spec", "abc1234");
+    forceTransition(sm, "SPEC_WORK");
+    sm.setGitRef("abc1234");
+    sm.setEvidence("spec_saved");
 
     const json = sm.toJSON();
     const restored = StateMachine.fromJSON(json, config);
     assert.strictEqual(restored.currentState, "SPEC_WORK");
-    assert.strictEqual(restored.activeSpecId, "my-spec");
     assert.strictEqual(restored.gitRef, "abc1234");
+    assert.ok(restored.hasEvidence("spec_saved"));
   });
 });
 
@@ -316,7 +336,7 @@ describe("Phase 4: Nudge System", () => {
 
   it("canNudge returns expected action for RESEARCHING", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     const nudge = sm.canNudge();
     assert.strictEqual(nudge.shouldNudge, true);
     assert.ok(nudge.expectedAction.includes("researcher"));
@@ -325,11 +345,11 @@ describe("Phase 4: Nudge System", () => {
 
   it("canNudge returns expected action for TDD_RED_VALIDATE", () => {
     const sm = new StateMachine(makeConfig());
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
     const nudge = sm.canNudge();
     assert.strictEqual(nudge.shouldNudge, true);
     assert.strictEqual(nudge.expectedTool, "pi_coder_run_tests");
@@ -352,28 +372,28 @@ describe("Phase 4: Nudge System", () => {
     const sm = new StateMachine(config);
 
     // Navigate to REVIEWING
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
-    sm.transition("TDD_GREEN_VALIDATE");
-    sm.transition("REVIEWING");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
 
     // First loop: NEEDS_CHANGES → TDD_RED_WRITE
-    sm.transition("NEEDS_CHANGES");
-    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "NEEDS_CHANGES");
+    forceTransition(sm, "TDD_RED_WRITE");
     assert.strictEqual(sm.loopCount, 1);
     assert.strictEqual(sm.circuitBreakerTripped(), false);
 
     // Second loop
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
-    sm.transition("TDD_GREEN_VALIDATE");
-    sm.transition("REVIEWING");
-    sm.transition("NEEDS_CHANGES");
-    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
+    forceTransition(sm, "NEEDS_CHANGES");
+    forceTransition(sm, "TDD_RED_WRITE");
     assert.strictEqual(sm.loopCount, 2);
     assert.strictEqual(sm.circuitBreakerTripped(), true);
   });
@@ -396,9 +416,9 @@ describe("Phase 5: Subagent Delegation Guards", () => {
     const config = makeConfig();
     const sm = new StateMachine(config);
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), false); // IDLE
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), true); // SPEC_WORK
-    sm.transition("SPEC_APPROVED");
+    forceTransition(sm, "SPEC_APPROVED");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), false); // SPEC_APPROVED
   });
 
@@ -409,27 +429,27 @@ describe("Phase 5: Subagent Delegation Guards", () => {
   it("pi-coder.implementor is allowed only in implementation states", () => {
     const config = makeConfig();
     const sm = new StateMachine(config);
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.implementor"), true);
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.implementor"), true);
   });
 
   it("pi-coder.reviewer is allowed only in REVIEWING state", () => {
     const config = makeConfig();
     const sm = new StateMachine(config);
-    sm.transition("SPEC_WORK");
-    sm.transition("SPEC_APPROVED");
-    sm.transition("GIT_CHECKPOINT");
-    sm.transition("TDD_RED_WRITE");
-    sm.transition("TDD_RED_VALIDATE");
-    sm.transition("TDD_GREEN_WRITE");
-    sm.transition("TDD_GREEN_VALIDATE");
-    sm.transition("REVIEWING");
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.reviewer"), true);
   });
 
@@ -441,7 +461,7 @@ describe("Phase 5: Subagent Delegation Guards", () => {
   it("built-in agents (researcher, reviewer, worker) have no special FSM rules", () => {
     const config = makeConfig();
     const sm = new StateMachine(config);
-    sm.transition("SPEC_WORK");
+    forceTransition(sm, "SPEC_WORK");
     // FSM doesn't explicitly block "researcher" — that's the tool_call handler's job
     // FSM only checks agent-role match for known pi-coder subagents
     // The generic researcher has no role in pi-coder FSM
