@@ -56,6 +56,7 @@ describe("Phase 1: State & Transition Table", () => {
       { from: "REVIEWING", to: "APPROVED", event: "review_approved" },
       { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
       { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },
+      { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
       { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
       { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
       { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
@@ -113,6 +114,15 @@ describe("Phase 1: State & Transition Table", () => {
       assert.ok(valid.includes("REVIEWING"), "Should include REVIEWING (all units done)");
       assert.ok(valid.includes("TDD_RED_WRITE"), "Should include TDD_RED_WRITE (next unit)");
       assert.ok(valid.includes("TDD_GREEN_WRITE"), "Should include TDD_GREEN_WRITE (tests still fail)");
+      assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
+    });
+
+    it("should list TDD_RED_WRITE and REVIEWING from NEEDS_CHANGES", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "NEEDS_CHANGES");
+      const valid = sm.getValidTransitions();
+      assert.ok(valid.includes("TDD_RED_WRITE"), "Should include TDD_RED_WRITE (functional fix)");
+      assert.ok(valid.includes("REVIEWING"), "Should include REVIEWING (non-functional fix)");
       assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
     });
   });
@@ -193,6 +203,15 @@ describe("Phase 2: Transition Side Effects", () => {
       assert.equal(sm.loopCount, 0); // Not yet incremented; increments on the transition TO TDD_RED_WRITE
       sm.transition("TDD_RED_WRITE");
       assert.equal(sm.loopCount, 1);
+    });
+
+    it("should NOT increment on NEEDS_CHANGES → REVIEWING (non-functional fix)", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "REVIEWING");
+      sm.transition("NEEDS_CHANGES");
+      assert.equal(sm.loopCount, 0);
+      sm.transition("REVIEWING"); // Non-functional fix — skip RED/GREEN
+      assert.equal(sm.loopCount, 0); // Still 0, not incremented
     });
 
     it("should increment on each review cycle", () => {

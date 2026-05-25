@@ -312,7 +312,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed. Advance to the next implementation unit's RED phase.",
       "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
       "Any state → IDLE: Abort the current cycle. Use this to restart or unwind.",
-      "Do NOT use this to skip steps. Each state has a purpose.",
+      "NEEDS_CHANGES → TDD_RED_WRITE: Review requires functional fixes. Start a new RED/GREEN cycle.",
+      "NEEDS_CHANGES → REVIEWING: Review requires non-functional fixes only (test fixes, comments, refactoring). Skip the RED/GREEN cycle and go directly back to review.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 

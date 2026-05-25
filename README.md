@@ -22,7 +22,7 @@ IDLE → SPEC_WORK → SPEC_APPROVED →
 GIT_CHECKPOINT → TDD_RED_WRITE → TDD_RED_VALIDATE →
 TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →
 (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
-(NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED
+(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) | BLOCKED
 ```
 
 ### Three Subagents
@@ -345,7 +345,7 @@ Implementation happens **one unit at a time**. For each unit in the implementati
 1. Orchestrator delegates to reviewer with acceptance criteria + git diff
 2. Reviewer checks: test alignment, bugs, security, correctness (skips style, nitpicks)
 3. Verdict: ✅ Approved / ⚠️ Needs Changes / ❌ Request Changes
-4. If needs changes → loop back to RED (up to `maxLoops`)
+4. If needs changes → **functional fix**: loop back to RED (up to `maxLoops`); **non-functional fix** (test cleanup, comments): advance directly to REVIEWING
 
 ### Delivery
 
@@ -415,7 +415,7 @@ This prevents the LLM from accidentally delegating to a built-in `researcher` in
 
 ```bash
 npm install          # Install dependencies
-npm test             # Run test suite (472 tests)
+npm test             # Run test suite (475 tests)
 npm run typecheck    # TypeScript strict mode check
 ```
 

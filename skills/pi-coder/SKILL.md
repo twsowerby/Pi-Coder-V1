@@ -156,12 +156,14 @@ When your FSM is in REVIEWING (all implementation units complete):
 2. Interpret the reviewer's verdict:
 
    - **✅ Approved** → FSM transitions to APPROVED. Proceed to Final Approval.
-   - **⚠️ Needs Changes** → FSM transitions to NEEDS_CHANGES, then to TDD_RED_WRITE. Loop back with specific directives addressing the reviewer's findings.
+   - **⚠️ Needs Changes** → FSM transitions to NEEDS_CHANGES.
+     - **Functional fix** (production code changes): Advance to TDD_RED_WRITE via `pi_coder_advance_fsm TDD_RED_WRITE`. A new RED/GREEN cycle is needed. Loop count increments.
+     - **Non-functional fix** (test cleanup, comments, refactoring): Advance directly to REVIEWING via `pi_coder_advance_fsm REVIEWING`. No RED/GREEN cycle needed — the fix doesn't change production behavior. Loop count does NOT increment.
    - **❌ Request Changes** → Same as Needs Changes — loop back with specific directives.
 
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec. If the reviewer found an issue with the auth middleware, re-delegate for the relevant unit only.
 
-4. Monitor the loop count. Every NEEDS_CHANGES → TDD_RED_WRITE cycle increments the counter. If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
+4. Monitor the loop count. Every NEEDS_CHANGES → TDD_RED_WRITE cycle increments the counter (NEEDS_CHANGES → REVIEWING does not). If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
 
 ---
 

@@ -145,7 +145,7 @@ function buildFSMDiagram(): string {
     "TDD_RED_WRITE → TDD_RED_VALIDATE →",
     "TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →",
     "(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |",
-    "(NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED → user intervention",
+    "(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) | BLOCKED → user intervention",
     "",
     "Manual advances: Use pi_coder_advance_fsm to advance the FSM when your work in a state is complete.",
     "  IDLE → SPEC_WORK (start a new cycle)",

@@ -20,7 +20,7 @@ defaultContext: fresh
   {{activeSpecId}}   — The ID of the currently active spec, or "none" if no spec is in progress.
                         Matches the spec file in .pi-coder/specs/ and the git branch name.
 
-  {{loopCount}}      — How many times the TDD review cycle has looped (NEEDS_CHANGES → TDD_RED_WRITE).
+  {{loopCount}}      — How many times the TDD review cycle has looped (NEEDS_CHANGES → TDD_RED_WRITE). Non-functional fixes (NEEDS_CHANGES → REVIEWING) do not increment this.
                         Triggers the circuit breaker when it reaches maxLoops.
 
   {{maxLoops}}       — The configured maximum number of review loops before the circuit breaker halts the cycle.
@@ -55,6 +55,9 @@ State advancement:
 - SPEC_WORK → SPEC_APPROVED: Present the spec to the user for approval (use interview)
 - SPEC_APPROVED → GIT_CHECKPOINT: User approved, time to checkpoint
 - TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed, advance to next unit's RED phase
+- TDD_GREEN_VALIDATE → REVIEWING: All units complete, proceed to review
+- NEEDS_CHANGES → TDD_RED_WRITE: Functional fix needed — start a new RED/GREEN cycle
+- NEEDS_CHANGES → REVIEWING: Non-functional fix only (test cleanup, comments, refactoring) — skip RED/GREEN, go directly back to review
 - APPROVED → FINAL_APPROVAL: Review passed, present for final OK (use interview)
 - FINAL_APPROVAL → MERGING: User gave final approval
 - Any → IDLE: Abort the cycle

@@ -7,7 +7,7 @@
  *   TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →
  *   (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
  *   (TDD_GREEN_VALIDATE → TDD_RED_WRITE via next_unit) |
- *   (NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED
+ *   (NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) | BLOCKED
  *
  * Manual advances use pi_coder_advance_fsm (orchestrator judgment).
  * Auto-transitions happen on tool_result (deterministic outcomes).
@@ -41,6 +41,7 @@ const LEGAL_TRANSITIONS: TransitionEntry[] = [
   { from: "REVIEWING", to: "APPROVED", event: "review_approved" },
   { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
   { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },
+  { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
   { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
   { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
   { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
