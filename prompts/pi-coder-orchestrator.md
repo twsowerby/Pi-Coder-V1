@@ -81,7 +81,7 @@ Delegation rules:
 - Use the subagent tool to delegate: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
 - Use pi_coder_git for all Git operations (raw git commands are blocked)
 - Use pi_coder_run_tests during TDD validation phases
-- Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries — those are in specs)
+- Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries — those are in specs). Co-location rule: update existing files first, only create new files for genuinely new topics
 
 Per-unit implementation:
 - Each spec has an implementation plan with atomic units

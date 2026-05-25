@@ -405,11 +405,25 @@ Knowledge files are pre-task reference material. They tell future agents "here's
 - **One-off choices** with no broader relevance
 - **Anything obvious from reading the code directly**
 
+### Co-location rule — update first, create only when genuinely new
+
+Knowledge files are organized by topic, one file per domain. Their names serve as an index — a quick `ls` shows every domain covered. This only works if related content lives in the same file.
+
+**Before creating a new knowledge file:**
+
+1. Run `ls .pi-coder/knowledge/` to see existing domains
+2. Read any file whose topic is related to your new learning
+3. If a related file exists → **update it** by reading, appending, and writing it back with `upsert_knowledge`
+4. Only create a new file if no existing file covers the topic
+
+**Example:** You discover a PDD drop indicator gotcha. `ls` shows `pdd-conventions.md` already exists. You read it, append the new gotcha, and write it back — NOT create `pdd-drop-indicator-architecture.md` as a separate file.
+
 ### How to persist:
 
-1. Call `upsert_knowledge` with a descriptive filename (e.g., `error-handling-patterns.md`, `supabase-auth-flow.md`, `library-x-y-conflict.md`)
-2. Write the content as clear, actionable directives — "Always X", "Never Y", "When doing Z, also do W"
-3. Include specific file paths so future agents know where to look
+1. Follow the co-location rule above to find or decide the file
+2. Call `upsert_knowledge` with the filename — it overwrites in place, so include the full updated content
+3. Write the content as clear, actionable directives — "Always X", "Never Y", "When doing Z, also do W"
+4. Include specific file paths so future agents know where to look
 
 You may also persist knowledge mid-cycle if the reviewer identifies knowledge extraction candidates — do not wait until COMPLETE if valuable information surfaces during review. However, do NOT persist cycle summaries — the spec file already records what was done.
 
