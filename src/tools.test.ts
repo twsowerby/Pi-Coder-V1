@@ -170,7 +170,7 @@ function setupMocks(config?: PiCoderConfig) {
   const { pi, tools } = createMockPi();
 
   const deps: ToolDependencies = {
-    stateMachine: sm,
+    stateMachine: { get current() { return sm; } },
     gitOps: mockGit.gitOps as unknown as import("../git.js").GitOperations,
     tddRunner: mockTdd.tddRunner as unknown as import("../tdd-runner.js").TddRunner,
     knowledgeStore: mockKnowledge.knowledgeStore as unknown as import("../knowledge.js").KnowledgeStore,

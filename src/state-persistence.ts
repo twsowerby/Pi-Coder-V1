@@ -96,8 +96,6 @@ export class StatePersistence {
     await mkdir(this.stateDir, { recursive: true });
     const tempPath = join(this.stateDir, TEMP_FILENAME);
     const content = JSON.stringify(state, null, 2) + "\n";
-    // Clean up any leftover temp file from a previous crash
-    try { await unlink(tempPath); } catch { /* ignore ENOENT */ }
     await writeFile(tempPath, content, "utf-8");
     await rename(tempPath, this.statePath);
   }

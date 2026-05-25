@@ -105,15 +105,25 @@ let lifecycleTokens = { input: 0, output: 0, total: 0 };
 let statePersistence: StatePersistence;
 
 /** Persist current FSM state to .pi-coder/state.json. Exported for use by commands. */
+/** Tracks in-flight persistState() call to prevent concurrent tmp+rename races. */
+let persistStatePromise: Promise<void> = Promise.resolve();
+
 export async function persistState(): Promise<void> {
-  const fsmJson = stateMachine.toJSON();
-  const state: PersistedState = {
-    version: 1,
-    piCoderActive,
-    fsm: fsmJson,
-    updatedAt: new Date().toISOString(),
-  };
-  await statePersistence.save(state);
+  // Serialize saves — each writes the full state, last one wins.
+  // Wait for any in-flight save, then start ours.
+  const prev = persistStatePromise.catch(() => {});
+  const ourSave = prev.then(async () => {
+    const fsmJson = stateMachine.toJSON();
+    const state: PersistedState = {
+      version: 1,
+      piCoderActive,
+      fsm: fsmJson,
+      updatedAt: new Date().toISOString(),
+    };
+    await statePersistence.save(state);
+  });
+  persistStatePromise = ourSave;
+  return ourSave;
 }
 
 /** Log a structured event. Convenience wrapper that adds sessionId and timestamp. */
@@ -455,8 +465,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     );
 
     // Register tools
+    // Wrap stateMachine in a ref object so tools.ts always reads the current
+    // instance even after state restore replaces the module-level variable.
+    const smRef: { get current(): StateMachine } = {
+      get current() { return stateMachine; },
+    };
+
     registerTools(pi, {
-      stateMachine,
+      stateMachine: smRef,
       gitOps,
       tddRunner,
       knowledgeStore,

@@ -22,8 +22,12 @@ import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 
 /** Dependencies injected from the extension main. */
+export interface StateMachineRef {
+  get current(): StateMachine;
+}
+
 export interface ToolDependencies {
-  stateMachine: StateMachine;
+  stateMachine: StateMachineRef;
   gitOps: GitOperations;
   tddRunner: TddRunner;
   knowledgeStore: KnowledgeStore;
@@ -73,7 +77,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
  * for system prompt inclusion.
  */
 export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
-  const { stateMachine, gitOps, tddRunner, knowledgeStore, config } = deps;
+  const { stateMachine: smRef, gitOps, tddRunner, knowledgeStore, config } = deps;
 
   // -------------------------------------------------------------------------
   // pi_coder_git
@@ -97,18 +101,18 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       const { action, branch, message } = params;
 
       // Validate FSM state
-      if (!stateMachine.isActionAllowed("pi_coder_git")) {
+      if (!smRef.current.isActionAllowed("pi_coder_git")) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `Error: pi_coder_git is not allowed in state ${stateMachine.currentState}. Allowed states: GIT_CHECKPOINT, MERGING, BLOCKED, IDLE.`,
+              text: `Error: pi_coder_git is not allowed in state ${smRef.current.currentState}. Allowed states: GIT_CHECKPOINT, MERGING, BLOCKED, IDLE.`,
             },
           ],
           details: {
             success: false,
-            error: `Not allowed in state ${stateMachine.currentState}`,
-            currentState: stateMachine.currentState,
+            error: `Not allowed in state ${smRef.current.currentState}`,
+            currentState: smRef.current.currentState,
           },
           isError: true,
         };
@@ -129,19 +133,19 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "checkpoint": {
-          const msg = message ?? `wip: checkpoint-${stateMachine.activeSpecId ?? "unknown"}`;
+          const msg = message ?? `wip: checkpoint-${smRef.current.activeSpecId ?? "unknown"}`;
           result = await gitOps.checkpoint(msg);
           // Store the ref in the state machine
           if (result.success && result.ref) {
-            stateMachine.setActiveSpec(
-              stateMachine.activeSpecId ?? "unknown",
+            smRef.current.setActiveSpec(
+              smRef.current.activeSpecId ?? "unknown",
               result.ref,
             );
           }
           break;
         }
         case "rollback": {
-          const ref = stateMachine.gitRef;
+          const ref = smRef.current.gitRef;
           if (!ref) {
             return {
               content: [{ type: "text" as const, text: "Error: No git ref stored for rollback. Was a checkpoint created?" }],
@@ -153,7 +157,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           // Rollback transitions FSM to IDLE
           if (result.success) {
             try {
-              stateMachine.transition("IDLE");
+              smRef.current.transition("IDLE");
             } catch {
               // Transition may fail if already IDLE — that's fine
             }
@@ -162,7 +166,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         }
         case "merge": {
           const currentBranchResult = await gitOps.getCurrentBranch();
-          const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${stateMachine.activeSpecId ?? "unknown"}`;
+          const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${smRef.current.activeSpecId ?? "unknown"}`;
           result = await gitOps.merge(featureBranch);
           break;
         }
@@ -207,18 +211,18 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       // Validate FSM state
-      if (!stateMachine.isActionAllowed("pi_coder_run_tests")) {
+      if (!smRef.current.isActionAllowed("pi_coder_run_tests")) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `Error: pi_coder_run_tests is not allowed in state ${stateMachine.currentState}. Allowed states: TDD_RED_VALIDATE, TDD_GREEN_VALIDATE.`,
+              text: `Error: pi_coder_run_tests is not allowed in state ${smRef.current.currentState}. Allowed states: TDD_RED_VALIDATE, TDD_GREEN_VALIDATE.`,
             },
           ],
           details: {
             valid: false,
-            error: `Not allowed in state ${stateMachine.currentState}`,
-            currentState: stateMachine.currentState,
+            error: `Not allowed in state ${smRef.current.currentState}`,
+            currentState: smRef.current.currentState,
           },
           isError: true,
         };
@@ -228,7 +232,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       const testResult = await tddRunner.runTests(params.filter);
 
       // Validate based on current FSM state
-      const currentState = stateMachine.currentState;
+      const currentState = smRef.current.currentState;
       const validation =
         currentState === "TDD_RED_VALIDATE"
           ? tddRunner.validateRedPhase(testResult)
@@ -319,7 +323,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const { targetState } = params;
-      const previousState = stateMachine.currentState;
+      const previousState = smRef.current.currentState;
 
       // Validate targetState is a valid FSMState
       const validStates: Set<string> = new Set<FSMState>([
@@ -334,13 +338,13 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             type: "text" as const,
             text: `Invalid state "${targetState}". Valid states: ${[...validStates].join(", ")}`,
           }],
-          details: { success: false, error: `Invalid state: ${targetState}`, previousState, validTargets: stateMachine.getValidTransitions() },
+          details: { success: false, error: `Invalid state: ${targetState}`, previousState, validTargets: smRef.current.getValidTransitions() },
           isError: true,
         };
       }
 
       try {
-        stateMachine.transition(targetState as FSMState);
+        smRef.current.transition(targetState as FSMState);
         return {
           content: [{
             type: "text" as const,
@@ -354,7 +358,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         };
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
-        const validTargets = stateMachine.getValidTransitions();
+        const validTargets = smRef.current.getValidTransitions();
         return {
           content: [{
             type: "text" as const,
