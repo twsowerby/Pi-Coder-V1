@@ -148,6 +148,28 @@ export interface GitCheckpointResult {
 }
 
 /**
+ * A single atomic unit of implementation within a spec.
+ *
+ * Each unit maps to one or more acceptance criteria and contains everything
+ * the implementor needs for that piece and nothing else. The orchestrator
+ * delegates one unit at a time through the RED/GREEN TDD cycle.
+ *
+ * Units with no `dependsOn` (or an empty array) can be implemented
+ * independently. Units that depend on others must be implemented sequentially
+ * after their dependencies are complete.
+ */
+export interface ImplementationUnit {
+  /** Short descriptive name (e.g. "User signup", "Session persistence") */
+  name: string;
+  /** Indices into the spec's acceptanceCriteria array (0-based) */
+  acceptanceCriteriaIndices: number[];
+  /** Files that this unit specifically touches */
+  keyFiles: string[];
+  /** Names of other units that must be implemented before this one */
+  dependsOn: string[];
+}
+
+/**
  * A spec file — the unit of work in the Pi Coder TDD lifecycle.
  * Written to `.pi-coder/specs/{id}.md` as Markdown with YAML frontmatter.
  */
@@ -164,6 +186,8 @@ export interface SpecFile {
   keyFiles: string[];
   /** Pruned research context — only what's needed for implementation */
   prunedContext: string;
+  /** Ordered implementation units for per-unit TDD delegation */
+  implementationPlan: ImplementationUnit[];
   /** Current lifecycle status of the spec */
   status: FSMState;
 }

@@ -20,6 +20,7 @@ import type {
   TestRunResult,
   GitCheckpointResult,
   SpecFile,
+  ImplementationUnit,
   KnowledgeEntry,
   LoggingConfig,
 } from "./types.ts";
@@ -337,12 +338,28 @@ describe("SpecFile", () => {
       constraints: ["Must use bcrypt for password hashing"],
       keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
       prunedContext: "Research found Supabase handles auth via...",
+      implementationPlan: [
+        {
+          name: "User signup",
+          acceptanceCriteriaIndices: [0],
+          keyFiles: ["src/auth.ts"],
+          dependsOn: [],
+        },
+        {
+          name: "User login",
+          acceptanceCriteriaIndices: [1],
+          keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
+          dependsOn: ["User signup"],
+        },
+      ],
       status: "SPEC_WORK",
     };
     assert.strictEqual(spec.id, "user-authentication");
     assert.strictEqual(spec.acceptanceCriteria.length, 2);
     assert.strictEqual(spec.constraints.length, 1);
-    assert.strictEqual(spec.status, "SPEC_WORK");
+    assert.strictEqual(spec.implementationPlan.length, 2);
+    assert.strictEqual(spec.implementationPlan[0].name, "User signup");
+    assert.deepStrictEqual(spec.implementationPlan[1].dependsOn, ["User signup"]);
   });
 
   it("should round-trip through JSON", () => {
@@ -353,10 +370,35 @@ describe("SpecFile", () => {
       constraints: [],
       keyFiles: ["src/api/errors.ts"],
       prunedContext: "Error handling follows a middleware pattern...",
+      implementationPlan: [],
       status: "SPEC_APPROVED",
     };
     const parsed = JSON.parse(JSON.stringify(spec)) as SpecFile;
     assert.deepStrictEqual(parsed, spec);
+  });
+});
+
+describe("ImplementationUnit", () => {
+  it("should represent a unit with dependencies", () => {
+    const unit: ImplementationUnit = {
+      name: "Session persistence",
+      acceptanceCriteriaIndices: [2, 3],
+      keyFiles: ["src/middleware/auth.ts", "src/routes/auth.ts"],
+      dependsOn: ["User signup"],
+    };
+    assert.strictEqual(unit.name, "Session persistence");
+    assert.deepStrictEqual(unit.acceptanceCriteriaIndices, [2, 3]);
+    assert.strictEqual(unit.dependsOn.length, 1);
+  });
+
+  it("should represent an independent unit", () => {
+    const unit: ImplementationUnit = {
+      name: "Standalone feature",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: ["src/feature.ts"],
+      dependsOn: [],
+    };
+    assert.strictEqual(unit.dependsOn.length, 0);
   });
 });
 

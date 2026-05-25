@@ -6,6 +6,7 @@
  *   TDD_RED_WRITE → TDD_RED_VALIDATE →
  *   TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →
  *   (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
+ *   (TDD_GREEN_VALIDATE → TDD_RED_WRITE via next_unit) |
  *   (NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED
  *
  * Manual advances use pi_coder_advance_fsm (orchestrator judgment).
@@ -36,6 +37,7 @@ const LEGAL_TRANSITIONS: TransitionEntry[] = [
   { from: "TDD_GREEN_WRITE", to: "TDD_GREEN_VALIDATE", event: "code_written" },
   { from: "TDD_GREEN_VALIDATE", to: "REVIEWING", event: "tests_pass" },
   { from: "TDD_GREEN_VALIDATE", to: "TDD_GREEN_WRITE", event: "tests_still_fail" },
+  { from: "TDD_GREEN_VALIDATE", to: "TDD_RED_WRITE", event: "next_unit" },
   { from: "REVIEWING", to: "APPROVED", event: "review_approved" },
   { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
   { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },

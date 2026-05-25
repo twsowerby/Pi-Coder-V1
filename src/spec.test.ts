@@ -113,6 +113,20 @@ describe("SpecManager", () => {
     constraints: ["Must use bcrypt for password hashing"],
     keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
     prunedContext: "Research found Supabase handles auth via...",
+    implementationPlan: [
+      {
+        name: "User signup",
+        acceptanceCriteriaIndices: [0],
+        keyFiles: ["src/auth.ts"],
+        dependsOn: [],
+      },
+      {
+        name: "User login",
+        acceptanceCriteriaIndices: [1],
+        keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
+        dependsOn: ["User signup"],
+      },
+    ],
     status: "SPEC_WORK",
   };
 
@@ -270,6 +284,7 @@ describe("Spec round-trip integrity", () => {
     ],
     keyFiles: ["src/api/errors.ts", "src/middleware/error-handler.ts"],
     prunedContext: "Error handling follows a middleware pattern where errors are caught by a generic handler that formats the response. The handler is registered in app.ts.",
+    implementationPlan: [],
     status: "SPEC_WORK",
   };
 
@@ -293,6 +308,34 @@ describe("Spec round-trip integrity", () => {
     assert.deepStrictEqual(read!.keyFiles, fullSpec.keyFiles);
     assert.strictEqual(read!.prunedContext, fullSpec.prunedContext);
     assert.strictEqual(read!.status, fullSpec.status);
+  });
+
+  it("create→read should preserve implementation plan", async () => {
+    const specWithPlan: SpecFile = {
+      ...fullSpec,
+      implementationPlan: [
+        {
+          name: "Error response format",
+          acceptanceCriteriaIndices: [0, 1],
+          keyFiles: ["src/api/errors.ts"],
+          dependsOn: [],
+        },
+        {
+          name: "Correlation ID tracking",
+          acceptanceCriteriaIndices: [2],
+          keyFiles: ["src/middleware/error-handler.ts"],
+          dependsOn: ["Error response format"],
+        },
+      ],
+    };
+    await manager.createSpec(specWithPlan);
+    const read = await manager.readSpec("api-error-handling");
+    assert.ok(read, "Should return a spec");
+    assert.strictEqual(read!.implementationPlan.length, 2);
+    assert.strictEqual(read!.implementationPlan[0].name, "Error response format");
+    assert.deepStrictEqual(read!.implementationPlan[0].acceptanceCriteriaIndices, [0, 1]);
+    assert.strictEqual(read!.implementationPlan[1].name, "Correlation ID tracking");
+    assert.deepStrictEqual(read!.implementationPlan[1].dependsOn, ["Error response format"]);
   });
 
   it("update→read should show updated fields with others unchanged", async () => {

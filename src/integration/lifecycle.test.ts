@@ -298,6 +298,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
         "src/utils/reverse.test.ts",
       ],
       prunedContext: "Project uses TypeScript with vitest for testing. Existing utils follow a functional pattern.",
+      implementationPlan: [],
       status: "SPEC_WORK" as const,
     };
 
@@ -423,6 +424,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
       constraints: ["C1"],
       keyFiles: ["src/test.ts"],
       prunedContext: "Context",
+      implementationPlan: [],
       status: "SPEC_WORK",
     });
 
@@ -506,6 +508,7 @@ describe("Phase 2: Happy Path Lifecycle", () => {
       constraints: [],
       keyFiles: [],
       prunedContext: "",
+      implementationPlan: [],
       status: "SPEC_WORK",
     });
 
@@ -848,6 +851,7 @@ describe("Phase 3: Failure & Edge Cases", () => {
         "src/auth/token.ts",
       ],
       prunedContext: "Project uses Express + PostgreSQL. Auth module follows repository pattern. JWT tokens for sessions.",
+      implementationPlan: [],
       status: "SPEC_WORK",
     });
 

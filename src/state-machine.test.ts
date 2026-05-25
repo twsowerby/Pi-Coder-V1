@@ -52,6 +52,7 @@ describe("Phase 1: State & Transition Table", () => {
       { from: "TDD_GREEN_WRITE", to: "TDD_GREEN_VALIDATE", event: "code_written" },
       { from: "TDD_GREEN_VALIDATE", to: "REVIEWING", event: "tests_pass" },
       { from: "TDD_GREEN_VALIDATE", to: "TDD_GREEN_WRITE", event: "tests_still_fail" },
+      { from: "TDD_GREEN_VALIDATE", to: "TDD_RED_WRITE", event: "next_unit" },
       { from: "REVIEWING", to: "APPROVED", event: "review_approved" },
       { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
       { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },
@@ -101,6 +102,18 @@ describe("Phase 1: State & Transition Table", () => {
         sm.transition("IDLE");
         assert.equal(sm.currentState, "IDLE");
       }
+    });
+  });
+
+  describe("getValidTransitions", () => {
+    it("should list REVIEWING and TDD_RED_WRITE from TDD_GREEN_VALIDATE", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      const valid = sm.getValidTransitions();
+      assert.ok(valid.includes("REVIEWING"), "Should include REVIEWING (all units done)");
+      assert.ok(valid.includes("TDD_RED_WRITE"), "Should include TDD_RED_WRITE (next unit)");
+      assert.ok(valid.includes("TDD_GREEN_WRITE"), "Should include TDD_GREEN_WRITE (tests still fail)");
+      assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
     });
   });
 
@@ -206,6 +219,14 @@ describe("Phase 2: Transition Side Effects", () => {
       sm.transition("TDD_RED_WRITE");
       assert.equal(sm.loopCount, 1);
       sm.transition("IDLE"); // abort
+      assert.equal(sm.loopCount, 0);
+    });
+
+    it("should NOT increment on next_unit (TDD_GREEN_VALIDATE → TDD_RED_WRITE)", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      assert.equal(sm.loopCount, 0);
+      sm.transition("TDD_RED_WRITE"); // next unit, not a review loop
       assert.equal(sm.loopCount, 0);
     });
   });

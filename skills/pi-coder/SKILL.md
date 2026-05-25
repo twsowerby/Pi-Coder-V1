@@ -43,14 +43,38 @@ When the researcher returns findings, extract **only** these four things:
 
 **Omit everything else.** Do not include raw code snippets. Do not include verbose architectural analysis. The implementor gets a clean, focused brief — not a research dump.
 
-### Spec Drafting & Approval
+### Implementation Plan
 
-When your research is complete and you're ready to spec:
+Before presenting the spec for approval, create an implementation plan that breaks the work into **atomic units**. Each unit maps to one or more acceptance criteria and contains everything the implementor needs for that piece — and nothing else.
 
-1. Compose a spec with: title, acceptance criteria, constraints, key files, and applied knowledge
-2. Present the spec to the user for approval using `interview`
-3. If the user rejects or requests changes, refine the spec and resubmit — do not advance until approved
-4. When approved, use `pi_coder_advance_fsm` with targetState `SPEC_APPROVED` to advance the FSM
+Rules for decomposition:
+- **One concern per unit.** If two ACs share files and are tightly coupled, group them. If they touch different files, split them.
+- **Minimal dependencies.** Prefer units that can be implemented independently. When one unit depends on another (e.g., "session persistence" depends on "user signup"), declare it via `dependsOn`.
+- **Scope key files per unit.** Each unit lists only the files it touches — not the entire project's file list.
+- **Sequential by default.** The implementor works one unit at a time through the TDD cycle. Parallel delegation is not used.
+
+Example for "Add user authentication":
+```
+Unit 1: "User signup" [AC1] → keyFiles: [src/routes/auth.ts, src/utils/supabase.ts]
+Unit 2: "User login" [AC2] → keyFiles: [src/routes/auth.ts] → dependsOn: [User signup]
+Unit 3: "Protected routes" [AC3] → keyFiles: [src/middleware/auth.ts] → dependsOn: [User login]
+Unit 4: "Session persistence" [AC4] → keyFiles: [src/middleware/auth.ts] → dependsOn: [User login]
+```
+
+### Spec Drafting & Structured Approval
+
+When your research and plan are ready, present the spec for approval using `interview` with **multiple focused questions** — not one big dump:
+
+1. **Scope question**: "We're building [title]. Scope: [2-sentence summary]. Does this match your intent?" — Options: Yes, Modify scope, No
+2. **Acceptance criteria question**: "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?" — Options: Looks good, Add criteria, Remove criteria, Modify criteria
+3. **Constraints question**: "Constraints: [bulleted list]. Anything missing or wrong?" — Options: Good as-is, Add constraint, Relax constraint
+4. **Implementation plan question**: "Implementation plan: [unit names with AC references]. Does this decomposition look right?" — Options: Looks good, Merge units, Split units, Reorder units
+
+The user can read the full spec file at `.pi-coder/specs/{id}.md` if they need detail. The interview covers the **decision points** — things they need to approve or modify.
+
+If the user rejects or requests changes, refine the spec and resubmit — do not advance until all questions are resolved.
+
+When approved, use `pi_coder_advance_fsm` with targetState `SPEC_APPROVED` to advance the FSM.
 
 ---
 
@@ -68,14 +92,20 @@ You do not run raw git commands. All Git operations go through `pi_coder_git`.
 
 ---
 
-## TDD Cycle — RED Phase
+## TDD Cycle — Per-Unit Implementation
 
-When your FSM is in TDD_RED_WRITE:
+The TDD cycle operates **one implementation unit at a time**. For each unit in the implementation plan:
 
-1. Delegate to the implementor:
+### RED Phase (per unit)
+
+When your FSM is in TDD_RED_WRITE for a unit:
+
+1. Delegate to the implementor for **one unit only**:
    - Use `subagent` with agent `pi-coder.implementor`, context `fresh`
-   - See the **Delegation Templates** section below for the exact task payload format
-   - Specify **RED phase** in the task — the implementor must write tests only
+   - Specify **RED phase** and the **unit name**
+   - Include only the ACs for this unit (not the whole spec)
+   - Include only the key files for this unit
+   - See the **Delegation Templates** section for the exact format
 
 2. When the implementor completes, call `pi_coder_run_tests`
    - The FSM must be in TDD_RED_VALIDATE for this call to succeed
@@ -83,19 +113,15 @@ When your FSM is in TDD_RED_WRITE:
 
 3. Interpret the test result:
    - **Tests fail** → FSM auto-transitions to TDD_GREEN_WRITE
-   - **Tests pass** → FSM transitions to BLOCKED with reason RED_TAUTOLOGY. See the **Recovery Procedures** section below.
+   - **Tests pass** → FSM transitions to BLOCKED with reason RED_TAUTOLOGY. See Recovery Procedures.
 
-Do not skip the RED validation step. Running `pi_coder_run_tests` after the implementor finishes is not optional — it is how the harness enforces TDD discipline.
+### GREEN Phase (per unit)
 
----
+When your FSM is in TDD_GREEN_WRITE for a unit:
 
-## TDD Cycle — GREEN Phase
-
-When your FSM is in TDD_GREEN_WRITE:
-
-1. Delegate to the implementor:
-   - Use `subagent` with agent `pi-coder.implementor`, context `fresh`
-   - Specify **GREEN phase** in the task
+1. Delegate to the implementor for **the same unit**:
+   - Specify **GREEN phase** and the **unit name**
+   - Include only the ACs and key files for this unit
    - Include the pre-implementation git ref so the implementor can see what tests were written
 
 2. When the implementor completes, call `pi_coder_run_tests`
@@ -103,34 +129,39 @@ When your FSM is in TDD_GREEN_WRITE:
    - Tests **must pass**
 
 3. Interpret the test result:
-   - **Tests pass** → FSM auto-transitions to REVIEWING
-   - **Tests fail** → FSM auto-transitions back to TDD_GREEN_WRITE. Delegate to the implementor again with the same GREEN-phase brief, plus the test failure output.
+   - **Tests pass** → Decide: more units or all done?
+     - **More units** → Use `pi_coder_advance_fsm` with targetState `TDD_RED_WRITE` to start the next unit
+     - **All units done** → FSM auto-transitions to REVIEWING (do not advance to TDD_RED_WRITE)
+   - **Tests fail** → FSM auto-transitions back to TDD_GREEN_WRITE. Re-delegate for the same unit with failure output.
 
-If the implementor fails to make tests pass after multiple attempts, the loop will eventually trigger the circuit breaker (see **Recovery Procedures**).
+### Unit progression tracking
+
+The FSM does not track which unit you're on — you do. After each unit passes GREEN validation, check your implementation plan:
+- If units remain, use `pi_coder_advance_fsm TDD_RED_WRITE` to advance to the next unit's RED phase
+- If all units are complete, the next test pass will auto-transition to REVIEWING
+
+The `loopCount` only increments on review cycles (NEEDS_CHANGES → TDD_RED_WRITE), not on unit-to-unit advances.
 
 ---
 
 ## Review
 
-When your FSM is in REVIEWING:
+When your FSM is in REVIEWING (all implementation units complete):
 
 1. Delegate to the reviewer:
    - Use `subagent` with agent `pi-coder.reviewer`, context `fresh`
-   - Include the acceptance criteria and the pre-implementation git ref
-   - The reviewer will run `git diff {ref}` itself to see the changes — do not include the diff in the task payload
+   - Include all acceptance criteria and the pre-implementation git ref
+   - The reviewer will run `git diff {ref}` itself to see ALL changes across all units
 
 2. Interpret the reviewer's verdict:
 
    - **✅ Approved** → FSM transitions to APPROVED. Proceed to Final Approval.
-   - **⚠️ Needs Changes** → FSM transitions to NEEDS_CHANGES, then to TDD_RED_WRITE. Loop back through the TDD cycle with specific directives addressing the reviewer's findings.
+   - **⚠️ Needs Changes** → FSM transitions to NEEDS_CHANGES, then to TDD_RED_WRITE. Loop back with specific directives addressing the reviewer's findings.
    - **❌ Request Changes** → Same as Needs Changes — loop back with specific directives.
 
-3. When looping back, **customize the directive**. Do not re-send the same generic brief. Address the reviewer's specific findings:
-   - If the reviewer flagged test alignment issues, tell the implementor to fix the tests first (RED phase)
-   - If the reviewer flagged implementation bugs, tell the implementor what to fix (GREEN phase)
-   - If the reviewer identified knowledge extraction candidates, persist them before looping back
+3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec. If the reviewer found an issue with the auth middleware, re-delegate for the relevant unit only.
 
-4. Monitor the loop count. Every NEEDS_CHANGES → TDD_RED_WRITE cycle increments the counter. If it reaches the configured maximum, the circuit breaker trips (see **Recovery Procedures**).
+4. Monitor the loop count. Every NEEDS_CHANGES → TDD_RED_WRITE cycle increments the counter. If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
 
 ---
 
@@ -140,7 +171,7 @@ When your FSM is in APPROVED:
 
 1. Present a final report to the user using `interview`:
    - Summary of changes made
-   - Test results (RED: failed, GREEN: passed)
+   - Test results per unit (RED: failed, GREEN: passed)
    - Review verdict
    - Any deferred items
    - Knowledge learnings discovered during the cycle
@@ -175,47 +206,44 @@ Return a structured report with: Summary, Architecture, Key Files (with purpose)
 
 Include only the knowledge filenames that are relevant to the request. If no knowledge files exist or none are relevant, omit the knowledge section entirely — do not send the researcher on a wild goose chase.
 
-### Implementor — RED Phase Task
+### Implementor — RED Phase (per unit)
 
 ```
 RED phase — write tests only. Do NOT write implementation code.
 
-Acceptance Criteria:
-- {AC item 1}
-- {AC item 2}
-- ...
+Unit: {unit name}
 
-Constraints:
-- {constraint 1}
-- {constraint 2}
-- ...
+Acceptance Criteria for this unit:
+- {AC item from acceptanceCriteria at the unit's indices}
 
-Key Files:
+Constraints (apply to this unit):
+- {constraints relevant to this unit's key files}
+
+Key Files for this unit:
 - {path} — {purpose}
 
 Check .pi-coder/knowledge/ for project-specific rules before writing tests.
 ```
 
-The task payload must NOT contain implementation code, design suggestions, or architectural recommendations. Only acceptance criteria, constraints, and key files. The implementor decides how to write the tests.
+The task payload must NOT contain implementation code, design suggestions, or architectural recommendations. Only the ACs for this unit, relevant constraints, and the unit's key files. The implementor decides how to write the tests.
 
-### Implementor — GREEN Phase Task
+### Implementor — GREEN Phase (per unit)
 
 ```
 GREEN phase — write code to make tests pass. Do NOT modify tests without explicit orchestrator approval.
 
-Acceptance Criteria:
-- {AC item 1}
-- {AC item 2}
-- ...
+Unit: {unit name}
 
-Constraints:
-- {constraint 1}
-- ...
+Acceptance Criteria for this unit:
+- {AC item}
 
-Key Files:
+Constraints (apply to this unit):
+- {constraint}
+
+Key Files for this unit:
 - {path} — {purpose}
 
-Tests were written against commit {pre-implementation git ref}. Run `git diff {ref}` to see the test files.
+Tests were written against commit {pre-implementation git ref}. Run `git diff {ref}` to see the test files for this unit.
 
 Check .pi-coder/knowledge/ for project-specific rules before writing code.
 ```
@@ -229,6 +257,10 @@ Review the implementation against the following Acceptance Criteria:
 - {AC item 1}
 - {AC item 2}
 - ...
+
+Implementation units completed:
+- {unit 1 name}: {AC refs}
+- {unit 2 name}: {AC refs}
 
 Pre-implementation commit: {git ref}. Run `git diff {ref}` to see all changes.
 

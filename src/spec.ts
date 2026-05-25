@@ -14,7 +14,7 @@ import {
   readdir,
   mkdir,
 } from "node:fs/promises";
-import type { SpecFile } from "./types.ts";
+import type { SpecFile, ImplementationUnit } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 1: Spec ID Generation
@@ -219,6 +219,20 @@ function serializeSpec(spec: SpecFile): string {
   }
   lines.push("");
 
+  // Implementation Plan
+  if (spec.implementationPlan.length > 0) {
+    lines.push("## Implementation Plan");
+    for (const unit of spec.implementationPlan) {
+      const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
+      const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
+      lines.push(`- **${unit.name}** [${acRefs}]${deps}`);
+      for (const f of unit.keyFiles) {
+        lines.push(`  - \`${f}\``);
+      }
+    }
+    lines.push("");
+  }
+
   // Pruned Context
   lines.push("## Pruned Context");
   lines.push(spec.prunedContext);
@@ -256,6 +270,7 @@ function parseSpec(content: string): SpecFile {
   const acceptanceCriteria = extractListSection(content, "## Acceptance Criteria", true);
   const constraints = extractListSection(content, "## Constraints", false);
   const keyFiles = extractCodeListSection(content, "## Key Files");
+  const implementationPlan = extractImplementationPlan(content);
   const prunedContext = extractTextSection(content, "## Pruned Context");
 
   return {
@@ -265,6 +280,7 @@ function parseSpec(content: string): SpecFile {
     constraints,
     keyFiles,
     prunedContext,
+    implementationPlan,
     status: status as SpecFile["status"],
   };
 }
@@ -321,6 +337,66 @@ function extractTextSection(content: string, heading: string): string {
   if (!match) return "";
 
   return match[1].trim();
+}
+
+/**
+ * Extract the Implementation Plan section from a spec file.
+ *
+ * Format:
+ *   - **Unit Name** [AC1, AC2] (depends on: Other Unit)
+ *     - `path/to/file.ts`
+ *
+ * Returns an array of ImplementationUnit objects.
+ */
+function extractImplementationPlan(content: string): ImplementationUnit[] {
+  const heading = "## Implementation Plan";
+  // No 'm' flag — $ matches end-of-string only.
+  // The Implementation Plan is always followed by Pruned Context, but
+  // we include $ as fallback when it's the last section.
+  const sectionRegex = new RegExp(
+    `${escapeRegex(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`,
+  );
+  const sectionMatch = content.match(sectionRegex);
+  if (!sectionMatch) return [];
+
+  const section = sectionMatch[1].trim();
+  const units: ImplementationUnit[] = [];
+
+  // Match unit lines: - **Name** [AC1, AC2] or - **Name** [AC1, AC2] (depends on: X, Y)
+  const unitRegex = /^- \*\*(.+?)\*\*\s*\[([^\]]+)\](?:\s*\(depends on: (.+?)\))?$/gm;
+  let unitMatch: RegExpExecArray | null;
+
+  while ((unitMatch = unitRegex.exec(section)) !== null) {
+    const name = unitMatch[1].trim();
+    const acRefs = unitMatch[2].split(",").map((s) => {
+      const num = s.trim().replace(/^AC/, "");
+      return parseInt(num, 10) - 1; // Convert AC1 → index 0
+    }).filter((n) => !isNaN(n));
+    const dependsOn = unitMatch[3]
+      ? unitMatch[3].split(",").map((s) => s.trim())
+      : [];
+
+    // Find indented key files below this unit (stop at next unit line)
+    const afterUnit = section.substring(unitMatch.index + unitMatch[0].length);
+    const afterLines = afterUnit.split("\n");
+    const keyFileLines: string[] = [];
+    for (const line of afterLines) {
+      if (/^- \*\*/.test(line.trim())) break; // Next unit found — stop
+      if (/^\s+- `/.test(line)) keyFileLines.push(line);
+    }
+    const keyFiles = keyFileLines
+      .map((line) => line.trim().replace(/^- `/, "").replace(/`$/, ""))
+      .filter(Boolean);
+
+    units.push({
+      name,
+      acceptanceCriteriaIndices: acRefs,
+      keyFiles,
+      dependsOn,
+    });
+  }
+
+  return units;
 }
 
 /**

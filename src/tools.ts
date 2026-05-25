@@ -309,6 +309,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "IDLE → SPEC_WORK: Start a new TDD cycle. You can then delegate to the researcher.",
       "SPEC_WORK → SPEC_APPROVED: Present the spec to the user for approval via interview.",
       "SPEC_APPROVED → GIT_CHECKPOINT: The user approved the spec. Time to checkpoint.",
+      "TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed. Advance to the next implementation unit's RED phase.",
+      "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
       "Any state → IDLE: Abort the current cycle. Use this to restart or unwind.",
       "Do NOT use this to skip steps. Each state has a purpose.",
     ],

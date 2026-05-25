@@ -143,7 +143,7 @@ function buildFSMDiagram(): string {
     "FSM States & Transitions:",
     "IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →",
     "TDD_RED_WRITE → TDD_RED_VALIDATE →",
-    "TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →",
+    "TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →",
     "(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |",
     "(NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED → user intervention",
     "",
@@ -880,8 +880,16 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         });
 
         if (validation.valid) {
-          // Tests pass → advance to REVIEWING
-          stateMachine.transition("REVIEWING");
+          // Tests pass — orchestrator decides: next unit or proceed to review
+          // Send steer message so the orchestrator can choose
+          pi.sendMessage(
+            {
+              customType: "pi-coder-green-pass",
+              content: `GREEN validation passed for current unit. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next unit) or REVIEWING (all units complete).`,
+              display: true,
+            },
+            { deliverAs: "steer", triggerTurn: true },
+          );
         } else {
           // Tests still fail → loop back to GREEN
           stateMachine.transition("TDD_GREEN_WRITE");
