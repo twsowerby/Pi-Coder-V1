@@ -786,16 +786,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (!piCoderActive) return;
         const event = data as { toolName: string; partialResult: unknown };
 
-        // Debug: log every tool_execution_update to understand the data flow
-        logEvent("tool_execution_update_debug", {
-          toolName: event.toolName,
-          hasPartialResult: event.partialResult != null,
-          partialResultType: typeof event.partialResult,
-          partialResultKeys: event.partialResult && typeof event.partialResult === "object"
-            ? Object.keys(event.partialResult as Record<string, unknown>)
-            : [],
-        });
-
         if (event.toolName !== "subagent") return;
 
         // The partialResult is AgentToolResult<Details> from pi-subagents.
@@ -836,21 +826,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             }>;
           };
         } | null;
-
-        // Debug: log the subagent partialResult structure
-        logEvent("subagent_update_debug", {
-          hasResult: result != null,
-          hasDetails: result?.details != null,
-          detailsKeys: result?.details ? Object.keys(result.details) : [],
-          progressCount: result?.details?.progress?.length,
-          resultsCount: result?.details?.results?.length,
-          firstResultProgress: result?.details?.results?.[0]?.progress
-            ? { agent: result.details.results[0].progress.agent, status: result.details.results[0].progress.status }
-            : undefined,
-          firstProgress: result?.details?.progress?.[0]
-            ? { agent: result.details.progress[0].agent, status: result.details.progress[0].status, currentTool: result.details.progress[0].currentTool }
-            : undefined,
-        });
 
         if (!result?.details) return;
 
