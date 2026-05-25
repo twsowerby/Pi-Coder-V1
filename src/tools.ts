@@ -345,10 +345,34 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
       try {
         smRef.current.transition(targetState as FSMState);
+
+        // Provide contextual guidance so the orchestrator knows what to do next
+        const nextActionHints: Partial<Record<FSMState, string>> = {
+          IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",
+          SPEC_WORK: "Delegate to pi-coder.researcher to research the spec.",
+          SPEC_APPROVED: "Create a git checkpoint with pi_coder_git.",
+          GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE when ready.",
+          TDD_RED_WRITE: "Delegate to pi-coder.implementor to write RED (failing) tests.",
+          TDD_RED_VALIDATE: "Run tests with pi_coder_run_tests. RED validation: expect tests to FAIL.",
+          TDD_GREEN_WRITE: "Delegate to pi-coder.implementor to implement code (make tests pass).",
+          TDD_GREEN_VALIDATE: "Run tests with pi_coder_run_tests. GREEN validation: expect tests to PASS.",
+          REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
+          APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
+          NEEDS_CHANGES: "Advance to TDD_RED_WRITE (functional fix) or REVIEWING (non-functional fix).",
+          FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
+          MERGING: "Merge the feature branch with pi_coder_git.",
+          COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",
+          BLOCKED: "Present recovery options to the user.",
+        };
+        const hint = nextActionHints[targetState as FSMState];
+        const text = hint
+          ? `FSM advanced: ${previousState} → ${targetState}\n\nNext: ${hint}`
+          : `FSM advanced: ${previousState} → ${targetState}`;
+
         return {
           content: [{
             type: "text" as const,
-            text: `FSM advanced: ${previousState} → ${targetState}`,
+            text,
           }],
           details: {
             success: true,

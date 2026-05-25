@@ -487,9 +487,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     subagentsAvailable = allTools.some((t) => t.name === "subagent");
 
     // Listen for subagent control events (active_long_running, needs_attention)
-    // pi-subagents suppresses active_long_running for foreground runs,
-    // but the event still fires on the event bus. Pi Coder surfaces these
-    // as steer messages so the orchestrator knows about long-running subagents.
+    // NOTE: For foreground (synchronous) subagents, these steer messages are queued
+    // until the subagent completes — they arrive retrospectively, not in real-time.
+    // This is still useful for debugging and understanding what happened.
+    // For real-time monitoring, async delegation would be needed (future work).
     if (subagentsAvailable && config.subagentControl.enabled) {
       pi.events.on("subagent:control-event", (data: unknown) => {
         if (!piCoderActive) return;
@@ -911,6 +912,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       const validation = details2.validation;
       const previousState = currentState;
+      let transitionSteer = ""; // Appended to tool result content for guaranteed delivery
 
       if (currentState === "TDD_RED_VALIDATE") {
         // Log RED validation
@@ -925,18 +927,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (validation.valid) {
           // Tests failed as expected → advance to GREEN
           stateMachine.transition("TDD_GREEN_WRITE");
+          transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           // Tests passed unexpectedly → BLOCKED
           stateMachine.transition("BLOCKED");
-          // Inject FSM alert
-          pi.sendMessage(
-            {
-              customType: "pi-coder-fsm-alert",
-              content: `RED validation anomaly: tests passed when they should fail (reason: ${validation.reason ?? "RED_TAUTOLOGY"}). Transitioned to BLOCKED. Present recovery options to the user.`,
-              display: true,
-            },
-            { deliverAs: "steer", triggerTurn: true },
-          );
+          transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Tests passed unexpectedly (reason: ${validation.reason ?? "RED_TAUTOLOGY"}). You are now in BLOCKED. Present recovery options to the user.`;
         }
       }
 
@@ -952,19 +947,21 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         if (validation.valid) {
           // Tests pass — orchestrator decides: next unit or proceed to review
-          // Send steer message so the orchestrator can choose
-          pi.sendMessage(
-            {
-              customType: "pi-coder-green-pass",
-              content: `GREEN validation passed for current unit. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next unit) or REVIEWING (all units complete).`,
-              display: true,
-            },
-            { deliverAs: "steer", triggerTurn: true },
-          );
+          transitionSteer = "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
         } else {
           // Tests still fail → loop back to GREEN
           stateMachine.transition("TDD_GREEN_WRITE");
+          transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Tests still failing. You are now in TDD_GREEN_WRITE. Delegate to pi-coder.implementor again with clearer instructions. Do NOT call pi_coder_advance_fsm yet.";
         }
+      }
+
+      // Modify tool result content to include auto-transition info
+      // This is more reliable than steer messages because the LLM sees it
+      // directly in the tool output, before its next decision.
+      if (transitionSteer && Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+        const textBlock = rawContent[0] as { type: "text"; text: string };
+        const appendedText = textBlock.text + transitionSteer;
+        return { content: [{ type: "text" as const, text: appendedText }] };
       }
 
       // Log FSM transition
@@ -1005,6 +1002,63 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Persist state after transition
       await persistState();
+    }
+
+    // Handle pi_coder_git results (auto-transition for checkpoint & merge)
+    if (toolName === "pi_coder_git" && currentState === "GIT_CHECKPOINT") {
+      // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to TDD_RED_WRITE
+      const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
+      if (gitDetails?.success !== false) {
+        stateMachine.transition("TDD_RED_WRITE");
+        logEvent("fsm_transition", {
+          from: "GIT_CHECKPOINT",
+          to: "TDD_RED_WRITE",
+          event: "checkpoint_complete",
+          loopCount: stateMachine.loopCount,
+          specId: stateMachine.activeSpecId,
+        });
+        resetNudgeState(stateMachine.currentState);
+        await persistState();
+
+        // Append auto-transition info to tool result
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          const appendedText = textBlock.text + "\n\n⚠️ AUTO-TRANSITION: Checkpoint complete. You are now in TDD_RED_WRITE. Next step: delegate to pi-coder.implementor to write failing tests.";
+          return { content: [{ type: "text" as const, text: appendedText }] };
+        }
+      }
+    }
+
+    if (toolName === "pi_coder_git" && currentState === "MERGING") {
+      // If git merge succeeded in MERGING, auto-advance to COMPLETE
+      const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
+      if (gitDetails?.success !== false) {
+        stateMachine.transition("COMPLETE");
+        logEvent("fsm_transition", {
+          from: "MERGING",
+          to: "COMPLETE",
+          event: "merge_complete",
+          loopCount: stateMachine.loopCount,
+          specId: stateMachine.activeSpecId,
+        });
+        logEvent("lifecycle_end", {
+          specId: stateMachine.activeSpecId,
+          outcome: "COMPLETE",
+          wallClockMs: lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null,
+          totalTokens: { ...lifecycleTokens },
+        });
+        lifecycleStartTime = null;
+        lifecycleTokens = { input: 0, output: 0, total: 0 };
+        resetNudgeState(stateMachine.currentState);
+        await persistState();
+
+        // Append auto-transition info to tool result
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          const appendedText = textBlock.text + "\n\n✅ AUTO-TRANSITION: Merge complete. You are now in COMPLETE. The spec lifecycle is finished.";
+          return { content: [{ type: "text" as const, text: appendedText }] };
+        }
+      }
     }
 
     // Handle subagent completion results

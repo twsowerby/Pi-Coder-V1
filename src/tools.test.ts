@@ -569,4 +569,32 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     assert.ok(!result.isError, "Should succeed");
     assert.strictEqual(sm.currentState, "IDLE");
   });
+
+  it("includes next-action hint in transition output", async () => {
+    const { tools, sm } = setupMocks();
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "SPEC_WORK",
+    });
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("FSM advanced: IDLE → SPEC_WORK"), `Should include transition, got: ${content}`);
+    assert.ok(content.includes("Next:"), `Should include next-action hint, got: ${content}`);
+    assert.ok(content.includes("researcher"), `Should mention researcher delegation, got: ${content}`);
+  });
+
+  it("includes GREEN_WRITE delegation hint", async () => {
+    const { tools, sm } = setupMocks();
+    sm.transition("SPEC_WORK");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.transition("TDD_GREEN_WRITE");
+    // Now advance from GREEN_WRITE to GREEN_VALIDATE
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "TDD_GREEN_VALIDATE",
+    });
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("TDD_GREEN_WRITE → TDD_GREEN_VALIDATE"), `Should include transition, got: ${content}`);
+    assert.ok(content.includes("GREEN validation"), `Should mention GREEN validation, got: ${content}`);
+  });
 });

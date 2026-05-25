@@ -107,12 +107,14 @@ When your FSM is in TDD_RED_WRITE for a unit:
    - Include only the key files for this unit
    - See the **Delegation Templates** section for the exact format
 
-2. When the implementor completes, call `pi_coder_run_tests`
-   - The FSM must be in TDD_RED_VALIDATE for this call to succeed
+2. After the implementor completes, advance the FSM to TDD_RED_VALIDATE:
+   - Use `pi_coder_advance_fsm` with targetState `TDD_RED_VALIDATE`
+
+3. Run tests with `pi_coder_run_tests`
    - Tests **must fail** — this validates that the tests are not tautological
 
-3. Interpret the test result:
-   - **Tests fail** → FSM auto-transitions to TDD_GREEN_WRITE
+4. Interpret the test result:
+   - **Tests fail** → FSM auto-transitions to TDD_GREEN_WRITE. The tool result will include an AUTO-TRANSITION notice — read it! Do NOT call `pi_coder_advance_fsm` when auto-transitions happen.
    - **Tests pass** → FSM transitions to BLOCKED with reason RED_TAUTOLOGY. See Recovery Procedures.
 
 ### GREEN Phase (per unit)
@@ -124,15 +126,34 @@ When your FSM is in TDD_GREEN_WRITE for a unit:
    - Include only the ACs and key files for this unit
    - Include the pre-implementation git ref so the implementor can see what tests were written
 
-2. When the implementor completes, call `pi_coder_run_tests`
-   - The FSM must be in TDD_GREEN_VALIDATE for this call to succeed
+2. After the implementor completes, advance the FSM to TDD_GREEN_VALIDATE:
+   - Use `pi_coder_advance_fsm` with targetState `TDD_GREEN_VALIDATE`
+
+3. Run tests with `pi_coder_run_tests`
    - Tests **must pass**
 
-3. Interpret the test result:
+4. Interpret the test result:
    - **Tests pass** → Decide: more units or all done?
      - **More units** → Use `pi_coder_advance_fsm` with targetState `TDD_RED_WRITE` to start the next unit
-     - **All units done** → FSM auto-transitions to REVIEWING (do not advance to TDD_RED_WRITE)
-   - **Tests fail** → FSM auto-transitions back to TDD_GREEN_WRITE. Re-delegate for the same unit with failure output.
+     - **All units done** → Use `pi_coder_advance_fsm` with targetState `REVIEWING`
+   - **Tests fail** → FSM auto-transitions back to TDD_GREEN_WRITE. The tool result will include an AUTO-TRANSITION notice. Re-delegate for the same unit with failure output. Do NOT call `pi_coder_advance_fsm` when auto-transitions happen.
+
+### Important: Auto-transitions vs manual advances
+
+The FSM uses both **auto-transitions** (triggered by tool results) and **manual advances** (via `pi_coder_advance_fsm`):
+
+| Transition | Type | Trigger |
+|---|---|---|
+| GIT_CHECKPOINT → TDD_RED_WRITE | Auto | Git checkpoint success |
+| TDD_RED_VALIDATE → TDD_GREEN_WRITE | Auto | RED test result (tests fail as expected) |
+| TDD_RED_VALIDATE → BLOCKED | Auto | RED tautology (tests pass unexpectedly) |
+| TDD_GREEN_VALIDATE → TDD_GREEN_WRITE | Auto | GREEN test result (tests still fail) |
+| TDD_RED_WRITE → TDD_RED_VALIDATE | Manual | After implementor completes RED delegation |
+| TDD_GREEN_WRITE → TDD_GREEN_VALIDATE | Manual | After implementor completes GREEN delegation |
+| TDD_GREEN_VALIDATE → TDD_RED_WRITE | Manual | Next implementation unit |
+| TDD_GREEN_VALIDATE → REVIEWING | Manual | All units complete |
+
+**Rule**: When a tool result includes an AUTO-TRANSITION notice, do NOT call `pi_coder_advance_fsm`. The FSM has already moved. Read the notice — it tells you what state you're in and what to do next.
 
 ### Unit progression tracking
 
