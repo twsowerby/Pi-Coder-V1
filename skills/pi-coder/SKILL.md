@@ -385,14 +385,8 @@ Do not forward user messages directly to subagents. You are the orchestrator —
 
 ## Subagent Monitoring
 
-When a subagent is running, the extension monitors it and surfaces two types of notifications:
+When a subagent completes, control event information may be available retrospectively. However, because Pi Coder uses synchronous (foreground) subagent delegation, the orchestrator cannot check on a running subagent in real-time — it's blocked waiting for the result.
 
-1. **⏱️ Active long-running** — A subagent has been running for 2+ minutes. This is informational. The subagent is making progress but taking a while.
-   - Check progress: `subagent({ action: "status", id: "<runId>" })`
-   - If it seems stuck, consider whether the task needs to be broken down further
+**Auto-transitions are the primary mechanism for keeping the orchestrator on track.** When a tool result includes an ⚠️ AUTO-TRANSITION notice, read it carefully — it tells you the current state and what to do next.
 
-2. **⚠️ Needs attention** — A subagent hasn't shown activity for 60+ seconds or has had repeated tool failures.
-   - Check status: `subagent({ action: "status", id: "<runId>" })`
-   - If needed, interrupt: `subagent({ action: "interrupt", id: "<runId>" })` then re-delegate with clearer instructions
-
-These notifications fire automatically via the pi-subagents control system. You do not need to poll — just respond to the steer messages when they appear.
+**For debugging**: If a subagent ran for a long time or had repeated tool failures, the `subagent:control-event` notifications may provide useful diagnostic information after the fact.
