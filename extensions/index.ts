@@ -324,6 +324,9 @@ const DEFAULT_CONFIG: PiCoderConfig = {
     level: "standard",
     maxLogFiles: 10,
   },
+  subagentControl: {
+    enabled: true,
+  },
 };
 
 function loadConfig(cwd: string): PiCoderConfig {
@@ -331,7 +334,7 @@ function loadConfig(cwd: string): PiCoderConfig {
   try {
     if (existsSync(configPath)) {
       const raw = readFileSync(configPath, "utf-8");
-      return { ...DEFAULT_CONFIG, ...JSON.parse(raw), nudge: { ...DEFAULT_CONFIG.nudge, ...(JSON.parse(raw).nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(JSON.parse(raw).logging ?? {}) } };
+      return { ...DEFAULT_CONFIG, ...JSON.parse(raw), nudge: { ...DEFAULT_CONFIG.nudge, ...(JSON.parse(raw).nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(JSON.parse(raw).logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(JSON.parse(raw).subagentControl ?? {}) } };
     }
   } catch {
     // Fall through to default
@@ -482,6 +485,58 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Check for pi-subagents availability
     const allTools = pi.getAllTools();
     subagentsAvailable = allTools.some((t) => t.name === "subagent");
+
+    // Listen for subagent control events (active_long_running, needs_attention)
+    // pi-subagents suppresses active_long_running for foreground runs,
+    // but the event still fires on the event bus. Pi Coder surfaces these
+    // as steer messages so the orchestrator knows about long-running subagents.
+    if (subagentsAvailable && config.subagentControl.enabled) {
+      pi.events.on("subagent:control-event", (data: unknown) => {
+        if (!piCoderActive) return;
+        const event = data as {
+          event?: { type: string; agent: string; runId: string; message: string; reason?: string; turns?: number; toolCount?: number; currentTool?: string; elapsedMs?: number };
+          source?: string;
+        };
+        const ctrl = event.event;
+        if (!ctrl) return;
+
+        // Only surface events that match our config thresholds
+        if (ctrl.type === "needs_attention") {
+          logEvent("subagent_control", {
+            type: ctrl.type,
+            agent: ctrl.agent,
+            runId: ctrl.runId,
+            reason: ctrl.reason,
+            currentTool: ctrl.currentTool,
+          });
+          pi.sendMessage(
+            {
+              customType: "pi-coder-subagent-attention",
+              content: `⚠️ Subagent ${ctrl.agent} needs attention: ${ctrl.message}. Run: subagent({ action: "status", id: "${ctrl.runId}" }) to inspect.`,
+              display: true,
+            },
+            { deliverAs: "steer", triggerTurn: true },
+          );
+        } else if (ctrl.type === "active_long_running") {
+          const elapsed = ctrl.elapsedMs ? Math.floor(ctrl.elapsedMs / 1000) : "?";
+          logEvent("subagent_control", {
+            type: ctrl.type,
+            agent: ctrl.agent,
+            runId: ctrl.runId,
+            elapsedSeconds: elapsed,
+            currentTool: ctrl.currentTool,
+          });
+          pi.sendMessage(
+            {
+              customType: "pi-coder-subagent-running",
+              content: `⏱️ Subagent ${ctrl.agent} has been running for ${elapsed}s. Current tool: ${ctrl.currentTool ?? "unknown"}. Run: subagent({ action: "status", id: "${ctrl.runId}" }) to check progress.`,
+              display: true,
+            },
+            { deliverAs: "steer", triggerTurn: false },
+          );
+        }
+      });
+    }
 
     // Initialize state persistence
     const piCoderDir = join(cwd, ".pi-coder");
@@ -1188,6 +1243,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             enabled: false,
             level: "standard",
             maxLogFiles: 10,
+          },
+          subagentControl: {
+            enabled: true,
           },
         };
         writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), "utf-8");

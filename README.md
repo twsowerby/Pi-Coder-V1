@@ -231,6 +231,20 @@ Structured interaction logging for harness improvement. Logs are JSONL files in 
 
 **`logging.maxLogFiles`** — maximum log files to retain. Oldest are deleted when exceeded. Default: `10`.
 
+### `subagentControl`
+
+Monitoring of long-running or stuck subagents:
+
+- **`subagentControl.enabled`** — when true, the extension listens for pi-subagents control events (active long-running, needs attention) and surfaces them as steer messages to the orchestrator. Default: `true`.
+
+The extension listens on the `subagent:control-event` event bus channel and surfaces:
+- **⏱️ Active long-running** — subagent has been running for 2+ minutes. Informational; the subagent is making progress.
+- **⚠️ Needs attention** — subagent has been inactive for 60+ seconds or has repeated tool failures. May need intervention.
+
+The orchestrator can check status with `subagent({ action: "status", id: "<runId>" })` and interrupt with `subagent({ action: "interrupt", id: "<runId>" })`.
+
+Thresholds (60s/240s) are configured via pi-subagents' own config, not Pi Coder's config.
+
 Log file naming: `pi-coder-YYYY-MM-DD.log` (one file per calendar day).
 
 Each log entry is a JSON object:

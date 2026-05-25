@@ -359,3 +359,19 @@ If the user sends a message while a subagent is running, the message is queued a
 - If the message changes the spec direction, you may need to abort the current cycle and restart
 
 Do not forward user messages directly to subagents. You are the orchestrator — you interpret and delegate.
+
+---
+
+## Subagent Monitoring
+
+When a subagent is running, the extension monitors it and surfaces two types of notifications:
+
+1. **⏱️ Active long-running** — A subagent has been running for 2+ minutes. This is informational. The subagent is making progress but taking a while.
+   - Check progress: `subagent({ action: "status", id: "<runId>" })`
+   - If it seems stuck, consider whether the task needs to be broken down further
+
+2. **⚠️ Needs attention** — A subagent hasn't shown activity for 60+ seconds or has had repeated tool failures.
+   - Check status: `subagent({ action: "status", id: "<runId>" })`
+   - If needed, interrupt: `subagent({ action: "interrupt", id: "<runId>" })` then re-delegate with clearer instructions
+
+These notifications fire automatically via the pi-subagents control system. You do not need to poll — just respond to the steer messages when they appear.

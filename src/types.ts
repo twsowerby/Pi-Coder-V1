@@ -94,6 +94,14 @@ export interface LoggingConfig {
 /**
  * Root configuration stored in `.pi-coder/config.json`.
  */
+export interface SubagentControlConfig {
+  /** Enable subagent control monitoring via the event bus. Default: true.
+   * When enabled, the extension listens for subagent:control-event and surfaces
+   * active_long_running and needs_attention events as steer messages.
+   * Thresholds are configured in pi-subagents' own config. */
+  enabled: boolean;
+}
+
 export interface PiCoderConfig {
   /** Command to run the project test suite (e.g. "npm test", "npx vitest run") */
   testCommand: string;
@@ -107,6 +115,8 @@ export interface PiCoderConfig {
   nudge: NudgeConfig;
   /** Interaction logging configuration */
   logging: LoggingConfig;
+  /** Subagent control/monitoring configuration */
+  subagentControl: SubagentControlConfig;
 }
 
 // ---------------------------------------------------------------------------

@@ -39,7 +39,8 @@ export type LogEventType =
   | "nudge_fired"
   | "nudge_escalation"
   | "tool_call_blocked"
-  | "state_restore";
+  | "state_restore"
+  | "subagent_control";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -59,6 +60,7 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   subagent_end: "standard",
   tool_call_blocked: "standard",
   state_restore: "standard",
+  subagent_control: "standard",
   review_result: "standard",
   command: "standard",
   user_intervention: "standard",
