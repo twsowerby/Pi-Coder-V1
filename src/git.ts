@@ -258,7 +258,7 @@ export class GitOperations {
 
     // Merge the feature branch
     const mergeArgs = ["merge", branch];
-    if (this.config.onMerge === "squash") {
+    if (this.config.mergeBranch === "squash") {
       mergeArgs.push("--squash");
     }
 
@@ -271,7 +271,7 @@ export class GitOperations {
     }
 
     // For squash merge, we need an additional commit step
-    if (this.config.onMerge === "squash") {
+    if (this.config.mergeBranch === "squash") {
       const commitResult = await this.execGit(["commit", "-m", `Squash merge ${branch}`]);
       if (!commitResult.success) {
         return {
@@ -288,40 +288,6 @@ export class GitOperations {
       ref: refResult.success ? refResult.ref : undefined,
       branch: target,
       message: `Merged ${branch} into ${target}`,
-    };
-  }
-
-  /**
-   * Push the current branch to the remote.
-   * Used when onMerge is "none" — the branch stays remote for a PR.
-   */
-  async pushBranch(branch?: string): Promise<GitCheckpointResult> {
-    const args = ["push", "-u", "origin"];
-    if (branch) {
-      args.push(branch);
-    } else {
-      // Push current branch
-      const currentBranch = await this.getCurrentBranch();
-      if (currentBranch.success && currentBranch.branch) {
-        args.push(currentBranch.branch);
-      } else {
-        return {
-          success: false,
-          error: "Could not determine current branch name for push",
-        };
-      }
-    }
-
-    const result = await this.execGit(args);
-    if (!result.success) {
-      return result;
-    }
-
-    const refResult = await this.getCurrentRef();
-    return {
-      success: true,
-      ref: refResult.success ? refResult.ref : undefined,
-      message: `Pushed ${branch ?? "current branch"} to origin`,
     };
   }
 

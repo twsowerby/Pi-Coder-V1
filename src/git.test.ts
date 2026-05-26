@@ -52,7 +52,7 @@ const defaultConfig: PiCoderConfig = {
   testCommand: "npm test",
   maxLoops: 3,
   createBranch: true,
-  onMerge: "merge",
+  mergeBranch: "merge",
   branchPrefix: "pi-coder/",
   nudge: {
     enabled: true,
@@ -403,8 +403,8 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
     assert.ok(mergeCall, "Should merge feature branch");
   });
 
-  it("should use squash merge when onMerge is 'squash'", async () => {
-    const squashConfig: PiCoderConfig = { ...defaultConfig, onMerge: "squash" };
+  it("should use squash merge when mergeBranch is 'squash'", async () => {
+    const squashConfig: PiCoderConfig = { ...defaultConfig, mergeBranch: "squash" };
     const { exec, calls } = createMockPiExec(new Map([
       ["git checkout", { stdout: "", stderr: "", code: 0 }],
       ["git merge", { stdout: "Squash commit", stderr: "", code: 0 }],

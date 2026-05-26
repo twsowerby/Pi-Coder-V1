@@ -183,7 +183,7 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
       testCommand: "npm test",
       maxLoops: 3,
       createBranch: true,
-    onMerge: "merge",
+    mergeBranch: "merge",
       branchPrefix: "pi-coder/",
       nudge: {
         enabled: true,

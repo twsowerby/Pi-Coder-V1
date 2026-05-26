@@ -664,7 +664,7 @@ const DEFAULT_CONFIG: PiCoderConfig = {
   testCommand: "npm test",
   maxLoops: 3,
   createBranch: true,
-  onMerge: "merge",
+  mergeBranch: "merge",
   branchPrefix: "pi-coder/",
   nudge: {
     enabled: true,
@@ -695,12 +695,12 @@ function loadConfig(cwd: string): PiCoderConfig {
       const raw = readFileSync(configPath, "utf-8");
       const parsed = JSON.parse(raw);
 
-      // Migrate legacy gitStrategy → createBranch + onMerge
-      if ("gitStrategy" in parsed && !("createBranch" in parsed) && !("onMerge" in parsed)) {
+      // Migrate legacy gitStrategy → createBranch + mergeBranch
+      if ("gitStrategy" in parsed && !("createBranch" in parsed) && !("mergeBranch" in parsed)) {
         if (parsed.gitStrategy === "squash") {
-          parsed.onMerge = "squash";
+          parsed.mergeBranch = "squash";
         } else {
-          parsed.onMerge = "merge";
+          parsed.mergeBranch = "merge";
         }
         parsed.createBranch = true;
         delete parsed.gitStrategy;
@@ -1996,7 +1996,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           testCommands: detectedTestCommands,
           maxLoops: 3,
           createBranch: true,
-          onMerge: "merge",
+          mergeBranch: "merge",
           branchPrefix: "pi-coder/",
           nudge: {
             enabled: true,

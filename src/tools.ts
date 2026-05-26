@@ -98,14 +98,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     label: "Pi Coder Git",
     description:
       "Structured Git operations for the TDD harness. " +
-      "Actions: checkout_branch, checkpoint, rollback, merge, push. " +
+      "Actions: checkout_branch, checkpoint, rollback, merge. " +
       "Use this instead of raw git commands.",
-    promptSnippet: "Structured Git operations: checkout_branch, checkpoint, rollback, merge, push",
+    promptSnippet: "Structured Git operations: checkout_branch, checkpoint, rollback, merge",
     promptGuidelines: [
       "Use pi_coder_git for all Git operations — raw git commands are blocked.",
-      "Call pi_coder_git checkout_branch when createBranch is enabled, then pi_coder_git checkpoint after spec approval.",
-      "If onMerge is 'merge' or 'squash': call pi_coder_git merge after final approval.",
-      "If onMerge is 'none': call pi_coder_git push to push the branch for a PR instead of merging.",
+      "If createBranch is enabled: create a feature branch with pi_coder_git checkout_branch, then checkpoint with pi_coder_git checkpoint.",
+      "If mergeBranch is 'merge' or 'squash': call pi_coder_git merge after final approval.",
+      "If mergeBranch is false: the cycle ends on the feature branch — tell the user to merge/PR manually.",
       "Use pi_coder_git rollback to revert to the pre-implementation checkpoint if the spec is aborted.",
     ],
     parameters: PI_CODER_GIT_PARAMS,
@@ -195,22 +195,18 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "merge": {
-          if (config.onMerge === "none") {
-            // Don't merge — push the branch for a PR instead
+          if (!config.mergeBranch) {
+            // mergeBranch is false — don't merge, just report completion
             const currentBranchResult = await gitOps.getCurrentBranch();
-            result = await gitOps.pushBranch(currentBranchResult.branch);
-            if (result.success) {
-              result.message = `Branch pushed to remote (onMerge: "none" — create a PR manually). ${result.message ?? ""}`;
-            }
-          } else {
-            const currentBranchResult = await gitOps.getCurrentBranch();
-            const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
-            result = await gitOps.merge(featureBranch);
+            const branchName = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
+            return {
+              content: [{ type: "text" as const, text: `Merge is disabled in this project's config (mergeBranch: false). The work is on branch "${branchName}". Merge or create a PR manually when ready.` }],
+              details: { success: true, operation: "merge-skipped", branch: branchName },
+            };
           }
-          break;
-        }
-        case "push": {
-          result = await gitOps.pushBranch(branch);
+          const currentBranchResult = await gitOps.getCurrentBranch();
+          const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
+          result = await gitOps.merge(featureBranch);
           break;
         }
         default: {
@@ -645,7 +641,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
           NEEDS_CHANGES: "Advance to TDD_RED_WRITE (functional fix) or REVIEWING (non-functional fix).",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
-          MERGING: config.onMerge === "none" ? "Push the branch with pi_coder_git push, then create a PR manually." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.onMerge}).`,
+          MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",
           BLOCKED: "Present recovery options to the user.",
         };

@@ -98,7 +98,7 @@ describe("PiCoderConfig", () => {
     testCommand: "npm test",
     maxLoops: 3,
     createBranch: true,
-    onMerge: "merge",
+    mergeBranch: "merge",
     branchPrefix: "pi-coder/",
     nudge: {
       enabled: true,
@@ -125,7 +125,7 @@ describe("PiCoderConfig", () => {
   it("should have a well-formed default config", () => {
     assert.strictEqual(defaultConfig.testCommand, "npm test");
     assert.strictEqual(defaultConfig.maxLoops, 3);
-    assert.strictEqual(defaultConfig.onMerge, "merge");
+    assert.strictEqual(defaultConfig.mergeBranch, "merge");
     assert.strictEqual(defaultConfig.branchPrefix, "pi-coder/");
   });
 
@@ -138,26 +138,17 @@ describe("PiCoderConfig", () => {
   it("should support squash merge strategy", () => {
     const squashConfig: PiCoderConfig = {
       ...defaultConfig,
-      onMerge: "squash",
+      mergeBranch: "squash",
     };
-    assert.strictEqual(squashConfig.onMerge, "squash");
+    assert.strictEqual(squashConfig.mergeBranch, "squash");
   });
 
-  it("should support no-merge (push only) strategy", () => {
-    const pushConfig: PiCoderConfig = {
+  it("should support no-merge config", () => {
+    const noMergeConfig: PiCoderConfig = {
       ...defaultConfig,
-      onMerge: "none",
-      createBranch: true,
+      mergeBranch: false,
     };
-    assert.strictEqual(pushConfig.onMerge, "none");
-  });
-
-  it("should support no-branch config", () => {
-    const noBranchConfig: PiCoderConfig = {
-      ...defaultConfig,
-      createBranch: false,
-    };
-    assert.strictEqual(noBranchConfig.createBranch, false);
+    assert.strictEqual(noMergeConfig.mergeBranch, false);
   });
 
   it("nudge config should support disabled states", () => {
@@ -237,7 +228,7 @@ describe("LoggingConfig", () => {
       testCommand: "npm test",
       maxLoops: 3,
       createBranch: true,
-      onMerge: "merge",
+      mergeBranch: "merge",
       branchPrefix: "pi-coder/",
       nudge: {
         enabled: true,

@@ -24,7 +24,7 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
     testCommand: "npm test",
     maxLoops: 3,
     createBranch: true,
-    onMerge: "merge",
+    mergeBranch: "merge",
     branchPrefix: "pi-coder/",
     nudge: {
       enabled: true,

@@ -121,7 +121,7 @@ export interface PiCoderConfig {
   /** Whether to create a feature branch at the start of a TDD cycle */
   createBranch: boolean;
   /** What to do when the TDD cycle completes: "merge", "squash", or "none" (just push the branch) */
-  onMerge: "merge" | "squash" | "none";
+  mergeBranch: false | "squash" | "merge";
   /** Prefix for automatically created feature branches (e.g. "pi-coder/") */
   branchPrefix: string;
   /** Per-state nudge configuration */
