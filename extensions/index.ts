@@ -1125,6 +1125,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // The customPrompt path in buildSystemPrompt is: customPrompt + appendSystemPrompt + project_context + skills + date + CWD
     let fullPrompt = orchestratorPrompt;
 
+    // Prepend active mode indicator — this ensures the LLM always knows its current mode,
+    // even after mid-conversation mode switches where the old prompt is still in context.
+    const modeIndicator: Record<"tdd" | "light", string> = {
+      tdd: "[MODE: TDD] FSM state machine is active. Follow the TDD lifecycle: spec → RED/GREEN → review → merge.",
+      light: "[MODE: LIGHT] No FSM. Delegate freely, run tests at any time. Use your judgment.",
+    };
+    fullPrompt = modeIndicator[piCoderMode as "tdd" | "light"] + "\n\n" + fullPrompt;
+
     // Append any user-provided append system prompt
     if (systemPromptOptions.appendSystemPrompt) {
       fullPrompt += "\n\n" + systemPromptOptions.appendSystemPrompt;
@@ -1840,6 +1848,26 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       };
       ctx.ui.notify(`Pi Coder: ${modeLabels[piCoderMode]}`, "info");
       logEvent("command", { command: "mode_select", result: piCoderMode });
+
+      // Send a steer message so the LLM knows the mode changed immediately
+      // This is critical for mid-conversation mode switches — the system prompt
+      // will be rebuilt on the next before_agent_start, but the LLM needs to
+      // know right now that the rules have changed.
+      if (piCoderMode !== "off") {
+        const modeDescriptions: Record<PiCoderMode, string> = {
+          tdd: "TDD mode — Full lifecycle with FSM, spec approval, RED/GREEN phases, and review. Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
+          light: "Light mode — Delegation and tests, no FSM. Call any subagent at any time. Run tests freely with pi_coder_run_tests. No spec workflow, no RED/GREEN enforcement. Use your judgment.",
+          off: "",
+        };
+        pi.sendMessage(
+          {
+            customType: "pi-coder-mode-change",
+            content: `🔄 Pi Coder mode changed to: ${piCoderMode.toUpperCase()}. ${modeDescriptions[piCoderMode]}`,
+            display: true,
+          },
+          { deliverAs: "steer", triggerTurn: true },
+        );
+      }
 
       // Persist mode state
       await persistState();
