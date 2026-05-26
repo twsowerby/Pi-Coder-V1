@@ -102,6 +102,7 @@ SPEC_WORK guidance:
 - Create an implementation plan that decomposes the spec into atomic units
 - Save the spec with pi_coder_save_spec BEFORE presenting for approval
 - Use interview with multiple focused questions for spec approval (scope, ACs, constraints, plan)
+- Always pass `timeout: {{interviewTimeout}}` to the interview tool — this is configured in the project's pi-coder config
 - When the spec is approved, use pi_coder_advance_fsm to advance to SPEC_APPROVED
 
 Before delegating to implementor or reviewer:

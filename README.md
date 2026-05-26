@@ -411,6 +411,7 @@ All configuration lives in `.pi-coder/config.json` (created by `/pi-coder-init`)
   "createBranch": true,
   "mergeBranch": "merge",
   "branchPrefix": "pi-coder/",
+  "interviewTimeout": 0,
   "nudge": {
     "enabled": true,
     "defaults": {
@@ -511,6 +512,20 @@ The older `gitStrategy` field (`"branch-and-merge"` | `"squash"`) is still suppo
 ### `branchPrefix`
 
 Prefix prepended to all pi-coder branches. Branches are created as `{branchPrefix}{spec-id}` (e.g. `pi-coder/2026-05-25-1430-user-authentication`). Spec IDs use the format `YYYY-MM-DD-HHmm-slug` — a timestamp prefix that prevents duplicate names and gives natural chronological ordering.
+
+### `interviewTimeout`
+
+Timeout in seconds for the `interview` tool. The interview tool presents forms for spec approval and user decisions. Default: `0` (no timeout — wait indefinitely).
+
+Pi's default interview timeout is 10 minutes, after which the interview auto-accepts the default options. This is dangerous for spec approval — you might not want the defaults. Setting `0` means the interview stays open until you respond, no matter how long you're away from the keyboard.
+
+Set a specific number of seconds if you prefer a timeout:
+
+```json
+{
+  "interviewTimeout": 3600
+}
+```
 
 ### `nudge`
 

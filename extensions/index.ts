@@ -548,6 +548,7 @@ function buildOrchestratorPrompt(
     .replace("{{activeSpecId}}", activeSpecId ?? "none")
     .replace("{{loopCount}}", String(sm.loopCount))
     .replace("{{maxLoops}}", String(config.maxLoops))
+    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList);
 }
 
@@ -601,7 +602,9 @@ Available tools:
     .map(([name, snippet]) => `- ${name}: ${snippet}`)
     .join("\n");
 
-  return lightModePromptTemplate.replace("{{toolList}}", toolList);
+  return lightModePromptTemplate
+    .replace("{{toolList}}", toolList)
+    .replace("{{interviewTimeout}}", String(config.interviewTimeout));
 }
 
 /** Reset the cached light mode prompt template. */
@@ -666,6 +669,7 @@ const DEFAULT_CONFIG: PiCoderConfig = {
   createBranch: true,
   mergeBranch: "merge",
   branchPrefix: "pi-coder/",
+  interviewTimeout: 0,
   nudge: {
     enabled: true,
     defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
@@ -1998,6 +2002,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           createBranch: true,
           mergeBranch: "merge",
           branchPrefix: "pi-coder/",
+          interviewTimeout: 0,
           nudge: {
             enabled: true,
             defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },

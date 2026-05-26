@@ -120,10 +120,12 @@ export interface PiCoderConfig {
   maxLoops: number;
   /** Whether to create a feature branch at the start of a TDD cycle */
   createBranch: boolean;
-  /** What to do when the TDD cycle completes: "merge", "squash", or "none" (just push the branch) */
+  /** What to do when the TDD cycle completes: "merge", "squash", or false (leave branch for manual merge/PR) */
   mergeBranch: false | "squash" | "merge";
   /** Prefix for automatically created feature branches (e.g. "pi-coder/") */
   branchPrefix: string;
+  /** Interview tool timeout in seconds. 0 = no timeout (wait indefinitely). Default: 0 */
+  interviewTimeout: number;
   /** Per-state nudge configuration */
   nudge: NudgeConfig;
   /** Interaction logging configuration */

@@ -184,7 +184,8 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
       maxLoops: 3,
       createBranch: true,
     mergeBranch: "merge",
-      branchPrefix: "pi-coder/",
+    branchPrefix: "pi-coder/",
+    interviewTimeout: 0,
       nudge: {
         enabled: true,
         defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
@@ -223,6 +224,7 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
       .replace("{{activeSpecId}}", sm.activeSpecId ?? "none")
       .replace("{{loopCount}}", String(sm.loopCount))
       .replace("{{maxLoops}}", String(config.maxLoops))
+      .replace("{{interviewTimeout}}", String(config.interviewTimeout))
       .replace("{{toolList}}", toolList);
 
     // Verify no unsubstituted template variables remain
