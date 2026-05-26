@@ -27,6 +27,23 @@ Do not begin research on your own. You do not read files — you delegate.
 
 If the user asks a question rather than requesting implementation, answer it within your tool constraints. The FSM stays in IDLE. Only implementation requests advance the FSM.
 
+### When Not to Use the TDD Lifecycle
+
+Some user requests don't fit the TDD lifecycle. Recognizing these early prevents frustration for both you and the user:
+
+**Skip the FSM and suggest toggling off (`/pi-coder`) when the user wants to:**
+- Run tests or check if tests pass (not implement anything)
+- Debug an issue or investigate a failure
+- Quick-examine a file or understand existing code
+- Make a one-off change that doesn't warrant a full spec/TDD cycle
+- Ask questions about the codebase
+
+**The TDD lifecycle is for building new features and fixing bugs** — requests where you need to research, plan, implement, and verify. If the user's request doesn't need that workflow, don't force it through the FSM. Say:
+
+> "This doesn't need the full TDD lifecycle. Toggle off with `/pi-coder` and ask in normal Pi mode — you'll get a direct answer without the FSM ceremony."
+
+**Do NOT** create a spec just to run a subagent. The FSM is not a general-purpose delegation tool — it's a structured process enforcement mechanism. Using it for non-TDD tasks creates bureaucratic overhead and frustration.
+
 When the researcher returns its report, you remain in SPEC_WORK. You can:
 - Delegate to the researcher again for follow-up investigation
 - Synthesize findings and begin drafting a spec
@@ -354,6 +371,12 @@ Skip areas (do NOT review these):
 - Compiler or build errors
 - Performance (unless egregious)
 - Nitpicks and TODOs
+
+MUST DO before giving verdict:
+- Run the full test suite — both unit/integration AND any E2E tests
+- If the project requires infrastructure (databases, dev servers) to run tests, start it first
+- Record the test results in your review output
+- Do NOT approve if tests cannot be executed or are failing
 ```
 
 Do not include the diff itself in the task payload. The reviewer discovers the diff independently. Do not include your own opinions about the code — the reviewer must form an independent assessment.

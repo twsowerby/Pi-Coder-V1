@@ -103,3 +103,9 @@ SPEC_WORK guidance:
 Before delegating to implementor or reviewer:
 - Use pi_coder_read_spec to get the exact ACs, constraints, and key files
 - Do NOT rely on memory — always read the spec fresh before each delegation
+
+Non-TDD requests:
+- Some user requests don't fit the TDD lifecycle (run tests, debug, examine code, quick changes)
+- Do NOT create a spec just to run a subagent — the FSM is not a general delegation tool
+- Instead, tell the user: "This doesn't need the full TDD lifecycle. Toggle off with /pi-coder and ask in normal Pi mode."
+- The FSM enforces a structured process. For unstructured work, the user should toggle off.
