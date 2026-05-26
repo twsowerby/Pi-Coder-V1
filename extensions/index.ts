@@ -663,7 +663,8 @@ export function resetNudgeState(newState: FSMState): void {
 const DEFAULT_CONFIG: PiCoderConfig = {
   testCommand: "npm test",
   maxLoops: 3,
-  gitStrategy: "branch-and-merge",
+  createBranch: true,
+  onMerge: "merge",
   branchPrefix: "pi-coder/",
   nudge: {
     enabled: true,
@@ -692,7 +693,20 @@ function loadConfig(cwd: string): PiCoderConfig {
   try {
     if (existsSync(configPath)) {
       const raw = readFileSync(configPath, "utf-8");
-      return { ...DEFAULT_CONFIG, ...JSON.parse(raw), nudge: { ...DEFAULT_CONFIG.nudge, ...(JSON.parse(raw).nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(JSON.parse(raw).logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(JSON.parse(raw).subagentControl ?? {}) } };
+      const parsed = JSON.parse(raw);
+
+      // Migrate legacy gitStrategy → createBranch + onMerge
+      if ("gitStrategy" in parsed && !("createBranch" in parsed) && !("onMerge" in parsed)) {
+        if (parsed.gitStrategy === "squash") {
+          parsed.onMerge = "squash";
+        } else {
+          parsed.onMerge = "merge";
+        }
+        parsed.createBranch = true;
+        delete parsed.gitStrategy;
+      }
+
+      return { ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) } };
     }
   } catch {
     // Fall through to default
@@ -1981,7 +1995,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           testCommand: detectedTestCommand,
           testCommands: detectedTestCommands,
           maxLoops: 3,
-          gitStrategy: "branch-and-merge",
+          createBranch: true,
+          onMerge: "merge",
           branchPrefix: "pi-coder/",
           nudge: {
             enabled: true,

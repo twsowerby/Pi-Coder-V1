@@ -182,7 +182,8 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
     const config = (await import("../src/types.ts")).DEFAULT_CONFIG ?? {
       testCommand: "npm test",
       maxLoops: 3,
-      gitStrategy: "branch-and-merge",
+      createBranch: true,
+    onMerge: "merge",
       branchPrefix: "pi-coder/",
       nudge: {
         enabled: true,

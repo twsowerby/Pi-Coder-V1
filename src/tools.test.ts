@@ -24,7 +24,8 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
   return {
     testCommand: "npm test",
     maxLoops: 3,
-    gitStrategy: "branch-and-merge",
+    createBranch: true,
+    onMerge: "merge",
     branchPrefix: "pi-coder/",
     nudge: {
       enabled: true,
@@ -302,15 +303,15 @@ describe("Phase 1: Tool Registration Framework", () => {
     }
   });
 
-  it("each tool has promptGuidelines with 2-3 bullets", () => {
+  it("each tool has promptGuidelines with 2-5 bullets", () => {
     const { tools } = setupMocks();
     for (const name of ["pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec"]) {
       const tool = tools.get(name)!;
       assert.ok(tool.promptGuidelines, `${name} missing promptGuidelines`);
       assert.ok(Array.isArray(tool.promptGuidelines), `${name} promptGuidelines must be array`);
       assert.ok(
-        tool.promptGuidelines!.length >= 2 && tool.promptGuidelines!.length <= 4,
-        `${name} promptGuidelines should have 2-4 bullets, got ${tool.promptGuidelines!.length}`,
+        tool.promptGuidelines!.length >= 2 && tool.promptGuidelines!.length <= 5,
+        `${name} promptGuidelines should have 2-5 bullets, got ${tool.promptGuidelines!.length}`,
       );
     }
   });

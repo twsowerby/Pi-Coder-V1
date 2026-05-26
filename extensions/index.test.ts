@@ -23,7 +23,8 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
   return {
     testCommand: "npm test",
     maxLoops: 3,
-    gitStrategy: "branch-and-merge",
+    createBranch: true,
+    onMerge: "merge",
     branchPrefix: "pi-coder/",
     nudge: {
       enabled: true,

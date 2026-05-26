@@ -51,7 +51,8 @@ function createMockPiExec(responses: Map<string, { stdout: string; stderr: strin
 const defaultConfig: PiCoderConfig = {
   testCommand: "npm test",
   maxLoops: 3,
-  gitStrategy: "branch-and-merge",
+  createBranch: true,
+  onMerge: "merge",
   branchPrefix: "pi-coder/",
   nudge: {
     enabled: true,
@@ -402,8 +403,8 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
     assert.ok(mergeCall, "Should merge feature branch");
   });
 
-  it("should use squash merge when gitStrategy is 'squash'", async () => {
-    const squashConfig: PiCoderConfig = { ...defaultConfig, gitStrategy: "squash" };
+  it("should use squash merge when onMerge is 'squash'", async () => {
+    const squashConfig: PiCoderConfig = { ...defaultConfig, onMerge: "squash" };
     const { exec, calls } = createMockPiExec(new Map([
       ["git checkout", { stdout: "", stderr: "", code: 0 }],
       ["git merge", { stdout: "Squash commit", stderr: "", code: 0 }],

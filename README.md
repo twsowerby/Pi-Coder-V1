@@ -67,6 +67,15 @@ This creates:
 - `.pi/agents/pi-coder-*.md` — agent definition files (copied from package defaults)
 - `.pi/settings.json` — disables built-in subagents so only `pi-coder.*` agents are visible
 
+**For team projects:** After init, edit `.pi-coder/config.json` and set `"onMerge": "none"` so pi-coder pushes branches for PRs instead of merging to main:
+
+```json
+{
+  "createBranch": true,
+  "onMerge": "none"
+}
+```
+
 ### 3. Choose your mode
 
 ```
@@ -357,7 +366,8 @@ All configuration lives in `.pi-coder/config.json` (created by `/pi-coder-init`)
     "e2e": "npx playwright test"
   },
   "maxLoops": 3,
-  "gitStrategy": "branch-and-merge",
+  "createBranch": true,
+  "onMerge": "merge",
   "branchPrefix": "pi-coder/",
   "nudge": {
     "enabled": true,
@@ -409,12 +419,52 @@ When `testCommands` is present, it's used instead of `testCommand`. The `suite` 
 
 Maximum number of NEEDS_CHANGES → TDD_RED_WRITE review cycles before the circuit breaker halts the spec. When tripped, the orchestrator pauses and presents options to the user. Default: `3`.
 
-### `gitStrategy`
+### `createBranch`
 
-How feature branches are merged back after approval:
+Whether to create a feature branch at the start of each TDD cycle.
 
-- `"branch-and-merge"` — standard `git merge`
-- `"squash"` — `git merge --squash` + separate commit
+- `true` (default) — pi-coder creates `{branchPrefix}{spec-id}` and checks it out during `GIT_CHECKPOINT`. At the end, the branch is merged or pushed.
+- `false` — all work happens on the current branch. No branch is created. Use this when you want to manage branching yourself or work directly on main.
+
+When `false`, `pi_coder_git checkout_branch` returns an error explaining that branch creation is disabled. The orchestrator falls back to committing directly on the current branch.
+
+### `onMerge`
+
+What happens when the TDD cycle completes and the code is approved:
+
+| Value | Behavior |
+|---|---|
+| `"merge"` (default) | Standard `git merge` — feature branch merges back into the target branch |
+| `"squash"` | `git merge --squash` + separate commit — squashes all feature commits into one |
+| `"none"` | Push the branch to remote — no merge. Used for team workflows where a PR handles the merge |
+
+When `onMerge` is `"none"`, the `pi_coder_git merge` action pushes the branch to `origin` instead of merging. The user creates a PR manually. This is the right setting for team projects where code review happens via pull request.
+
+**Example team workflow:**
+
+```json
+{
+  "createBranch": true,
+  "onMerge": "none"
+}
+```
+
+Pi-coder creates a feature branch, pushes it when done, and the orchestrator tells the user to create a PR. No unauthorized merge to main.
+
+**Example no-branch workflow:**
+
+```json
+{
+  "createBranch": false,
+  "onMerge": "merge"
+}
+```
+
+All work commits directly to the current branch. Merge is a no-op. Use this for experimental prototyping where branching is overkill.
+
+### Legacy `gitStrategy`
+
+The older `gitStrategy` field (`"branch-and-merge"` | `"squash"`) is still supported — it migrates automatically to `createBranch: true` + `onMerge: "merge"` or `onMerge: "squash"` on load. You can safely remove it from your config and use the new fields.
 
 ### `branchPrefix`
 

@@ -97,7 +97,8 @@ describe("PiCoderConfig", () => {
   const defaultConfig: PiCoderConfig = {
     testCommand: "npm test",
     maxLoops: 3,
-    gitStrategy: "branch-and-merge",
+    createBranch: true,
+    onMerge: "merge",
     branchPrefix: "pi-coder/",
     nudge: {
       enabled: true,
@@ -124,7 +125,7 @@ describe("PiCoderConfig", () => {
   it("should have a well-formed default config", () => {
     assert.strictEqual(defaultConfig.testCommand, "npm test");
     assert.strictEqual(defaultConfig.maxLoops, 3);
-    assert.strictEqual(defaultConfig.gitStrategy, "branch-and-merge");
+    assert.strictEqual(defaultConfig.onMerge, "merge");
     assert.strictEqual(defaultConfig.branchPrefix, "pi-coder/");
   });
 
@@ -134,12 +135,29 @@ describe("PiCoderConfig", () => {
     assert.deepStrictEqual(parsed, defaultConfig);
   });
 
-  it("should support squash git strategy", () => {
+  it("should support squash merge strategy", () => {
     const squashConfig: PiCoderConfig = {
       ...defaultConfig,
-      gitStrategy: "squash",
+      onMerge: "squash",
     };
-    assert.strictEqual(squashConfig.gitStrategy, "squash");
+    assert.strictEqual(squashConfig.onMerge, "squash");
+  });
+
+  it("should support no-merge (push only) strategy", () => {
+    const pushConfig: PiCoderConfig = {
+      ...defaultConfig,
+      onMerge: "none",
+      createBranch: true,
+    };
+    assert.strictEqual(pushConfig.onMerge, "none");
+  });
+
+  it("should support no-branch config", () => {
+    const noBranchConfig: PiCoderConfig = {
+      ...defaultConfig,
+      createBranch: false,
+    };
+    assert.strictEqual(noBranchConfig.createBranch, false);
   });
 
   it("nudge config should support disabled states", () => {
@@ -218,7 +236,8 @@ describe("LoggingConfig", () => {
     const config: PiCoderConfig = {
       testCommand: "npm test",
       maxLoops: 3,
-      gitStrategy: "branch-and-merge",
+      createBranch: true,
+      onMerge: "merge",
       branchPrefix: "pi-coder/",
       nudge: {
         enabled: true,

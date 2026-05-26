@@ -51,6 +51,7 @@ const GIT_ACTION_ENUM = StringEnum([
   "checkpoint",
   "rollback",
   "merge",
+  "push",
 ] as const);
 
 const PI_CODER_GIT_PARAMS = Type.Object({
@@ -97,12 +98,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     label: "Pi Coder Git",
     description:
       "Structured Git operations for the TDD harness. " +
-      "Actions: checkout_branch, checkpoint, rollback, merge. " +
+      "Actions: checkout_branch, checkpoint, rollback, merge, push. " +
       "Use this instead of raw git commands.",
-    promptSnippet: "Structured Git operations: checkout_branch, checkpoint, rollback, merge",
+    promptSnippet: "Structured Git operations: checkout_branch, checkpoint, rollback, merge, push",
     promptGuidelines: [
       "Use pi_coder_git for all Git operations — raw git commands are blocked.",
-      "Call pi_coder_git checkpoint after spec approval and pi_coder_git merge after final approval.",
+      "Call pi_coder_git checkout_branch when createBranch is enabled, then pi_coder_git checkpoint after spec approval.",
+      "If onMerge is 'merge' or 'squash': call pi_coder_git merge after final approval.",
+      "If onMerge is 'none': call pi_coder_git push to push the branch for a PR instead of merging.",
       "Use pi_coder_git rollback to revert to the pre-implementation checkpoint if the spec is aborted.",
     ],
     parameters: PI_CODER_GIT_PARAMS,
@@ -135,6 +138,13 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
       switch (action) {
         case "checkout_branch": {
+          if (!config.createBranch) {
+            return {
+              content: [{ type: "text" as const, text: "Branch creation is disabled in this project's config (createBranch: false). Work will happen on the current branch. Use pi_coder_git checkpoint to save progress instead." }],
+              details: { success: false, error: "Branch creation disabled (createBranch: false)" },
+              isError: true,
+            };
+          }
           if (!branch) {
             return {
               content: [{ type: "text" as const, text: "Error: branch parameter is required for checkout_branch action." }],
@@ -185,9 +195,22 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "merge": {
-          const currentBranchResult = await gitOps.getCurrentBranch();
-          const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
-          result = await gitOps.merge(featureBranch);
+          if (config.onMerge === "none") {
+            // Don't merge — push the branch for a PR instead
+            const currentBranchResult = await gitOps.getCurrentBranch();
+            result = await gitOps.pushBranch(currentBranchResult.branch);
+            if (result.success) {
+              result.message = `Branch pushed to remote (onMerge: "none" — create a PR manually). ${result.message ?? ""}`;
+            }
+          } else {
+            const currentBranchResult = await gitOps.getCurrentBranch();
+            const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
+            result = await gitOps.merge(featureBranch);
+          }
+          break;
+        }
+        case "push": {
+          result = await gitOps.pushBranch(branch);
           break;
         }
         default: {
@@ -612,7 +635,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         const nextActionHints: Partial<Record<FSMState, string>> = {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",
           SPEC_WORK: "Spec directory created. Delegate to pi-coder.researcher to research the spec.",
-          SPEC_APPROVED: "Create a git checkpoint with pi_coder_git.",
+          SPEC_APPROVED: config.createBranch ? "Create a feature branch with pi_coder_git checkout_branch, then checkpoint with pi_coder_git checkpoint." : "Checkpoint with pi_coder_git checkpoint (branch creation is disabled — working on current branch).",
           GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE when ready.",
           TDD_RED_WRITE: "Delegate to pi-coder.implementor to write RED (failing) tests.",
           TDD_RED_VALIDATE: "Run tests with pi_coder_run_tests. RED validation: expect tests to FAIL.",
@@ -622,7 +645,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
           NEEDS_CHANGES: "Advance to TDD_RED_WRITE (functional fix) or REVIEWING (non-functional fix).",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
-          MERGING: "Merge the feature branch with pi_coder_git.",
+          MERGING: config.onMerge === "none" ? "Push the branch with pi_coder_git push, then create a PR manually." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.onMerge}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",
           BLOCKED: "Present recovery options to the user.",
         };
