@@ -1865,7 +1865,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             content: `🔄 Pi Coder mode changed to: ${piCoderMode.toUpperCase()}. ${modeDescriptions[piCoderMode]}`,
             display: true,
           },
-          { deliverAs: "steer", triggerTurn: true },
+          { deliverAs: "nextTurn" },
         );
       }
 
