@@ -1,7 +1,7 @@
 /**
  * Tests for State Persistence — two-layer model.
  *
- * GlobalStatePersistence: .pi-coder/state.json (pointer: piCoderActive, activeSpecId)
+ * GlobalStatePersistence: .pi-coder/state.json (pointer: piCoderMode, activeSpecId)
  * SpecStatePersistence: .pi-coder/specs/{id}/state.json (FSM + evidence)
  */
 
@@ -23,7 +23,7 @@ import type { GlobalState, SpecState, FSMState } from "./types.ts";
 function makeGlobalState(overrides?: Partial<GlobalState>): GlobalState {
   return {
     version: 1,
-    piCoderActive: true,
+    piCoderMode: "tdd",
     activeSpecId: null,
     updatedAt: new Date().toISOString(),
     ...overrides,
@@ -61,7 +61,7 @@ describe("GlobalStatePersistence", () => {
         await persistence.save(state);
         const loaded = await persistence.load();
         assert.ok(loaded, "Should load saved state");
-        assert.strictEqual(loaded.piCoderActive, true);
+        assert.strictEqual(loaded.piCoderMode, "tdd");
         assert.strictEqual(loaded.activeSpecId, "user-auth");
       } finally {
         await rm(dir, { recursive: true, force: true });
@@ -146,7 +146,7 @@ describe("GlobalStatePersistence", () => {
         const persistence = new GlobalStatePersistence(dir);
         await writeFile(
           join(dir, "state.json"),
-          JSON.stringify({ version: 2, piCoderActive: true, activeSpecId: null, updatedAt: new Date().toISOString() }),
+          JSON.stringify({ version: 2, piCoderMode: "tdd", activeSpecId: null, updatedAt: new Date().toISOString() }),
           "utf-8",
         );
         const loaded = await persistence.load();

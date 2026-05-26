@@ -147,20 +147,19 @@ describe("Phase 1: Toggle Command", () => {
     }
   });
 
-  it("toggle state is persisted to state.json", async () => {
+  it("mode state is persisted to state.json", async () => {
     // The persistState function now writes to .pi-coder/state.json
     // via the StatePersistence class. That class is tested directly
     // in src/state-persistence.test.ts (30 tests). This test verifies
-    // the PersistedState shape includes the toggle field.
+    // the GlobalState shape includes the mode field.
     const state = {
       version: 1 as const,
-      piCoderActive: true,
-      fsm: { currentState: "SPEC_WORK" as const, activeSpecId: null, loopCount: 0, gitRef: null },
+      piCoderMode: "tdd" as const,
+      activeSpecId: null,
       updatedAt: new Date().toISOString(),
     };
-    assert.strictEqual(state.piCoderActive, true);
+    assert.strictEqual(state.piCoderMode, "tdd");
     assert.strictEqual(state.version, 1);
-    assert.strictEqual(state.fsm.currentState, "SPEC_WORK");
   });
 
   it("activation is blocked when subagents are not available", async () => {

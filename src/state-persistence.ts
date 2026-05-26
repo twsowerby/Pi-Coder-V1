@@ -4,7 +4,7 @@
  * Two persistence layers:
  *
  * 1. Global state (`.pi-coder/state.json`) — slim pointer:
- *    { version, piCoderActive, activeSpecId, updatedAt }
+ *    { version, piCoderMode, activeSpecId, updatedAt }
  *    Tells the extension which spec is active and whether orchestrator mode is on.
  *
  * 2. Per-spec state (`.pi-coder/specs/{id}/state.json`) — FSM + evidence:
@@ -190,7 +190,12 @@ function isValidGlobalState(value: unknown): value is GlobalState {
   const obj = value as Record<string, unknown>;
 
   if (obj.version !== 1) return false;
-  if (typeof obj.piCoderActive !== "boolean") return false;
+  // piCoderMode is required for new state, piCoderActive is for migration
+  if (obj.piCoderMode !== undefined) {
+    if (typeof obj.piCoderMode !== "string" || !["off", "light", "tdd"].includes(obj.piCoderMode)) return false;
+  } else if (typeof obj.piCoderActive !== "boolean") {
+    return false;
+  }
   if (obj.activeSpecId !== null && typeof obj.activeSpecId !== "string") return false;
   if (typeof obj.updatedAt !== "string") return false;
 

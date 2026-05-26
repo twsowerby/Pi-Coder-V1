@@ -85,10 +85,10 @@ describe("Phase 1: Extension Foundation", () => {
     ]);
   });
 
-  it("should export piCoderActive (defaults to true when extension is loaded)", async () => {
+  it("should export piCoderMode (defaults to 'tdd' when extension is loaded)", async () => {
     const mod = await import("./index.ts");
-    // Module-level state defaults to true — extension is active on load.
-    assert.ok(typeof mod.piCoderActive === "boolean");
+    // Module-level state defaults to 'tdd' — extension is active on load.
+    assert.ok(["off", "light", "tdd"].includes(mod.piCoderMode));
   });
 
   it("should export stateMachine module variable", async () => {

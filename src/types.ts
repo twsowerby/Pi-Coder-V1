@@ -102,9 +102,20 @@ export interface SubagentControlConfig {
   enabled: boolean;
 }
 
+export type PiCoderMode = "off" | "light" | "tdd";
+
+export interface TestCommands {
+  /** Command to run unit/integration tests (e.g. "npx vitest run", "npm test") */
+  unit: string;
+  /** Command to run E2E tests (e.g. "npx playwright test"). Optional */
+  e2e?: string;
+}
+
 export interface PiCoderConfig {
-  /** Command to run the project test suite (e.g. "npm test", "npx vitest run") */
+  /** Command to run the project test suite. Legacy — prefer testCommands */
   testCommand: string;
+  /** Structured test commands: unit and optional e2e */
+  testCommands?: TestCommands;
   /** Maximum review-implement loops before the circuit breaker trips */
   maxLoops: number;
   /** Git merge strategy: "branch-and-merge" or "squash" */
@@ -254,8 +265,10 @@ export interface SpecState {
 export interface GlobalState {
   /** Schema version */
   version: 1;
-  /** Whether orchestrator mode is active */
-  piCoderActive: boolean;
+  /** Current pi-coder mode: off, light (no FSM), or tdd (full lifecycle) */
+  piCoderMode: PiCoderMode;
+  /** @deprecated Use piCoderMode instead. Kept for migration. */
+  piCoderActive?: boolean;
   /** ID of the currently active spec, or null if no spec is in progress */
   activeSpecId: string | null;
   /** ISO timestamp of last write */

@@ -11,7 +11,7 @@
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import type { PiCoderConfig, FSMState, GitCheckpointResult, TestRunResult } from "./types.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, GitCheckpointResult, TestRunResult } from "./types.ts";
 import { StateMachine } from "./state-machine.ts";
 import { registerTools, type ToolDependencies } from "./tools.ts";
 
@@ -220,6 +220,7 @@ function setupMocks(config?: PiCoderConfig) {
     stateMachine: { get current() { return sm; } },
     activeSpecId: { get current() { return mockActiveSpecId; } },
     setActiveSpecId: (id: string | null) => { mockActiveSpecId = id; },
+    piCoderMode: { get current() { return "tdd" as PiCoderMode; } },
     gitOps: mockGit.gitOps as unknown as import("../git.js").GitOperations,
     tddRunner: mockTdd.tddRunner as unknown as import("../tdd-runner.js").TddRunner,
     knowledgeStore: mockKnowledge.knowledgeStore as unknown as import("../knowledge.js").KnowledgeStore,
@@ -454,13 +455,14 @@ describe("Phase 2: pi_coder_git", () => {
 // ---------------------------------------------------------------------------
 
 describe("Phase 3: pi_coder_run_tests", () => {
-  it("blocks when FSM state is not RED_VALIDATE or GREEN_VALIDATE", async () => {
-    const { tools, sm, setActiveSpec } = setupMocks();
-    // IDLE state — should block
+  it("runs tests in any FSM state (always available)", async () => {
+    const { tools, sm } = setupMocks();
+    // IDLE state — should still run, no validation
     const result = await executeTool(tools, "pi_coder_run_tests", {});
-    assert.ok(result.isError, "Should be error in IDLE state");
-    const content = (result.content as Array<{ text: string }>)[0].text;
-    assert.ok(content.includes("not allowed"), `Expected blocked message, got: ${content}`);
+    // Tests may fail (isError=true based on exit code), but the tool should NOT block
+    const details = result.details as Record<string, unknown>;
+    assert.strictEqual(details.validation, undefined, "Should not include validation in non-TDD state");
+    assert.strictEqual(details.isTddValidation, false, "Should not be TDD validation");
   });
 
   it("allows in TDD_RED_VALIDATE state", async () => {

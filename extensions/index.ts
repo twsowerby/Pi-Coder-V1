@@ -22,7 +22,7 @@ import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools } from "../src/tools.ts";
-import type { PiCoderConfig, FSMState } from "../src/types.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, TestCommands } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -33,8 +33,7 @@ import { randomUUID } from "node:crypto";
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Tools available when pi-coder orchestrator mode is active. */
-/** Tools available when pi-coder orchestrator mode is active. Exported for Spec 10 commands. */
+/** Tools available when pi-coder TDD mode is active. Exported for Spec 10 commands. */
 export const ORCHESTRATOR_TOOLS = [
   "ls",
   "find",
@@ -50,7 +49,20 @@ export const ORCHESTRATOR_TOOLS = [
   "intercom",
 ];
 
-/** Tools available when pi-coder is toggled off (normal pi mode). Exported for use by Spec 10 commands. */
+/** Tools available in Light mode — delegation + tests, no FSM or spec tools. */
+export const LIGHT_TOOLS = [
+  "ls",
+  "find",
+  "grep",
+  "subagent",
+  "pi_coder_run_tests",
+  "pi_coder_git",
+  "upsert_knowledge",
+  "interview",
+  "intercom",
+];
+
+/** Tools available when pi-coder is off (normal pi mode). Exported for use by Spec 10 commands. */
 export const NORMAL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 
@@ -59,7 +71,7 @@ export const NORMAL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "l
 // Module-scope state
 // ---------------------------------------------------------------------------
 
-export let piCoderActive = true;
+export let piCoderMode: PiCoderMode = "tdd";
 export let subagentsAvailable = false;
 export let stateMachine: StateMachine;
 export let config: PiCoderConfig;
@@ -151,7 +163,7 @@ function refreshUI(): void {
   if (!sessionCtx) return;
   const ctx = sessionCtx;
 
-  if (!piCoderActive) {
+  if (piCoderMode === "off") {
     // Pi-coder OFF — clear everything
     ctx.ui.setWidget("pi-coder-state", undefined);
     ctx.ui.setWidget("pi-coder-subagent", undefined);
@@ -159,6 +171,29 @@ function refreshUI(): void {
     ctx.ui.setWorkingIndicator(); // restore default
     return;
   }
+
+  if (piCoderMode === "light") {
+    // Light mode — simplified UI
+    const theme = ctx.ui.theme;
+    let widgetLine = theme.fg("accent", "⚡ Light");
+    if (subagentRunning) {
+      widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
+    }
+    ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
+    ctx.ui.setStatus("pi-coder", theme.fg("accent", "⚡ light mode"));
+
+    if (subagentRunning) {
+      ctx.ui.setWorkingIndicator({
+        frames: [theme.fg("accent", "⏣"), theme.fg("muted", "⏣")],
+        intervalMs: 500,
+      });
+    } else {
+      ctx.ui.setWorkingIndicator();
+    }
+    return;
+  }
+
+  // TDD mode — full FSM UI
 
   const state = stateMachine.currentState;
   const specId = activeSpecId;
@@ -252,7 +287,7 @@ function refreshSubagentWidget(): void {
   if (!sessionCtx) return;
   const ctx = sessionCtx;
 
-  if (!piCoderActive || !subagentRunning || !subagentActivity) {
+  if (piCoderMode === "off" || !subagentRunning || !subagentActivity) {
     // No active subagent — clear the widget
     ctx.ui.setWidget("pi-coder-subagent", undefined);
     return;
@@ -362,7 +397,7 @@ export async function persistState(): Promise<void> {
     // 1. Save global state (pointer only)
     const globalState: GlobalState = {
       version: 1,
-      piCoderActive,
+      piCoderMode,
       activeSpecId,
       updatedAt: now,
     };
@@ -514,6 +549,64 @@ function buildOrchestratorPrompt(
     .replace("{{loopCount}}", String(sm.loopCount))
     .replace("{{maxLoops}}", String(config.maxLoops))
     .replace("{{toolList}}", toolList);
+}
+
+/**
+ * Build the light mode system prompt.
+ * Simplified: no FSM, no spec workflow, just delegation + tests + knowledge.
+ * Reads from prompts/pi-coder-light.md if available, otherwise uses a built-in fallback.
+ */
+let lightModePromptTemplate: string | null = null;
+
+function buildLightModePrompt(filteredSnippets: Record<string, string>): string {
+  if (!lightModePromptTemplate) {
+    // Try to load from file
+    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-light.md");
+    try {
+      if (existsSync(promptPath)) {
+        lightModePromptTemplate = readFileSync(promptPath, "utf-8");
+        // Strip YAML frontmatter if present
+        const stripped = lightModePromptTemplate.replace(/^---\n[\s\S]*?---\n/, "");
+        lightModePromptTemplate = stripped.replace(/^\n+/, "");
+      }
+    } catch {
+      // Fall through to built-in
+    }
+
+    if (!lightModePromptTemplate) {
+      // Built-in fallback
+      lightModePromptTemplate = `You are the Pi Coder assistant — a coding assistant that delegates implementation to specialized subagents.
+
+You do NOT edit files directly — you delegate all implementation work to subagents. You decide which subagent to call and when.
+
+Available subagents:
+- pi-coder.researcher — investigate the codebase, find information, understand patterns
+- pi-coder.implementor — write code, run commands, make changes
+- pi-coder.reviewer — review code, run tests, verify correctness
+
+Guidelines:
+- Run tests freely to check your progress (pi_coder_run_tests)
+- Use pi_coder_git for version control operations
+- Persist cross-cutting gotchas and conventions to knowledge (upsert_knowledge)
+- There is no FSM or spec workflow in light mode — use your judgment
+- For simple questions you can answer directly within your tool constraints
+- If a task grows complex enough to need a structured TDD lifecycle, suggest switching to TDD mode with /pi-coder
+
+Available tools:
+{{toolList}}`;
+    }
+  }
+
+  const toolList = Object.entries(filteredSnippets)
+    .map(([name, snippet]) => `- ${name}: ${snippet}`)
+    .join("\n");
+
+  return lightModePromptTemplate.replace("{{toolList}}", toolList);
+}
+
+/** Reset the cached light mode prompt template. */
+export function resetLightModePromptCache(): void {
+  lightModePromptTemplate = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -746,6 +839,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       stateMachine: smRef,
       activeSpecId: { get current() { return activeSpecId; } },
       setActiveSpecId: (id: string | null) => { activeSpecId = id; },
+      piCoderMode: { get current() { return piCoderMode; } },
       gitOps,
       tddRunner,
       knowledgeStore,
@@ -764,7 +858,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // For real-time monitoring, async delegation would be needed (future work).
     if (subagentsAvailable && config.subagentControl.enabled) {
       pi.events.on("subagent:control-event", (data: unknown) => {
-        if (!piCoderActive) return;
+        if (piCoderMode === "off") return;
         const event = data as {
           event?: { type: string; agent: string; runId: string; message: string; reason?: string; turns?: number; toolCount?: number; currentTool?: string; elapsedMs?: number };
           source?: string;
@@ -815,7 +909,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // the subagent tool, giving us the full AgentProgress data.
     if (subagentsAvailable) {
       pi.events.on("tool_execution_update", (data: unknown) => {
-        if (!piCoderActive) return;
+        if (piCoderMode === "off") return;
         const event = data as { toolName: string; partialResult: unknown };
 
         if (event.toolName !== "subagent") return;
@@ -906,8 +1000,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // Integrity check — verify spec directory exists when specId is set
       const integrity = await globalStatePersistence.checkIntegrity(savedGlobalState);
 
-      // Restore toggle — always honour explicit user choice
-      piCoderActive = savedGlobalState.piCoderActive;
+      // Restore mode — migrate from legacy piCoderActive if needed
+      if (savedGlobalState.piCoderMode) {
+        piCoderMode = savedGlobalState.piCoderMode;
+      } else if (savedGlobalState.piCoderActive !== undefined) {
+        // Legacy migration: piCoderActive=true → "tdd", piCoderActive=false → "off"
+        piCoderMode = savedGlobalState.piCoderActive ? "tdd" : "off";
+      }
 
       // Restore active spec pointer
       activeSpecId = savedGlobalState.activeSpecId;
@@ -970,17 +1069,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Initialize nudge state from current FSM state
     resetNudgeState(stateMachine.currentState);
 
-    // Activate orchestrator mode if subagents are available
+    // Activate mode if subagents are available
     if (subagentsAvailable) {
-      if (piCoderActive) {
-        pi.setActiveTools(ORCHESTRATOR_TOOLS);
+      if (piCoderMode !== "off") {
+        const toolSet = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
+        pi.setActiveTools(toolSet);
         refreshUI();
       }
     } else {
-      // Subagents not available — can't activate orchestrator mode
-      piCoderActive = false;
+      // Subagents not available — can't activate any orchestrator mode
+      piCoderMode = "off";
       ctx.ui.notify(
-        "Pi Coder: Orchestrator mode requires pi-subagents. Install with: `pi install npm:pi-subagents`",
+        "Pi Coder: Orchestrator modes require pi-subagents. Install with: `pi install npm:pi-subagents`",
         "warning",
       );
     }
@@ -991,24 +1091,32 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("before_agent_start", async (event, ctx) => {
-    // When inactive or subagents not available, let pi run normally
-    if (!piCoderActive || !subagentsAvailable) return;
+    // When off or subagents not available, let pi run normally
+    if (piCoderMode === "off" || !subagentsAvailable) return;
 
     const { systemPromptOptions } = event;
 
-    // Filter to orchestrator-allowed tools only
+    // Determine which tools and prompt to use based on mode
+    const modeTools = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
+
+    // Filter to mode-appropriate tools only
     const filteredSnippets: Record<string, string> = {};
-    for (const name of ORCHESTRATOR_TOOLS) {
+    for (const name of modeTools) {
       if (systemPromptOptions.toolSnippets?.[name]) {
         filteredSnippets[name] = systemPromptOptions.toolSnippets[name];
       }
     }
 
-    // Build our custom orchestrator prompt
-    const orchestratorPrompt = buildOrchestratorPrompt(
-      stateMachine,
-      filteredSnippets,
-    );
+    // Build the appropriate prompt based on mode
+    let orchestratorPrompt: string;
+    if (piCoderMode === "tdd") {
+      orchestratorPrompt = buildOrchestratorPrompt(
+        stateMachine,
+        filteredSnippets,
+      );
+    } else {
+      orchestratorPrompt = buildLightModePrompt(filteredSnippets);
+    }
 
     // (Guidelines from tools are already embedded in orchestratorPrompt via filteredSnippets)
 
@@ -1047,9 +1155,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     fullPrompt += `\nCurrent working directory: ${systemPromptOptions.cwd?.replace(/\\/g, "/") ?? "."}`;
 
     // -------------------------------------------------------------------
-    // Phase 4: Nudge System (part of before_agent_start)
+    // Phase 4: Nudge System (TDD mode only)
     // -------------------------------------------------------------------
 
+    // Only nudge in TDD mode — light mode has no FSM state to nudge about
+    if (piCoderMode === "tdd") {
     // Increment turn counter
     nudgeState.turnsSinceEntry++;
 
@@ -1095,6 +1205,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         );
       }
     }
+    } // end TDD-mode-only nudge
 
     // Return the replaced system prompt
     return { systemPrompt: fullPrompt };
@@ -1107,20 +1218,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // --- tool_call: Validate against FSM state ---
 
   pi.on("tool_call", async (event) => {
-    if (!piCoderActive) return;
+    if (piCoderMode === "off") return;
 
     const { toolName, input } = event;
 
-    // Default-deny: only ORCHESTRATOR_TOOLS are allowed in orchestrator mode
-    if (!ORCHESTRATOR_TOOLS.includes(toolName)) {
+    // Determine which tools are allowed based on current mode
+    const allowedTools = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
+
+    // Default-deny: only mode-appropriate tools are allowed
+    if (!allowedTools.includes(toolName)) {
       logEvent("tool_call_blocked", {
         toolName,
+        mode: piCoderMode,
         fsmState: stateMachine.currentState,
-        reason: "not_in_orchestrator_tools",
+        reason: "not_in_allowed_tools",
       });
       return {
         block: true,
-        reason: `Tool "${toolName}" is not available in orchestrator mode. Allowed: ${ORCHESTRATOR_TOOLS.join(", ")}`,
+        reason: `Tool "${toolName}" is not available in ${piCoderMode} mode. Allowed: ${allowedTools.join(", ")}`,
       };
     }
 
@@ -1136,27 +1251,25 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
     }
 
-    // Validate pi_coder_run_tests against FSM state
-    if (toolName === "pi_coder_run_tests") {
-      if (!stateMachine.isActionAllowed("pi_coder_run_tests")) {
-        return {
-          block: true,
-          reason: `pi_coder_run_tests is not allowed in state ${stateMachine.currentState}. Allowed states: TDD_RED_VALIDATE, TDD_GREEN_VALIDATE.`,
-        };
+    // --- TDD-mode-only FSM guards ---
+    // In light mode, pi_coder_run_tests and pi_coder_git are always available.
+    // Subagent delegation in light mode has no FSM state restrictions.
+    if (piCoderMode === "tdd") {
+      // pi_coder_run_tests is always allowed (removed FSM guard) — it's read-only
+      // Auto-transitions in tool_result only fire from TDD validation states
+
+      // Validate pi_coder_git against FSM state
+      if (toolName === "pi_coder_git") {
+        if (!stateMachine.isActionAllowed("pi_coder_git")) {
+          return {
+            block: true,
+            reason: `pi_coder_git is not allowed in state ${stateMachine.currentState}. Allowed states: GIT_CHECKPOINT, REVIEWING, MERGING, BLOCKED, IDLE.`,
+          };
+        }
       }
     }
 
-    // Validate pi_coder_git against FSM state
-    if (toolName === "pi_coder_git") {
-      if (!stateMachine.isActionAllowed("pi_coder_git")) {
-        return {
-          block: true,
-          reason: `pi_coder_git is not allowed in state ${stateMachine.currentState}. Allowed states: GIT_CHECKPOINT, REVIEWING, MERGING, BLOCKED, IDLE.`,
-        };
-      }
-    }
-
-    // Validate subagent delegation against FSM state
+    // Validate subagent delegation (both modes)
     if (toolName === "subagent") {
       const targetAgent = extractSubagentTarget(
         input as Record<string, unknown>,
@@ -1165,17 +1278,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // Listing subagents (no target agent) is always allowed — it's discovery, not delegation
       if (targetAgent !== undefined) {
         // Only pi-coder subagents are allowed — block builtins and other packages
-        // The orchestrator must only delegate to pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
         if (!targetAgent.startsWith("pi-coder.")) {
           logEvent("tool_call_blocked", {
             toolName,
             targetAgent,
+            mode: piCoderMode,
             fsmState: stateMachine.currentState,
             reason: "non_pi_coder_agent",
           });
           return {
             block: true,
-            reason: `Subagent delegation to "${targetAgent}" is not allowed in orchestrator mode. Only pi-coder subagents may be used: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer`,
+            reason: `Subagent delegation to "${targetAgent}" is not allowed. Only pi-coder subagents may be used: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer`,
           };
         }
 
@@ -1184,6 +1297,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           logEvent("tool_call_blocked", {
             toolName,
             targetAgent,
+            mode: piCoderMode,
             fsmState: stateMachine.currentState,
             reason: "self_delegation",
           });
@@ -1193,23 +1307,27 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           };
         }
 
-        if (
-          !stateMachine.isActionAllowed("subagent", targetAgent)
-        ) {
-          const validHint = targetAgent === "pi-coder.researcher" && stateMachine.currentState === "IDLE"
-            ? " Hint: Use pi_coder_advance_fsm to advance IDLE → SPEC_WORK first."
-            : "";
-          logEvent("tool_call_blocked", {
-            toolName,
-            targetAgent,
-            fsmState: stateMachine.currentState,
-            reason: "not_allowed_in_state",
-          });
-          return {
-            block: true,
-            reason: `Subagent delegation to "${targetAgent}" is not allowed in state ${stateMachine.currentState}.${validHint}`,
-          };
+        // In TDD mode, validate subagent against FSM state
+        if (piCoderMode === "tdd") {
+          if (
+            !stateMachine.isActionAllowed("subagent", targetAgent)
+          ) {
+            const validHint = targetAgent === "pi-coder.researcher" && stateMachine.currentState === "IDLE"
+              ? " Hint: Use pi_coder_advance_fsm to advance IDLE → SPEC_WORK first."
+              : "";
+            logEvent("tool_call_blocked", {
+              toolName,
+              targetAgent,
+              fsmState: stateMachine.currentState,
+              reason: "not_allowed_in_state",
+            });
+            return {
+              block: true,
+              reason: `Subagent delegation to "${targetAgent}" is not allowed in state ${stateMachine.currentState}.${validHint}`,
+            };
+          }
         }
+        // In light mode, any pi-coder subagent can be called at any time
 
         // Track subagent timing
         subagentStartTime = Date.now();
@@ -1224,8 +1342,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           : "";
 
         // Populate subagentActivity immediately from tool_call data
-        // This gives us the task brief and agent name right away.
-        // If tool_execution_update fires, it will enhance with live progress.
         subagentActivity = {
           agent: targetAgent,
           task: taskInput,
@@ -1255,7 +1371,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               subagentWidgetTimer = null;
             }
           }
-        }, 2000); // Update every 2 seconds
+        }, 2000);
 
         // Log subagent delegation
         const taskStr = typeof (input as Record<string, unknown>).task === "string"
@@ -1266,6 +1382,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           taskSummary: taskStr,
           specId: activeSpecId,
           fsmState: stateMachine.currentState,
+          mode: piCoderMode,
         });
 
         // Mark action as attempted (resets nudge urgency)
@@ -1278,7 +1395,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       nudgeState.actionAttempted = true;
     }
 
-    // Tool is in ORCHESTRATOR_TOOLS and passed state validation — allow
+    // Tool passed validation — allow
     return undefined;
   });
 
@@ -1312,13 +1429,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
     }
 
-    if (!piCoderActive) return;
+    if (piCoderMode === "off") return;
 
     const { details } = event;
     const currentState = stateMachine.currentState;
 
-    // Evidence: interview tool completion in SPEC_WORK → spec_user_approved
-    if (toolName === "interview" && currentState === "SPEC_WORK") {
+    // Evidence: interview tool completion in SPEC_WORK → spec_user_approved (TDD mode only)
+    if (piCoderMode === "tdd" && toolName === "interview" && currentState === "SPEC_WORK") {
       stateMachine.setEvidence("spec_user_approved");
     }
 
@@ -1329,10 +1446,16 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         validation?: { valid: boolean; reason?: string };
         phase?: string;
         currentState?: string;
+        isTddValidation?: boolean;
       } | undefined;
 
-      if (!details2?.validation) return; // Tool was blocked or errored
+      if (!details2?.isTddValidation || !details2?.validation) {
+        // Not in a TDD validation state (or light mode) — return results as-is
+        // No auto-transitions, no evidence
+        return;
+      }
 
+      // We're in TDD mode, in a TDD validation state
       // Mark that tests were run in this state (evidence for transition guards)
       stateMachine.setEvidence("test_run_this_state");
 
@@ -1671,34 +1794,54 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.registerCommand("pi-coder", {
-    description: "Toggle pi-coder orchestrator mode on/off",
+    description: "Switch pi-coder mode",
     handler: async (_args, ctx) => {
-      if (!piCoderActive) {
-        // Turning ON — check pi-subagents availability
-        if (!subagentsAvailable) {
-          ctx.ui.notify(
-            "Pi Coder requires the pi-subagents package. Install with: `pi install npm:pi-subagents`",
-            "error",
-          );
-          logEvent("command", { command: "toggle", result: "blocked_no_subagents" });
-          return;
-        }
+      // Build the mode labels with current state indicators
+      const current = piCoderMode;
+      const modes = [
+        { value: "tdd", label: `TDD Mode (full lifecycle)${current === "tdd" ? "  ◀" : ""}` },
+        { value: "light", label: `Light Mode (delegation, no FSM)${current === "light" ? "  ◀" : ""}` },
+        { value: "off", label: `Off (normal Pi)${current === "off" ? "  ◀" : ""}` },
+      ];
 
-        piCoderActive = true;
-        pi.setActiveTools(ORCHESTRATOR_TOOLS);
-        refreshUI();
-        ctx.ui.notify("Pi Coder: ON — Orchestrator mode active. Use /pi-coder to switch to normal mode.", "info");
-        logEvent("command", { command: "toggle", result: "on" });
-      } else {
-        // Turning OFF
-        piCoderActive = false;
-        pi.setActiveTools(NORMAL_TOOLS);
-        refreshUI();
-        ctx.ui.notify("Pi Coder: OFF — Normal Pi mode. Use /pi-coder to re-activate.", "info");
-        logEvent("command", { command: "toggle", result: "off" });
+      const choice = await ctx.ui.select(
+        "Pi Coder Mode",
+        modes.map(m => m.label),
+      );
+
+      if (choice === undefined) return; // Cancelled
+
+      // choice is the selected label string — find the matching mode
+      const selectedMode = modes.find(m => m.label === choice)?.value as PiCoderMode | undefined;
+      if (!selectedMode || selectedMode === current) return; // No change
+
+      // If switching to any active mode, check pi-subagents availability
+      if (selectedMode !== "off" && !subagentsAvailable) {
+        ctx.ui.notify(
+          "Pi Coder requires the pi-subagents package. Install with: `pi install npm:pi-subagents`",
+          "error",
+        );
+        logEvent("command", { command: "mode_select", result: "blocked_no_subagents" });
+        return;
       }
 
-      // Persist toggle state
+      piCoderMode = selectedMode;
+
+      // Update active tools based on mode
+      const toolSet = piCoderMode === "off" ? NORMAL_TOOLS : (piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS);
+      pi.setActiveTools(toolSet);
+      refreshUI();
+
+      // Notify user of mode change
+      const modeLabels: Record<PiCoderMode, string> = {
+        tdd: "TDD Mode — Full lifecycle with spec, RED/GREEN, and review",
+        light: "Light Mode — Delegation with tests, no FSM",
+        off: "Off — Normal Pi mode",
+      };
+      ctx.ui.notify(`Pi Coder: ${modeLabels[piCoderMode]}`, "info");
+      logEvent("command", { command: "mode_select", result: piCoderMode });
+
+      // Persist mode state
       await persistState();
     },
   });
@@ -1725,6 +1868,32 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // Fall through to default
     }
     return "npm test";
+  }
+
+  /**
+   * Detect structured test commands (unit + optional e2e) from package.json.
+   */
+  function detectTestCommands(cwd: string): TestCommands {
+    const pkgPath = join(cwd, "package.json");
+    try {
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        const scripts = pkg.scripts ?? {};
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        const unit = scripts["test:ci"] || scripts.vitest ? "npx vitest run" : scripts.jest ? "npx jest" : scripts.test ? "npm test" : "npm test";
+        const result: TestCommands = { unit };
+        // Detect E2E test runners
+        if (deps?.playwright || scripts["test:e2e"]) {
+          result.e2e = scripts["test:e2e"] || "npx playwright test";
+        } else if (deps?.cypress || scripts["test:e2e"]) {
+          result.e2e = scripts["test:e2e"] || "npx cypress run";
+        }
+        return result;
+      }
+    } catch {
+      // Fall through
+    }
+    return { unit: "npm test" };
   }
 
   /**
@@ -1765,8 +1934,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       const configPath = join(cwd, ".pi-coder", "config.json");
       if (!existsSync(configPath)) {
         const detectedTestCommand = detectTestCommand(cwd);
+        const detectedTestCommands = detectTestCommands(cwd);
         const defaultConfig: PiCoderConfig = {
           testCommand: detectedTestCommand,
+          testCommands: detectedTestCommands,
           maxLoops: 3,
           gitStrategy: "branch-and-merge",
           branchPrefix: "pi-coder/",

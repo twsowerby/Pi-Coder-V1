@@ -15,7 +15,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { FSMState, PiCoderConfig, SpecFile } from "./types.ts";
+import type { FSMState, PiCoderConfig, PiCoderMode, SpecFile, TestRunResult } from "./types.ts";
 import { StateMachine } from "./state-machine.ts";
 import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
@@ -33,6 +33,8 @@ export interface ToolDependencies {
   activeSpecId: { get current(): string | null };
   /** Setter for the module-level active spec ID. */
   setActiveSpecId: (id: string | null) => void;
+  /** Getter for the current pi-coder mode. */
+  piCoderMode: { get current(): PiCoderMode };
   gitOps: GitOperations;
   tddRunner: TddRunner;
   knowledgeStore: KnowledgeStore;
@@ -58,6 +60,7 @@ const PI_CODER_GIT_PARAMS = Type.Object({
 });
 
 const PI_CODER_RUN_TESTS_PARAMS = Type.Object({
+  suite: Type.Optional(StringEnum(["unit", "e2e", "all"] as const, { description: "Which test suite to run. Defaults to 'unit'. Use 'e2e' for Playwright/Cypress, 'all' for both." })),
   command: Type.Optional(Type.String({ description: "Override test command from config" })),
   filter: Type.Optional(Type.String({ description: "Test file/pattern filter" })),
 });
@@ -213,63 +216,111 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     name: "pi_coder_run_tests",
     label: "Run Tests",
     description:
-      "Execute the test suite for TDD validation. " +
-      "Returns structured results including exit code, pass/fail counts, and validation verdict.",
-    promptSnippet: "Run test suite and validate TDD RED/GREEN phase compliance",
+      "Execute the project test suite. Available in any mode and state — running tests is always useful. " +
+      "In TDD mode, results from TDD_RED_VALIDATE/TDD_GREEN_VALIDATE states trigger auto-transitions. " +
+      "In other states, results are returned without FSM side effects.",
+    promptSnippet: "Run test suite — unit, e2e, or both",
     promptGuidelines: [
-      "Use pi_coder_run_tests only during TDD_RED_VALIDATE or TDD_GREEN_VALIDATE states.",
-      "RED phase: tests MUST fail — if they pass, tests may be tautological or the feature already exists.",
-      "GREEN phase: tests MUST pass — if they fail, the implementation is incomplete.",
+      "Run unit tests to verify code correctness. Run e2e tests for integration verification.",
+      "In TDD mode: RED phase expects tests to fail, GREEN phase expects them to pass.",
+      "In Light mode: run tests freely to check progress at any time.",
     ],
     parameters: PI_CODER_RUN_TESTS_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      // Validate FSM state
-      if (!smRef.current.isActionAllowed("pi_coder_run_tests")) {
+      const suite = params.suite ?? "unit";
+
+      // Resolve which test command(s) to run
+      const commands: string[] = [];
+      if (params.command) {
+        // Explicit override
+        commands.push(params.command);
+      } else if (deps.config.testCommands) {
+        // Structured testCommands from config
+        if (suite === "unit" || suite === "all") commands.push(deps.config.testCommands.unit);
+        if (suite === "e2e" && deps.config.testCommands.e2e) commands.push(deps.config.testCommands.e2e);
+        if (suite === "all" && deps.config.testCommands.e2e) commands.push(deps.config.testCommands.e2e);
+      } else {
+        // Legacy testCommand
+        commands.push(deps.config.testCommand);
+      }
+
+      if (commands.length === 0) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: pi_coder_run_tests is not allowed in state ${smRef.current.currentState}. Allowed states: TDD_RED_VALIDATE, TDD_GREEN_VALIDATE.`,
-            },
-          ],
-          details: {
-            valid: false,
-            error: `Not allowed in state ${smRef.current.currentState}`,
-            currentState: smRef.current.currentState,
-          },
+          content: [{ type: "text" as const, text: `No test command configured for suite '${suite}'. Add a 'testCommands' entry to .pi-coder/config.json.` }],
+          details: { valid: false, error: `No test command for suite '${suite}'`, suite },
           isError: true,
         };
       }
 
-      // Run the tests
-      const testResult = await tddRunner.runTests(params.filter);
-
-      // Validate based on current FSM state
+      // Run each command
+      const results: Array<{ command: string; testResult: TestRunResult; validation?: { valid: boolean; reason?: string } }> = [];
       const currentState = smRef.current.currentState;
-      const validation =
-        currentState === "TDD_RED_VALIDATE"
-          ? tddRunner.validateRedPhase(testResult)
-          : tddRunner.validateGreenPhase(testResult);
+      const isTddValidation = currentState === "TDD_RED_VALIDATE" || currentState === "TDD_GREEN_VALIDATE";
 
-      const phase = currentState === "TDD_RED_VALIDATE" ? "RED" : "GREEN";
-      const text = validation.valid
-        ? `${phase} validation: PASSED — ${phase === "RED" ? "tests fail as expected" : "tests pass as expected"}`
-        : `${phase} validation: FAILED — ${validation.reason ?? "unknown"}`;
+      for (const cmd of commands) {
+        // Temporarily override testCommand for TddRunner
+        const savedTestCommand = deps.config.testCommand;
+        deps.config.testCommand = cmd;
+        const testResult = await tddRunner.runTests(params.filter);
+        deps.config.testCommand = savedTestCommand;
+
+        let validation: { valid: boolean; reason?: string } | undefined;
+        if (isTddValidation) {
+          validation = currentState === "TDD_RED_VALIDATE"
+            ? tddRunner.validateRedPhase(testResult)
+            : tddRunner.validateGreenPhase(testResult);
+        }
+
+        results.push({ command: cmd, testResult, validation });
+      }
+
+      // Build response text
+      const lines: string[] = [];
+      for (const r of results) {
+        if (results.length > 1) lines.push(`--- ${r.command} ---`);
+        if (r.validation) {
+          const phase = currentState === "TDD_RED_VALIDATE" ? "RED" : "GREEN";
+          lines.push(r.validation.valid
+            ? `${phase} validation: PASSED — ${phase === "RED" ? "tests fail as expected" : "tests pass as expected"}`
+            : `${phase} validation: FAILED — ${r.validation.reason ?? "unknown"}`);
+        } else {
+          const passed = r.testResult.passed ?? "?";
+          const failed = r.testResult.failed ?? "?";
+          lines.push(r.testResult.exitCode === 0
+            ? `Tests passed: ${passed} passed, ${failed} failed`
+            : `Tests failed: ${passed} passed, ${failed} failed (exit code ${r.testResult.exitCode})`);
+        }
+      }
+      const text = lines.join("\n");
+
+      // For TDD validation states, include structured details for auto-transition handling
+      const firstResult = results[0];
+      const details: Record<string, unknown> = {
+        suite,
+        commands: commands,
+        currentState,
+        isTddValidation,
+        exitCode: firstResult.testResult.exitCode,
+        passed: firstResult.testResult.passed,
+        failed: firstResult.testResult.failed,
+        timedOut: firstResult.testResult.timedOut,
+      };
+
+      if (firstResult.validation) {
+        details.validation = firstResult.validation;
+        details.phase = currentState === "TDD_RED_VALIDATE" ? "RED" : "GREEN";
+      }
+
+      // Include the full test output from the first result
+      if (firstResult.testResult.output) {
+        details.testResult = firstResult.testResult;
+      }
 
       return {
         content: [{ type: "text" as const, text }],
-        details: {
-          testResult,
-          validation,
-          phase,
-          currentState,
-          exitCode: testResult.exitCode,
-          passed: testResult.passed,
-          failed: testResult.failed,
-          timedOut: testResult.timedOut,
-        },
-        isError: !validation.valid,
+        details,
+        isError: firstResult.validation ? !firstResult.validation.valid : (firstResult.testResult.exitCode !== 0),
       };
     },
   });
