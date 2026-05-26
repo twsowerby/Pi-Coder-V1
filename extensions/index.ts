@@ -2105,23 +2105,27 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       // 4d. Create .pi-coder/damage-control.json — only if it doesn't exist
+      // Scaffold the full defaults so the file is self-documenting —
+      // the user can see what's configured and edit it.
       const damageControlPath = join(cwd, ".pi-coder", "damage-control.json");
       if (!existsSync(damageControlPath)) {
         const damageControlContent = JSON.stringify({
           enabled: true,
           rules: {
-            // Add project-specific bash patterns here:
-            // bashToolPatterns: [
-            //   { pattern: "\\bdropdb\\b", reason: "Don't drop databases programmatically." },
-            // ],
-            // Add project-specific protected paths here:
-            // zeroAccessPaths: ["secrets/", ".env.staging"],
-            // readOnlyPaths: ["config/defaults.json"],
-            // noDeletePaths: ["migrations/"],
-            //
-            // Note: .env, .env.local, .env.production are zero-access by default
-            // (blocked from read, write, grep, bash). If the agent needs to read
-            // a non-secret env value, add it to readOnlyPaths instead.
+            bashToolPatterns: [
+              { pattern: "\\brm\\s+(-rf?|--recursive|-r\\s*-f)", reason: "Recursive delete is destructive — describe what needs removing and use a targeted approach" },
+              { pattern: "\\bsudo\\b", reason: "Sudo commands require host-level access — ask the user to run it" },
+              { pattern: "\\bgit\\s+push\\s+.*--force", reason: "Force push rewrites shared history — use a new commit or branch" },
+              { pattern: "\\bgit\\s+push\\s+.*--delete", reason: "Deleting remote branches is destructive" },
+              { pattern: "\\bgit\\s+reset\\s+--hard", reason: "Hard reset discards uncommitted changes — use pi_coder_git rollback" },
+              { pattern: "\\bgit\\s+clean\\s+-", reason: "Git clean removes untracked files — clarify what needs removing" },
+              { pattern: "\\bchmod\\s+.*777\\b", reason: "chmod 777 is a security risk — use minimum permissions" },
+              { pattern: "\\btruncate\\b", reason: "Truncating files is destructive — write new content instead" },
+              { pattern: "\\b(?:mkfs|dd\\s+if=)\\b", reason: "Can destroy filesystems — do not attempt to work around this" },
+            ],
+            zeroAccessPaths: [".env", ".env.local", ".env.production", "~/.ssh/", "~/.gnupg/"],
+            readOnlyPaths: [".git/config"],
+            noDeletePaths: [".git/", "node_modules/"],
           },
         }, null, 2) + "\n";
         writeFileSync(damageControlPath, damageControlContent, "utf-8");

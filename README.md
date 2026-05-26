@@ -311,33 +311,34 @@ When a destructive operation is blocked, the extension returns **actionable feed
 
 ### Configuring rules
 
-Rules are loaded from `.pi-coder/damage-control.json` (created by `/pi-coder-init`). When the file doesn't exist, sensible defaults are used.
+Rules are loaded from `.pi-coder/damage-control.json` (created by `/pi-coder-init` with full defaults). When the file doesn't exist, the same defaults are used internally.
+
+The scaffolded file contains all the defaults above so you can see exactly what's configured and edit it in place. Add, remove, or modify rules as needed for your project.
+
+To add a project-specific rule, just append to the relevant array:
 
 ```json
 {
-  "enabled": true,
   "rules": {
     "bashToolPatterns": [
-      {
-        "pattern": "\\bdropdb\\b",
-        "reason": "Don't drop databases programmatically"
-      }
+      { "pattern": "\\bdropdb\\b", "reason": "Don't drop databases programmatically" }
     ],
-    "zeroAccessPaths": ["secrets/", ".env.staging"],
-    "readOnlyPaths": ["config/defaults.json"],
-    "noDeletePaths": ["migrations/"]
+    "zeroAccessPaths": [".env", ".env.local", ".env.production", "~/.ssh/", "~/.gnupg/", "secrets/"],
+    "readOnlyPaths": [".git/config"],
+    "noDeletePaths": [".git/", "node_modules/"]
   }
 }
 ```
 
-Add project-specific rules alongside the defaults. To disable damage-control entirely, set `"enabled": false`.
+To disable damage-control entirely, set `"enabled": false`.
 
-**Adjusting .env access:** By default, `.env`, `.env.local`, and `.env.production` are zero-access (no read at all). If the agent needs to read a non-secret env value, add the file to `readOnlyPaths` — it can then verify values exist without being blocked, but still can't write to it.
+**Adjusting .env access:** By default, `.env`, `.env.local`, and `.env.production` are zero-access (no read at all). If the agent needs to read a non-secret env value, move the file from `zeroAccessPaths` to `readOnlyPaths` — it can then verify values exist while still preventing writes.
 
 ```json
 {
   "rules": {
-    "readOnlyPaths": [".env"]
+    "zeroAccessPaths": [".env.local", ".env.production", "~/.ssh/", "~/.gnupg/"],
+    "readOnlyPaths": [".env", ".git/config"]
   }
 }
 ```
