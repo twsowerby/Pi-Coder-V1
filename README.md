@@ -59,6 +59,7 @@ pi install npm:pi-subagents
 
 This creates:
 - `.pi-coder/knowledge/` — persisted project learnings
+- `.pi-coder/knowledge/design_system.md` — starter template for UI patterns and component library
 - `.pi-coder/specs/` — spec files for each feature
 - `.pi-coder/config.json` — configuration (auto-detects your test runner)
 - `.pi/agents/pi-coder-*.md` — agent definition files (copied from package defaults)
@@ -334,6 +335,7 @@ The `.pi-coder/knowledge/` directory stores persisted project learnings. The orc
 
 Knowledge file naming rules: `.md` extension, 3-50 character stem, lowercase alphanumeric + hyphens only. Example filenames:
 
+- `design_system.md` — **UI component library, patterns, and conventions (scaffolded by init)**
 - `supabase-auth-flow.md`
 - `error-handling-patterns.md`
 - `api-route-conventions.md`
@@ -342,16 +344,26 @@ Knowledge file naming rules: `.md` extension, 3-50 character stem, lowercase alp
 
 **What NOT to persist:** Task-specific decisions, temporary workarounds, anything obvious from reading code.
 
+### Design System File
+
+The `design_system.md` knowledge file is particularly important for projects with a UI. It documents the component library, spacing system, colors, typography, and interaction patterns so the implementor doesn't invent its own. The `/pi-coder-init` command creates a starter template with structured sections — fill it in for your project.
+
+When a spec involves UI work, the orchestrator checks for this file:
+- **If it exists** — the spec references its components and patterns as constraints the implementor must follow
+- **If it's missing** — the orchestrator suggests you create one before proceeding, to prevent the implementor from freestyling UI decisions
+- **If the spec has no UI surface** — the design system check is skipped entirely
+
 ## The TDD Lifecycle
 
 ### Research & Spec
 
 1. You make a request → orchestrator advances the FSM to SPEC_WORK (this creates the spec directory with `request.md` for crash recovery)
 2. Orchestrator delegates to researcher (can do multiple rounds)
-3. Orchestrator prunes research to only what's needed: acceptance criteria, constraints, key files
-4. Orchestrator creates an **implementation plan** — breaking the spec into atomic units, each with its own ACs and key files
-5. Orchestrator presents the spec for approval via `interview` with **multiple focused questions** (scope, ACs, constraints, plan) — not one big dump
-6. On approval: `pi_coder_advance_fsm` advances to SPEC_APPROVED (FSM guard requires `spec_saved` + `spec_user_approved` evidence), then git checkpoint creates a feature branch
+3. Orchestrator checks for `design_system.md` in knowledge if the spec involves UI work — if missing, suggests you create one
+4. Orchestrator prunes research to only what's needed: acceptance criteria, constraints, key files
+5. Orchestrator creates an **implementation plan** — breaking the spec into atomic units, each with its own ACs and key files
+6. Orchestrator presents the spec for approval via `interview` with **multiple focused questions** (scope, ACs, constraints, plan) — not one big dump
+7. On approval: `pi_coder_advance_fsm` advances to SPEC_APPROVED (FSM guard requires `spec_saved` + `spec_user_approved` evidence), then git checkpoint creates a feature branch
 
 ### Per-Unit TDD Cycle
 
