@@ -4,6 +4,40 @@ A TDD orchestrator/worker harness for [pi](https://github.com/earendil-works/pi-
 
 Pi Coder replaces the default "you're a coding assistant" mode with a structured orchestrator that delegates all implementation to specialized subagents. It offers two modes: **TDD mode** enforces a strict Red→Green→Review lifecycle with a state machine; **Light mode** gives you the same delegation model without the ceremony. The orchestrator cannot edit files, read file contents, or run arbitrary commands — it can only delegate, observe, and decide.
 
+## Philosophy
+
+**Fat prompts, thin harness.** All the intelligence lives in the subagent system prompts. The extension is minimal plumbing — a state machine, tool guards, and auto-transitions. If the LLM can skip a step, it will, so the FSM enforces the non-negotiables (spec approval before implementation, TDD discipline, review before merge). Everything else is guidance, not gates.
+
+**The orchestrator is a manager, not an engineer.** It cannot edit files, read source code, or run arbitrary commands. It delegates, observes results, and makes decisions. This isn't a limitation — it's the point. A manager who can't do the work themselves is forced to communicate clearly, and clear communication produces better specs, better reviews, and better code.
+
+**Deterministic where it matters, LLM-driven where it doesn't.** Test results auto-advance the FSM. Review verdicts auto-transition. But the orchestrator decides what to research, how to break work into units, and when to ask the user for clarification. The machine handles the bookkeeping; the LLM handles the judgment.
+
+## Recommended Extensions
+
+Pi Coder works on its own, but two pi packages make it significantly more effective:
+
+### [pi-intercom](https://www.npmjs.com/package/pi-intercom) — Session Coordination
+
+Provides the `intercom` tool that Pi Coder exposes to the orchestrator. Without it, the orchestrator can still coordinate subagents, but `intercom`-based session-to-session messaging won't be available.
+
+```bash
+pi install npm:pi-intercom
+```
+
+### [pi-web-access](https://www.npmjs.com/package/pi-web-access) — Web Research & Documentation Lookup
+
+Gives the researcher subagent the ability to search the web and fetch documentation. Without it, the researcher is limited to local codebase exploration — no Stack Overflow, no library docs, no API references. For any project that depends on external libraries or APIs, this is essential.
+
+```bash
+pi install npm:pi-web-access
+```
+
+Install both for the full experience:
+
+```bash
+pi install npm:pi-intercom npm:pi-web-access
+```
+
 ## How It Works
 
 Pi Coder adds an **orchestrator mode** to pi. When active, your pi session transforms:
