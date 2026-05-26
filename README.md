@@ -20,6 +20,7 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
 - [Configuration](#configuration)
 - [Customization](#customization)
   - [MCP Server Access for Subagents](#mcp-server-access-for-subagents)
+  - [Per-Agent Model Selection](#per-agent-model-selection)
 - [The TDD Lifecycle](#the-tdd-lifecycle)
 - [Extension Events](#extension-events)
 - [Project Structure](#project-structure)
@@ -736,6 +737,56 @@ tools: read, bash, grep, find, ls, mcp:supabase/query
 | Reviewer | *(usually none)* | Reviewer checks code, not external services |
 
 **Note:** Global `directTools: true` in mcp.json is **not** enough for subagents — the `mcp:` entries must be in the agent frontmatter. This is a security feature: you explicitly control which subagents can reach which external services. The generic `mcp` proxy tool is still available for discovery when MCP tools aren't declared explicitly.
+
+### Per-Agent Model Selection
+
+Each subagent can run on a different model. Set `model` and `fallbackModels` in the agent frontmatter to control which model handles each role:
+
+Edit `.pi/agents/pi-coder-reviewer.md`:
+
+```markdown
+---
+name: reviewer
+package: pi-coder
+description: Evaluates implementation against spec brief for TDD integrity, correctness, and security
+tools: read, bash, grep, find, ls
+model: anthropic/claude-sonnet-4
+fallbackModels: openai/gpt-5-mini, anthropic/claude-haiku-4-5
+---
+```
+
+**Model ID formats:**
+
+| Format | Example | Behavior |
+|---|---|---|
+| Bare ID | `claude-sonnet-4` | Prefers the current provider if it offers this model, otherwise unique registry match. Ambiguous if multiple providers offer the same ID. |
+| Provider/ID | `neural-watt/zai-org/GLM-5.1-FP8` | Always resolves directly. Unambiguous. |
+| With thinking | `anthropic/claude-sonnet-4:high` | Appends thinking level as a suffix. |
+
+**Fallback models** are tried in order on provider failures (rate limits, auth errors, timeouts, service unavailable). Ordinary task failures (wrong answer, syntax error) do **not** trigger fallback — only infrastructure-level failures.
+
+**Where to set models (priority: highest wins):**
+
+| Method | Scope | Priority |
+|---|---|---|
+| `subagent({ model: "..." })` per-call override | Single delegation | Highest |
+| `.pi/settings.json` → `subagents.agentOverrides` | Project-wide | Medium |
+| `~/.pi/agent/settings.json` → `subagents.agentOverrides` | User-global | Lower |
+| Agent frontmatter `model:` field | Agent default | Lowest |
+| Pi default model | Session default | Fallback |
+
+Project overrides in `.pi/settings.json` beat user overrides in `~/.pi/agent/settings.json`.
+
+**Common patterns:**
+
+| Subagent | Model strategy | Why |
+|---|---|---|
+| Researcher | Fast, cheap model (e.g. `haiku`-class) | Research is wide but shallow — speed matters more than depth |
+| Implementor | Strong coding model (e.g. `sonnet`-class) | Code generation quality directly impacts TDD cycle efficiency |
+| Reviewer | Strong reasoning model, maybe with `:high` thinking | Review requires careful analysis — the extra thinking budget pays off |
+| Reviewer | `fallbackModels: openai/gpt-5-mini` | Insurance against provider outages during critical review step |
+
+**Interplay with `models.json`:** Pi's `models.json` defines which providers and models are *available*. The `model` field in frontmatter or settings is a *selector* — it picks from that registry. If you specify a model that isn't configured in `models.json`, the subagent call will fail. All models used in agent frontmatter or fallback lists must exist in your `models.json` configuration.
 
 ### The Orchestrator Skill
 
