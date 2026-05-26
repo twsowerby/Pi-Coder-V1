@@ -307,11 +307,25 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             ? `${phase} validation: PASSED — ${phase === "RED" ? "tests fail as expected" : "tests pass as expected"}`
             : `${phase} validation: FAILED — ${r.validation.reason ?? "unknown"}`);
         } else {
-          const passed = r.testResult.passed ?? "?";
-          const failed = r.testResult.failed ?? "?";
-          lines.push(r.testResult.exitCode === 0
-            ? `Tests passed: ${passed} passed, ${failed} failed`
-            : `Tests failed: ${passed} passed, ${failed} failed (exit code ${r.testResult.exitCode})`);
+          const passed = r.testResult.passed;
+          const failed = r.testResult.failed;
+          if (passed !== null && failed !== null) {
+            lines.push(r.testResult.exitCode === 0
+              ? `Tests passed: ${passed} passed, ${failed} failed`
+              : `Tests failed: ${passed} passed, ${failed} failed (exit code ${r.testResult.exitCode})`);
+          } else {
+            // Couldn't parse counts — include the raw output so the LLM can read it
+            lines.push(r.testResult.exitCode === 0
+              ? "Tests passed (exit code 0)"
+              : `Tests failed (exit code ${r.testResult.exitCode})`);
+          }
+          // Always include test output — the LLM needs to see what failed
+          if (r.testResult.output) {
+            lines.push("");
+            lines.push("```" );
+            lines.push(r.testResult.output);
+            lines.push("```");
+          }
         }
       }
       const text = lines.join("\n");

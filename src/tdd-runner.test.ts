@@ -278,6 +278,86 @@ describe("TddRunner - Phase 2: Result Parsing", () => {
     assert.strictEqual(result.passed, null);
     assert.strictEqual(result.failed, null);
   });
+
+  it("should parse Node built-in test runner format", async () => {
+    const config = makeConfig();
+    const { fn: execMock } = makeMockExec([
+      {
+        stdout: "ℹ tests 31\nℹ suites 11\nℹ pass 30\nℹ fail 1",
+        code: 1,
+      },
+    ]);
+
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    assert.strictEqual(result.passed, 30);
+    assert.strictEqual(result.failed, 1);
+  });
+
+  it("should parse Node test runner with no failures", async () => {
+    const config = makeConfig();
+    const { fn: execMock } = makeMockExec([
+      {
+        stdout: "ℹ tests 31\nℹ pass 31",
+        code: 0,
+      },
+    ]);
+
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    assert.strictEqual(result.passed, 31);
+    assert.strictEqual(result.failed, 0);
+  });
+
+  it("should parse Playwright output with failures", async () => {
+    const config = makeConfig();
+    const { fn: execMock } = makeMockExec([
+      {
+        stdout: "5 passed (2 failed, 1 flaky)",
+        code: 1,
+      },
+    ]);
+
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    assert.strictEqual(result.passed, 5);
+    assert.strictEqual(result.failed, 2);
+  });
+
+  it("should parse Playwright output with no failures", async () => {
+    const config = makeConfig();
+    const { fn: execMock } = makeMockExec([
+      {
+        stdout: "3 passed",
+        code: 0,
+      },
+    ]);
+
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    assert.strictEqual(result.passed, 3);
+    assert.strictEqual(result.failed, 0);
+  });
+
+  it("should parse generic passing/failing format", async () => {
+    const config = makeConfig();
+    const { fn: execMock } = makeMockExec([
+      {
+        stdout: "8 passing, 2 failing",
+        code: 1,
+      },
+    ]);
+
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    assert.strictEqual(result.passed, 8);
+    assert.strictEqual(result.failed, 2);
+  });
 });
 
 // ---------------------------------------------------------------------------

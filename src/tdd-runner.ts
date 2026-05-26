@@ -180,6 +180,10 @@ export class TddRunner {
    * Supported formats:
    * - Vitest: "Tests  X passed, Y failed" or "Tests  X passed"
    * - Jest:   "Tests:  X passed, Y failed, Z total" or "Tests:  X passed, Z total"
+   * - Node test runner: "ℹ pass X\nℹ fail Y"
+   * - Playwright: "X passed (Y failed, Z flaky)" or "X passed"
+   * - Generic: "X passing, Y failing"
+   * - Generic: "X passed, Y failed"
    *
    * Returns null for both counts if no known pattern matches.
    * Never throws — exit code is the authoritative result.
@@ -215,6 +219,50 @@ export class TddRunner {
     if (jestPassedOnly) {
       return {
         passed: parseInt(jestPassedOnly[1], 10),
+        failed: 0,
+      };
+    }
+
+    // Try Node built-in test runner format: "ℹ pass X\n...\nℹ fail Y"
+    const nodePass = output.match(/ℹ\s+pass\s+(\d+)/);
+    const nodeFail = output.match(/ℹ\s+fail\s+(\d+)/);
+    if (nodePass) {
+      return {
+        passed: parseInt(nodePass[1], 10),
+        failed: nodeFail ? parseInt(nodeFail[1], 10) : 0,
+      };
+    }
+
+    // Try Playwright format: "X passed (Y failed, Z flaky)" or "X passed"
+    const pwWithFailures = output.match(/(\d+)\s+passed\s+\((\d+)\s+failed/);
+    if (pwWithFailures) {
+      return {
+        passed: parseInt(pwWithFailures[1], 10),
+        failed: parseInt(pwWithFailures[2], 10),
+      };
+    }
+
+    const pwPassedOnly = output.match(/(\d+)\s+passed/);
+    if (pwPassedOnly) {
+      return {
+        passed: parseInt(pwPassedOnly[1], 10),
+        failed: 0,
+      };
+    }
+
+    // Try generic format: "X passing, Y failing" or "X passed, Y failed"
+    const genericWithFailures = output.match(/(\d+)\s+pass(?:ed|ing),?\s+(\d+)\s+fail(?:ed|ing)/);
+    if (genericWithFailures) {
+      return {
+        passed: parseInt(genericWithFailures[1], 10),
+        failed: parseInt(genericWithFailures[2], 10),
+      };
+    }
+
+    const genericPassedOnly = output.match(/(\d+)\s+pass(?:ed|ing)/);
+    if (genericPassedOnly) {
+      return {
+        passed: parseInt(genericPassedOnly[1], 10),
         failed: 0,
       };
     }
