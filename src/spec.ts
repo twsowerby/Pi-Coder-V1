@@ -42,15 +42,23 @@ export function generateSpecId(
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
 
-  const base = slug || "spec";
+  const name = slug || "spec";
 
-  if (!existingSpecs.includes(base)) return base;
+  // Timestamp prefix: YYYY-MM-DD-HHmm — prevents duplicate names,
+  // gives natural chronological ordering
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+
+  const id = `${timestamp}-${name}`;
+
+  if (!existingSpecs.includes(id)) return id;
 
   let counter = 2;
-  while (existingSpecs.includes(`${base}-${counter}`)) {
+  while (existingSpecs.includes(`${id}-${counter}`)) {
     counter++;
   }
-  return `${base}-${counter}`;
+  return `${id}-${counter}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,22 +73,25 @@ export function generateSpecId(
  * - `state.json` — FSM state, evidence flags, git ref (machine-readable)
  */
 export class SpecManager {
-  private readonly specsDir: string;
+  private readonly _specsDir: string;
+
+  /** The specs directory path (e.g., .pi-coder/specs/). */
+  get specsDir(): string { return this._specsDir; }
 
   constructor(specsDir: string) {
-    this.specsDir = specsDir;
+    this._specsDir = specsDir;
   }
 
   /** Get the directory path for a spec ID. */
   getSpecDir(specId: string): string {
-    return join(this.specsDir, specId);
+    return join(this._specsDir, specId);
   }
 
   /** Check if a spec directory exists. */
   specDirExists(specId: string): boolean {
     // Sync check — used in integrity validation
     try {
-      accessSync(join(this.specsDir, specId));
+      accessSync(join(this._specsDir, specId));
       return true;
     } catch {
       return false;
@@ -90,10 +101,51 @@ export class SpecManager {
   /** Async version of specDirExists. */
   async specDirExistsAsync(specId: string): Promise<boolean> {
     try {
-      await access(join(this.specsDir, specId));
+      await access(join(this._specsDir, specId));
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Initialize a spec directory early (on SPEC_WORK entry).
+   * Creates the directory + request.md + empty state so that
+   * crashes mid-spec-work don't lose the user's original request.
+   * Returns the spec directory path.
+   */
+  async initSpecDir(specId: string, userRequest: string): Promise<string> {
+    const specDir = this.getSpecDir(specId);
+    await mkdir(specDir, { recursive: true });
+
+    // Write the user's original request
+    const requestPath = join(specDir, "request.md");
+    await writeFile(requestPath, userRequest, "utf-8");
+
+    return specDir;
+  }
+
+  /**
+   * Save (or overwrite) the user's original request.
+   * Useful if the request is refined across multiple research rounds.
+   */
+  async saveRequest(specId: string, userRequest: string): Promise<void> {
+    const requestPath = join(this.getSpecDir(specId), "request.md");
+    await writeFile(requestPath, userRequest, "utf-8");
+  }
+
+  /**
+   * Read the user's original request. Returns null if not found.
+   */
+  async readRequest(specId: string): Promise<string | null> {
+    const requestPath = join(this.getSpecDir(specId), "request.md");
+    try {
+      return await readFile(requestPath, "utf-8");
+    } catch (err: unknown) {
+      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw err;
     }
   }
 
@@ -167,11 +219,25 @@ export class SpecManager {
   }
 
   /**
+   * Check if a spec directory exists but has no spec.md (i.e., abandoned).
+   * Returns specId if abandoned, null if not.
+   */
+  isAbandoned(specId: string): boolean {
+    if (!this.specDirExists(specId)) return false;
+    try {
+      accessSync(join(this.getSpecDir(specId), "spec.md"));
+      return false; // spec.md exists — not abandoned
+    } catch {
+      return true; // Directory exists but no spec.md
+    }
+  }
+
+  /**
    * List all spec IDs in the specs directory (subdirectory names).
    */
   async listSpecs(): Promise<string[]> {
     try {
-      const entries = await readdir(this.specsDir, { withFileTypes: true });
+      const entries = await readdir(this._specsDir, { withFileTypes: true });
       return entries
         .filter((e) => e.isDirectory())
         .map((e) => e.name)

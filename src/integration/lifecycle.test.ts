@@ -287,9 +287,9 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     // --- Intake & Research ---
     assert.strictEqual(stateMachine.currentState, "IDLE");
 
-    // Generate spec ID from user request
+    // Generate spec ID from user request (now includes timestamp prefix)
     const specId = generateSpecId("string reversal utility", []);
-    assert.strictEqual(specId, "string-reversal-utility");
+    assert.ok(specId.endsWith("-string-reversal-utility"), `Expected ID ending with -string-reversal-utility, got: ${specId}`);
 
     // Transition: IDLE → SPEC_WORK
     forceTransition(stateMachine, "SPEC_WORK");

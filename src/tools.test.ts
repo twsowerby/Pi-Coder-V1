@@ -174,15 +174,32 @@ function createMockSpecManager() {
       createError = error ?? "Spec error";
     },
     specManager: {
+      specsDir: "/tmp/test-specs",
       async createSpec(spec: { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[] }>; status: string }) {
         calls.push({ method: "createSpec", args: [spec] });
         if (createShouldThrow) throw new Error(createError);
         specs.set(spec.id, spec);
-        return `.pi-coder/specs/${spec.id}.md`;
+        return `.pi-coder/specs/${spec.id}/spec.md`;
       },
       async readSpec(id: string) {
         calls.push({ method: "readSpec", args: [id] });
         return specs.get(id) ?? null;
+      },
+      async listSpecs() {
+        calls.push({ method: "listSpecs", args: [] });
+        return [...specs.keys()];
+      },
+      async initSpecDir(specId: string, request: string) {
+        calls.push({ method: "initSpecDir", args: [specId, request] });
+        return `/tmp/test-specs/${specId}`;
+      },
+      isAbandoned(specId: string) {
+        calls.push({ method: "isAbandoned", args: [specId] });
+        return false; // Not abandoned in test
+      },
+      async deleteSpec(specId: string) {
+        calls.push({ method: "deleteSpec", args: [specId] });
+        specs.delete(specId);
       },
     },
   };
@@ -584,16 +601,20 @@ describe("Phase 4: upsert_knowledge", () => {
 
 describe("Phase 5: pi_coder_advance_fsm", () => {
   it("advances IDLE → SPEC_WORK", async () => {
-    const { tools, sm, setActiveSpec } = setupMocks();
+    const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
     assert.strictEqual(sm.currentState, "IDLE");
     const result = await executeTool(tools, "pi_coder_advance_fsm", {
       targetState: "SPEC_WORK",
+      request: "Add drag and drop to the kanban board",
     });
     assert.ok(!result.isError, "Should succeed");
     assert.strictEqual(sm.currentState, "SPEC_WORK");
     const details = result.details as Record<string, unknown>;
     assert.strictEqual(details.previousState, "IDLE");
     assert.strictEqual(details.newState, "SPEC_WORK");
+    // Verify spec directory was initialized
+    assert.strictEqual(mockSpec.calls[0].method, "listSpecs");
+    assert.strictEqual(mockSpec.calls[1].method, "initSpecDir");
   });
 
   it("advances SPEC_WORK → SPEC_APPROVED", async () => {
@@ -663,9 +684,10 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
   });
 
   it("includes next-action hint in transition output", async () => {
-    const { tools, sm, setActiveSpec } = setupMocks();
+    const { tools, sm } = setupMocks();
     const result = await executeTool(tools, "pi_coder_advance_fsm", {
       targetState: "SPEC_WORK",
+      request: "Fix the login bug",
     });
     const content = (result.content as Array<{ text: string }>)[0].text;
     assert.ok(content.includes("FSM advanced: IDLE → SPEC_WORK"), `Should include transition, got: ${content}`);

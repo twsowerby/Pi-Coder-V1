@@ -18,80 +18,95 @@ import type { SpecFile } from "./types.ts";
 // Phase 1: Spec ID Generation
 // ---------------------------------------------------------------------------
 
+/** Extract the slug portion from a timestamped spec ID. */
+function extractSlug(id: string): string {
+  // Format: YYYY-MM-DD-HHmm-{slug}
+  // Timestamp is always 16 chars + hyphen
+  const match = id.match(/^\d{4}-\d{2}-\d{2}-\d{4}-(.+)$/);
+  return match ? match[1] : id; // fallback if no timestamp prefix
+}
+
 describe("generateSpecId", () => {
+  it("should include timestamp prefix", () => {
+    const id = generateSpecId("Implement user authentication", []);
+    assert.ok(/^\d{4}-\d{2}-\d{2}-\d{4}-/.test(id), `ID "${id}" should start with timestamp`);
+  });
+
   it("should slugify a normal request", () => {
     const id = generateSpecId("Implement user authentication", []);
-    assert.strictEqual(id, "implement-user-authentication");
+    assert.strictEqual(extractSlug(id), "implement-user-authentication");
   });
 
   it("should lowercase everything", () => {
     const id = generateSpecId("Add API Error Handling", []);
-    assert.strictEqual(id, "add-api-error-handling");
+    assert.strictEqual(extractSlug(id), "add-api-error-handling");
   });
 
   it("should replace non-alphanumeric runs with a single hyphen", () => {
     const id = generateSpecId("Fix the   bug in auth!!! now", []);
-    assert.strictEqual(id, "fix-the-bug-in-auth-now");
+    assert.strictEqual(extractSlug(id), "fix-the-bug-in-auth-now");
   });
 
   it("should trim leading and trailing hyphens", () => {
     const id = generateSpecId("  hello world  ", []);
-    assert.strictEqual(id, "hello-world");
+    assert.strictEqual(extractSlug(id), "hello-world");
   });
 
-  it("should truncate to 40 characters", () => {
+  it("should truncate slug to 40 characters", () => {
     const id = generateSpecId(
       "this is a very long request that exceeds the forty character limit by a good amount",
       []
     );
-    assert.ok(id.length <= 40, `ID "${id}" should be <= 40 chars, got ${id.length}`);
+    assert.ok(extractSlug(id).length <= 40, `Slug "${extractSlug(id)}" should be <= 40 chars, got ${extractSlug(id).length}`);
   });
 
   it("should truncate at 40 chars without breaking mid-word at boundary", () => {
     const id = generateSpecId("a".repeat(50), []);
-    // All a's become aaaa...aa, truncated to 40
-    assert.strictEqual(id, "a".repeat(40));
+    assert.strictEqual(extractSlug(id), "a".repeat(40));
   });
 
   it("should default to 'spec' for empty requests", () => {
     const id = generateSpecId("", []);
-    assert.strictEqual(id, "spec");
+    assert.strictEqual(extractSlug(id), "spec");
   });
 
   it("should default to 'spec' for requests with only special characters", () => {
     const id = generateSpecId("!@#$%^&*()", []);
-    assert.strictEqual(id, "spec");
+    assert.strictEqual(extractSlug(id), "spec");
   });
 
   it("should default to 'spec' for whitespace-only requests", () => {
     const id = generateSpecId("   \t\n  ", []);
-    assert.strictEqual(id, "spec");
+    assert.strictEqual(extractSlug(id), "spec");
   });
 
-  it("should append -2 suffix on collision", () => {
-    const id = generateSpecId("user auth", ["user-auth"]);
-    assert.strictEqual(id, "user-auth-2");
+  it("should append -2 suffix on collision with existing timestamped ID", () => {
+    const existing = [generateSpecId("user auth", [])];
+    const id = generateSpecId("user auth", existing);
+    assert.ok(id.endsWith("-2"), `ID "${id}" should end with -2`);
   });
 
   it("should increment counter for multiple collisions", () => {
-    const existing = ["user-auth", "user-auth-2"];
-    const id = generateSpecId("user auth", existing);
-    assert.strictEqual(id, "user-auth-3");
+    const first = generateSpecId("user auth", []);
+    const second = generateSpecId("user auth", [first]);
+    const third = generateSpecId("user auth", [first, second]);
+    assert.ok(third.endsWith("-3"), `ID "${third}" should end with -3`);
   });
 
   it("should handle collision with spec default", () => {
-    const id = generateSpecId("", ["spec"]);
-    assert.strictEqual(id, "spec-2");
+    const first = generateSpecId("", []);
+    const id = generateSpecId("", [first]);
+    assert.ok(id.endsWith("-2"), `ID "${id}" should end with -2`);
   });
 
   it("should not append suffix when no collision", () => {
-    const id = generateSpecId("new feature", ["user-auth"]);
-    assert.strictEqual(id, "new-feature");
+    const id = generateSpecId("new feature", ["2026-05-25-1430-user-auth"]);
+    assert.ok(!id.endsWith("-2"), `ID "${id}" should NOT end with -2`);
   });
 
   it("should handle mixed alphanumeric input", () => {
     const id = generateSpecId("Add OAuth2 callback handler v3", []);
-    assert.strictEqual(id, "add-oauth2-callback-handler-v3");
+    assert.strictEqual(extractSlug(id), "add-oauth2-callback-handler-v3");
   });
 });
 

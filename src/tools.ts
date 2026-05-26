@@ -20,7 +20,7 @@ import { StateMachine } from "./state-machine.ts";
 import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
-import { SpecManager } from "./spec.ts";
+import { SpecManager, generateSpecId } from "./spec.ts";
 
 /** Dependencies injected from the extension main. */
 export interface StateMachineRef {
@@ -69,6 +69,7 @@ const UPSERT_KNOWLEDGE_PARAMS = Type.Object({
 
 const ADVANCE_FSM_PARAMS = Type.Object({
   targetState: Type.String({ description: "The FSM state to advance to (e.g., SPEC_WORK, SPEC_APPROVED, GIT_CHECKPOINT, IDLE)" }),
+  request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
 });
 
 // ---------------------------------------------------------------------------
@@ -474,7 +475,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     promptSnippet: "Advance the FSM when orchestrator work is complete: IDLE→SPEC_WORK, SPEC_WORK→SPEC_APPROVED, etc.",
     promptGuidelines: [
       "Use pi_coder_advance_fsm when you have finished the current state's work and are ready to move on.",
-      "IDLE → SPEC_WORK: Start a new TDD cycle. You can then delegate to the researcher.",
+      "IDLE → SPEC_WORK: Start a new TDD cycle. Include the user's request text in the 'request' parameter. You can then delegate to the researcher.",
       "SPEC_WORK → SPEC_APPROVED: You MUST save the spec with pi_coder_save_spec FIRST. Then present it to the user for approval via interview. Advancing without saving will be blocked.",
       "SPEC_APPROVED → GIT_CHECKPOINT: The user approved the spec. Time to checkpoint.",
       "TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed. Advance to the next implementation unit's RED phase.",
@@ -486,7 +487,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     parameters: ADVANCE_FSM_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { targetState } = params;
+      const { targetState, request } = params;
       const previousState = smRef.current.currentState;
 
       // Validate targetState is a valid FSMState
@@ -532,10 +533,31 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           };
         }
 
+        // On SPEC_WORK entry: create spec directory + request.md + state.json + set activeSpecId
+        if (targetState === "SPEC_WORK") {
+          const requestText = request || "(no request text provided)";
+          const existingSpecs = await specManager.listSpecs();
+          const specId = generateSpecId(requestText, existingSpecs);
+
+          await specManager.initSpecDir(specId, requestText);
+          setActiveSpecId(specId);
+
+          // Per-spec state.json will be persisted by the extension's persistState()
+          // after this tool completes (tool_result catch-all).
+        }
+
+        // On IDLE entry: clean up abandoned specs (directory with no spec.md)
+        if (targetState === "IDLE" && activeSpecIdRef.current) {
+          if (specManager.isAbandoned(activeSpecIdRef.current)) {
+            await specManager.deleteSpec(activeSpecIdRef.current);
+          }
+          setActiveSpecId(null);
+        }
+
         // Provide contextual guidance so the orchestrator knows what to do next
         const nextActionHints: Partial<Record<FSMState, string>> = {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",
-          SPEC_WORK: "Delegate to pi-coder.researcher to research the spec.",
+          SPEC_WORK: "Spec directory created. Delegate to pi-coder.researcher to research the spec.",
           SPEC_APPROVED: "Create a git checkpoint with pi_coder_git.",
           GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE when ready.",
           TDD_RED_WRITE: "Delegate to pi-coder.implementor to write RED (failing) tests.",
@@ -551,9 +573,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           BLOCKED: "Present recovery options to the user.",
         };
         const hint = nextActionHints[targetState as FSMState];
-        const text = hint
+        let text = hint
           ? `FSM advanced: ${previousState} → ${targetState}\n\nNext: ${hint}`
           : `FSM advanced: ${previousState} → ${targetState}`;
+
+        // For SPEC_WORK, include the generated spec ID
+        if (targetState === "SPEC_WORK" && activeSpecIdRef.current) {
+          text += `\n\nSpec ID: ${activeSpecIdRef.current}`;
+        }
 
         return {
           content: [{
@@ -564,6 +591,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             success: true,
             previousState,
             newState: targetState,
+            ...(targetState === "SPEC_WORK" ? { specId: activeSpecIdRef.current } : {}),
           },
         };
       } catch (err) {
