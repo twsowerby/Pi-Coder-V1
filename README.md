@@ -16,6 +16,14 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
 
 Pi Coder works on its own, but two pi packages make it significantly more effective:
 
+### [pi-interview](https://www.npmjs.com/package/pi-interview) — Structured User Input
+
+Provides the `interview` tool that Pi Coder uses for spec approval. The orchestrator presents a multi-question form — scope, acceptance criteria, constraints, key files — and you review and approve in one structured interaction instead of back-and-forth chat. Without it, spec approval falls back to a simple conversation, which works but is less rigorous and more prone to miscommunication.
+
+```bash
+pi install npm:pi-interview
+```
+
 ### [pi-intercom](https://www.npmjs.com/package/pi-intercom) — Session Coordination
 
 Provides the `intercom` tool that Pi Coder exposes to the orchestrator. Without it, the orchestrator can still coordinate subagents, but `intercom`-based session-to-session messaging won't be available.
@@ -32,10 +40,10 @@ Gives the researcher subagent the ability to search the web and fetch documentat
 pi install npm:pi-web-access
 ```
 
-Install both for the full experience:
+Install all three for the full experience:
 
 ```bash
-pi install npm:pi-intercom npm:pi-web-access
+pi install npm:pi-interview npm:pi-intercom npm:pi-web-access
 ```
 
 ## How It Works
