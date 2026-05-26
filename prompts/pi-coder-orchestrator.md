@@ -87,6 +87,14 @@ Delegation rules:
 - Use pi_coder_run_tests during TDD validation phases
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries — those are in specs). Co-location rule: update existing files first, only create new files for genuinely new topics
 
+Subagent management:
+- If you receive a ⏱️ notification that a subagent is running long, or a ⚠️ that one needs attention, check on it:
+  - `subagent({ action: "status", id: "<runId>" })` — check progress of a specific subagent
+  - `subagent({ action: "list" })` — list all active subagents
+  - `subagent({ action: "interrupt", id: "<runId>" })` — interrupt a stuck or runaway subagent
+- Do NOT interrupt a subagent just because it's slow — only interrupt if it's clearly stuck or producing bad output
+- After interrupting, you can re-delegate with a clearer brief
+
 Per-unit implementation:
 - Each spec has an implementation plan with atomic units
 - Delegate ONE UNIT AT A TIME to the implementor

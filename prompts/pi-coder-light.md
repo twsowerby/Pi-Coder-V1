@@ -45,6 +45,15 @@ If the project requires infrastructure (databases, dev servers) to run E2E tests
 - **Check knowledge first** — Run `ls .pi-coder/knowledge/` and read relevant files before delegating, so you can include project-specific rules in your briefs
 - **Co-locate knowledge** — Update existing knowledge files before creating new ones. Only create new files for genuinely new topics.
 
+## Subagent Management
+
+If you receive a ⏱️ notification that a subagent is running long, or a ⚠️ that one needs attention, check on it:
+- `subagent({ action: "list" })` — list all active subagents
+- `subagent({ action: "status", id: "<runId>" })` — check progress of a specific subagent
+- `subagent({ action: "interrupt", id: "<runId>" })` — interrupt a stuck or runaway subagent
+
+Do NOT interrupt a subagent just because it's slow — only interrupt if it's clearly stuck or producing bad output. After interrupting, you can re-delegate with a clearer brief.
+
 ## When to Use TDD Mode Instead
 
 If a task grows complex enough to need a structured TDD lifecycle (formal spec, RED/GREEN phases, review gates), suggest the user switch to TDD mode with `/pi-coder`.
