@@ -156,17 +156,19 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "checkpoint": {
-          if (!activeSpecIdRef.current) {
+          if (!activeSpecIdRef.current && deps.piCoderMode.current === "tdd") {
             return {
               content: [{ type: "text" as const, text: "Error: Cannot checkpoint without an active spec. Save the spec with pi_coder_save_spec first." }],
               details: { success: false, error: "No active spec ID — save spec before checkpointing" },
               isError: true,
             };
           }
-          const msg = message ?? `wip: checkpoint-${activeSpecIdRef.current}`;
+          const msg = message ?? (activeSpecIdRef.current
+            ? `wip: checkpoint-${activeSpecIdRef.current}`
+            : `wip: checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}`)
           result = await gitOps.checkpoint(msg);
-          // Store the ref in the state machine
-          if (result.success && result.ref) {
+          // Store the ref in the state machine (TDD mode only)
+          if (result.success && result.ref && activeSpecIdRef.current) {
             smRef.current.setActiveSpec(
               activeSpecIdRef.current,
               result.ref,
