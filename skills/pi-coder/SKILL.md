@@ -42,6 +42,7 @@ When the user makes an implementation request and your FSM is in IDLE:
    - Use `subagent` with agent `pi-coder.researcher`, context `fresh`
    - Include the user's request and the relevant knowledge filenames in the task
    - The researcher will check those knowledge files first, then investigate the codebase
+   - If reference projects are configured, include the project name and absolute path in the task so the researcher can navigate there. Do NOT pass `cwd` to the subagent tool. The researcher accesses reference projects by navigating via bash and reading files with absolute paths.
 
 Do not begin research on your own. You do not read files — you delegate.
 

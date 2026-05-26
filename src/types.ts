@@ -132,6 +132,8 @@ export interface PiCoderConfig {
   logging: LoggingConfig;
   /** Subagent control/monitoring configuration */
   subagentControl: SubagentControlConfig;
+  /** ⚠️ EXPERIMENTAL: Named reference projects accessible by the researcher subagent */
+  referenceProjects?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

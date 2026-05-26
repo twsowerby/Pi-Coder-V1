@@ -25,7 +25,7 @@ import { registerTools } from "../src/tools.ts";
 import type { PiCoderConfig, PiCoderMode, FSMState, TestCommands } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
@@ -549,7 +549,8 @@ function buildOrchestratorPrompt(
     .replace("{{loopCount}}", String(sm.loopCount))
     .replace("{{maxLoops}}", String(config.maxLoops))
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
-    .replace("{{toolList}}", toolList);
+    .replace("{{toolList}}", toolList)
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
 }
 
 /**
@@ -604,7 +605,8 @@ Available tools:
 
   return lightModePromptTemplate
     .replace("{{toolList}}", toolList)
-    .replace("{{interviewTimeout}}", String(config.interviewTimeout));
+    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
 }
 
 /** Reset the cached light mode prompt template. */
@@ -663,6 +665,26 @@ export function resetNudgeState(newState: FSMState): void {
 // Config helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Format referenceProjects config into a prompt section.
+ * Returns empty string if no reference projects configured.
+ */
+function formatReferenceProjects(referenceProjects: Record<string, string> | undefined): string {
+  if (!referenceProjects || Object.keys(referenceProjects).length === 0) {
+    return "";
+  }
+  const lines = ["**Reference Projects (EXPERIMENTAL):**"];
+  for (const [name, absPath] of Object.entries(referenceProjects)) {
+    lines.push(`- **${name}**: ${absPath}`);
+  }
+  lines.push("");
+  lines.push("When investigating a reference project, delegate to pi-coder.researcher and include the");
+  lines.push("project path in the task. Do NOT pass cwd to the subagent tool — the researcher accesses");
+  lines.push("reference projects by navigating to them via bash (cd, grep, find) and reading files");
+  lines.push("with absolute paths. Reads are allowed; writes are blocked by damage-control.");
+  return lines.join("\n");
+}
+
 const DEFAULT_CONFIG: PiCoderConfig = {
   testCommand: "npm test",
   maxLoops: 3,
@@ -708,6 +730,29 @@ function loadConfig(cwd: string): PiCoderConfig {
         }
         parsed.createBranch = true;
         delete parsed.gitStrategy;
+      }
+
+      // Resolve and validate referenceProjects paths
+      if (parsed.referenceProjects && typeof parsed.referenceProjects === "object") {
+        const resolved: Record<string, string> = {};
+        for (const [name, rawPath] of Object.entries(parsed.referenceProjects)) {
+          if (typeof rawPath !== "string") continue;
+          // Expand ~ to home directory
+          let expanded = rawPath.startsWith("~/")
+            ? join(process.env.HOME ?? "/tmp", rawPath.slice(2))
+            : rawPath.startsWith("~")
+              ? join(process.env.HOME ?? "/tmp", rawPath.slice(1))
+              : rawPath;
+          // Resolve relative paths against project cwd
+          const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+          // Validate directory exists
+          if (existsSync(absolute)) {
+            resolved[name] = absolute;
+          } else {
+            console.warn(`⚠️ pi-coder: reference project "${name}" path not found: ${absolute} — skipping`);
+          }
+        }
+        parsed.referenceProjects = Object.keys(resolved).length > 0 ? resolved : undefined;
       }
 
       return { ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) } };

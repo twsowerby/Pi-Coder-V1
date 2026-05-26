@@ -60,3 +60,5 @@ If a task grows complex enough to need a structured TDD lifecycle (formal spec, 
 
 Available tools:
 {{toolList}}
+
+{{referenceProjects}}

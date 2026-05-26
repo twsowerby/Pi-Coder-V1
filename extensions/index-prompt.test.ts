@@ -225,7 +225,8 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
       .replace("{{loopCount}}", String(sm.loopCount))
       .replace("{{maxLoops}}", String(config.maxLoops))
       .replace("{{interviewTimeout}}", String(config.interviewTimeout))
-      .replace("{{toolList}}", toolList);
+      .replace("{{toolList}}", toolList)
+      .replace("{{referenceProjects}}", "");
 
     // Verify no unsubstituted template variables remain
     assert.ok(!result.includes("{{"), `Unsubstituted variables remain: ${result.match(/\{\{[^}]+\}\}/g)?.join(", ")}`);

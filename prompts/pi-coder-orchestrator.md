@@ -122,3 +122,5 @@ Non-TDD requests:
 - Do NOT create a spec just to run a subagent — the FSM is not a general delegation tool
 - Instead, tell the user: "This doesn't need the full TDD lifecycle. Toggle off with /pi-coder and ask in normal Pi mode."
 - The FSM enforces a structured process. For unstructured work, the user should toggle off.
+
+{{referenceProjects}}

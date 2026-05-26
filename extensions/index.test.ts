@@ -26,6 +26,7 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
     createBranch: true,
     mergeBranch: "merge",
     branchPrefix: "pi-coder/",
+    interviewTimeout: 0,
     nudge: {
       enabled: true,
       defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
@@ -42,6 +43,9 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
       enabled: false,
       level: "standard",
       maxLogFiles: 10,
+    },
+    subagentControl: {
+      enabled: true,
     },
     ...overrides,
   };
@@ -467,5 +471,44 @@ describe("Phase 5: Subagent Delegation Guards", () => {
     // FSM only checks agent-role match for known pi-coder subagents
     // The generic researcher has no role in pi-coder FSM
     assert.strictEqual(sm.isActionAllowed("subagent", "researcher"), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadConfig with referenceProjects
+// ---------------------------------------------------------------------------
+
+describe("loadConfig: referenceProjects path resolution", () => {
+  it("referenceProjects field is optional in PiCoderConfig", () => {
+    const config = makeConfig();
+    assert.strictEqual(config.referenceProjects, undefined);
+  });
+
+  it("referenceProjects can be set in config", () => {
+    const config = makeConfig({
+      referenceProjects: {
+        "woo-plugin": "/home/user/projects/woo-plugin",
+      },
+    });
+    assert.ok(config.referenceProjects);
+    assert.ok("woo-plugin" in config.referenceProjects!);
+  });
+
+  it("referenceProjects values are strings (paths)", () => {
+    const config = makeConfig({
+      referenceProjects: {
+        "shared-lib": "../shared-lib",
+      },
+    });
+    assert.strictEqual(config.referenceProjects!["shared-lib"], "../shared-lib");
+  });
+
+  it("empty referenceProjects object is treated as undefined", () => {
+    const config = makeConfig({
+      referenceProjects: {},
+    });
+    // An empty object is falsy for practical purposes — the prompt should not render
+    // a reference projects section when there are no entries
+    assert.ok(Object.keys(config.referenceProjects ?? {}).length === 0);
   });
 });

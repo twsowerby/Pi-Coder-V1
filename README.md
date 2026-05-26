@@ -18,6 +18,7 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
 - [Commands](#commands)
 - [Damage Control](#damage-control)
 - [Configuration](#configuration)
+  - [referenceProjects (Experimental)](#referenceprojects-experimental)
 - [Customization](#customization)
   - [MCP Server Access for Subagents](#mcp-server-access-for-subagents)
   - [Per-Agent Model Selection](#per-agent-model-selection)
@@ -663,6 +664,45 @@ Each log entry is a JSON object:
 ```
 
 Use `/pi-coder-logs` to see aggregate statistics from your logs.
+
+### `referenceProjects` (⚠️ EXPERIMENTAL)
+
+Named reference projects that the researcher subagent can investigate during TDD cycles. Use this when your main project depends on code in a separate directory and the researcher needs to understand how something is implemented there.
+
+```json
+{
+  "referenceProjects": {
+    "woo-plugin": "~/projects/woo-plugin",
+    "shared-lib": "../shared-lib"
+  }
+}
+```
+
+**Path formats:**
+
+| Format | Example | Resolves to |
+|---|---|---|
+| Absolute | `/home/user/projects/woo-plugin` | As-is |
+| Relative to project root | `../shared-lib` | Resolved against the primary project's root |
+| Home directory | `~/projects/woo-plugin` | `~` expands to `$HOME` |
+
+Paths are resolved and validated on load — if a directory doesn't exist, a warning is logged and that reference project is skipped.
+
+**How it works:** When reference projects are configured, the orchestrator's prompt includes their names and paths. When investigating a reference project, the orchestrator delegates to the researcher and includes the project's absolute path in the task description. The researcher navigates to the reference project using `cd`, `grep`, `find`, and reads files with absolute paths.
+
+**Do NOT pass `cwd` to the subagent tool** for reference project access. The researcher stays in the main project's working directory and explores the reference project via bash navigation and absolute paths. This prevents the reference project's pi configuration, extensions, and agent definitions from being loaded.
+
+**⚠️ Known risks (experimental):**
+
+- **Read access is fully allowed** — the researcher can inspect any file in the reference project. This is by design.
+- **Write access is blocked by damage-control** — the CWD write boundary guard prevents `write`/`edit`/bash-writes to paths outside the project directory. This is a defense-in-depth measure.
+- **Bash is endlessly expressive** — while damage-control catches common write patterns (redirects, `sed -i`, `tee`, `cp`, `mv`, `dd`, `install`), it cannot guarantee 100% coverage of all possible bash write patterns (e.g., `perl -e`, `python -c`, creative piping). This is a safety net, not a sandbox. Defense-in-depth: prompt constraints + damage-control + reviewer.
+- **No disk-level isolation** — the researcher runs as the same OS user with the same filesystem permissions. True isolation would require containers or separate user accounts.
+
+If these risks are unacceptable for your reference project, consider:
+- Making the reference project read-only at the filesystem level (`chmod -R a-w`)
+- Using a git worktree with `core.bare = true` on the reference project
+- Running the reference project's test suite after pi-coder sessions to verify no changes were made
 
 ## Customization
 
