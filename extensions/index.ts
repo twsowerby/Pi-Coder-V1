@@ -1241,10 +1241,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         fsmState: stateMachine.currentState,
         reason: "not_in_allowed_tools",
       });
-      return {
-        block: true,
-        reason: `Tool "${toolName}" is not available in ${piCoderMode} mode. Allowed: ${allowedTools.join(", ")}`,
-      };
+      // Actionable feedback: tell the orchestrator what to do instead
+      let guidance = `🛡️ "${toolName}" is not available to the orchestrator in ${piCoderMode} mode.`;
+      if (toolName === "bash" || toolName === "edit" || toolName === "write" || toolName === "read") {
+        guidance += ` You don't ${toolName === "bash" ? "run commands" : toolName === "read" ? "read file contents" : "edit files"} directly — you delegate. Use the "subagent" tool to delegate to pi-coder.implementor for code changes, or pi-coder.researcher to investigate the codebase.`;
+      } else if (toolName === "pi_coder_advance_fsm" || toolName === "pi_coder_save_spec" || toolName === "pi_coder_read_spec") {
+        guidance += ` These are TDD-mode tools for FSM state management. In light mode, there's no FSM to manage — just delegate directly to the right subagent.`;
+      } else {
+        guidance += ` Available tools: ${allowedTools.join(", ")}`;
+      }
+      guidance += ` Do not retry this exact call.`;
+      return { block: true, reason: guidance };
     }
 
     // Block raw git commands via bash (safety net if bash is ever re-added to tools)
@@ -1253,8 +1260,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       if (command.trimStart().startsWith("git ")) {
         return {
           block: true,
-          reason:
-            "Raw git commands are blocked in orchestrator mode. Use pi_coder_git for Git operations.",
+          reason: "🛡️ Raw git commands are blocked in orchestrator mode. Git operations go through pi_coder_git so the FSM can track them. Use pi_coder_git with actions: checkout_branch, checkpoint, rollback, merge.",
         };
       }
     }
@@ -1269,9 +1275,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // Validate pi_coder_git against FSM state
       if (toolName === "pi_coder_git") {
         if (!stateMachine.isActionAllowed("pi_coder_git")) {
+          const current = stateMachine.currentState;
           return {
             block: true,
-            reason: `pi_coder_git is not allowed in state ${stateMachine.currentState}. Allowed states: GIT_CHECKPOINT, REVIEWING, MERGING, BLOCKED, IDLE.`,
+            reason: `🛡️ pi_coder_git is not allowed in ${current}. Git operations are only allowed in: GIT_CHECKPOINT (create checkpoint), REVIEWING (checkpoint progress), MERGING (merge branch), BLOCKED/IDLE (rollback). ${current === "SPEC_WORK" ? "Save and approve the spec first, then the FSM will advance to SPEC_APPROVED → GIT_CHECKPOINT." : "Use pi_coder_advance_fsm to advance to the right state first."} Do not retry this exact call.`,
           };
         }
       }
@@ -1296,7 +1303,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           });
           return {
             block: true,
-            reason: `Subagent delegation to "${targetAgent}" is not allowed. Only pi-coder subagents may be used: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer`,
+            reason: `🛡️ Delegation to "${targetAgent}" is blocked — only pi-coder subagents are allowed (researcher, implementor, reviewer). Built-in agents and other packages are excluded to maintain TDD discipline. Use pi-coder.researcher to investigate, pi-coder.implementor to write code, or pi-coder.reviewer to verify. Do not retry this exact call.`,
           };
         }
 
@@ -1311,7 +1318,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           });
           return {
             block: true,
-            reason: "The orchestrator cannot delegate to itself.",
+            reason: "🛡️ The orchestrator cannot delegate to itself — you ARE the orchestrator. If you need something done, delegate to one of your subagents: pi-coder.researcher, pi-coder.implementor, or pi-coder.reviewer.",
           };
         }
 
@@ -1320,19 +1327,26 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           if (
             !stateMachine.isActionAllowed("subagent", targetAgent)
           ) {
-            const validHint = targetAgent === "pi-coder.researcher" && stateMachine.currentState === "IDLE"
-              ? " Hint: Use pi_coder_advance_fsm to advance IDLE → SPEC_WORK first."
-              : "";
+            const current = stateMachine.currentState;
+            // Contextual guidance based on what they tried and where they are
+            let guidance = `🛡️ Cannot delegate to ${targetAgent} in ${current}.`;
+            if (targetAgent === "pi-coder.researcher" && current === "IDLE") {
+              guidance += ` The FSM needs to be in SPEC_WORK first. Use pi_coder_advance_fsm with targetState "SPEC_WORK" to start the research phase.`;
+            } else if (targetAgent === "pi-coder.implementor" && (current === "SPEC_WORK" || current === "SPEC_APPROVED")) {
+              guidance += ` The spec must be approved and checkpointed first. Save the spec with pi_coder_save_spec, get user approval via interview, then advance with pi_coder_advance_fsm.`;
+            } else if (targetAgent === "pi-coder.reviewer" && current !== "REVIEWING") {
+              guidance += ` The reviewer can only be called in REVIEWING state. Complete the implementation cycle (RED/GREEN) first, then advance to REVIEWING with pi_coder_advance_fsm.`;
+            } else {
+              guidance += ` Use pi_coder_advance_fsm to advance the FSM to an appropriate state first.`;
+            }
+            guidance += ` Do not retry this exact call.`;
             logEvent("tool_call_blocked", {
               toolName,
               targetAgent,
-              fsmState: stateMachine.currentState,
+              fsmState: current,
               reason: "not_allowed_in_state",
             });
-            return {
-              block: true,
-              reason: `Subagent delegation to "${targetAgent}" is not allowed in state ${stateMachine.currentState}.${validHint}`,
-            };
+            return { block: true, reason: guidance };
           }
         }
         // In light mode, any pi-coder subagent can be called at any time
@@ -2088,6 +2102,28 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         created.push(".pi-coder/knowledge/design_system.md (starter template — fill in for your project)");
       } else {
         skipped.push(".pi-coder/knowledge/design_system.md (already exists)");
+      }
+
+      // 4d. Create .pi-coder/damage-control.json — only if it doesn't exist
+      const damageControlPath = join(cwd, ".pi-coder", "damage-control.json");
+      if (!existsSync(damageControlPath)) {
+        const damageControlContent = JSON.stringify({
+          enabled: true,
+          rules: {
+            // Add project-specific bash patterns here:
+            // bashToolPatterns: [
+            //   { pattern: "\\bdropdb\\b", reason: "Don't drop databases programmatically." },
+            // ],
+            // Add project-specific protected paths here:
+            // zeroAccessPaths: ["secrets/"],
+            // readOnlyPaths: [".env.staging"],
+            // noDeletePaths: ["migrations/"],
+          },
+        }, null, 2) + "\n";
+        writeFileSync(damageControlPath, damageControlContent, "utf-8");
+        created.push(".pi-coder/damage-control.json");
+      } else {
+        skipped.push(".pi-coder/damage-control.json (already exists)");
       }
 
       // 5. Warn if subagent tool is not detected

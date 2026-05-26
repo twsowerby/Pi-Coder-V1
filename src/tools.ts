@@ -110,22 +110,25 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const { action, branch, message } = params;
 
-      // Validate FSM state
-      if (!smRef.current.isActionAllowed("pi_coder_git")) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: pi_coder_git is not allowed in state ${smRef.current.currentState}. Allowed states: GIT_CHECKPOINT, MERGING, BLOCKED, IDLE.`,
+      // In light mode, pi_coder_git is always available — no FSM to enforce
+      if (deps.piCoderMode.current === "tdd") {
+        // Validate FSM state
+        if (!smRef.current.isActionAllowed("pi_coder_git")) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: pi_coder_git is not allowed in state ${smRef.current.currentState}. Allowed in: GIT_CHECKPOINT, REVIEWING, MERGING, BLOCKED, IDLE.`,
+              },
+            ],
+            details: {
+              success: false,
+              error: `Not allowed in state ${smRef.current.currentState}`,
+              currentState: smRef.current.currentState,
             },
-          ],
-          details: {
-            success: false,
-            error: `Not allowed in state ${smRef.current.currentState}`,
-            currentState: smRef.current.currentState,
-          },
-          isError: true,
-        };
+            isError: true,
+          };
+        }
       }
 
       let result;
