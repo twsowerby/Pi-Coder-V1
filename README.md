@@ -94,7 +94,7 @@ Pi Coder persists its FSM state to `.pi-coder/state.json` on every state transit
   "piCoderActive": true,
   "fsm": {
     "currentState": "TDD_GREEN_WRITE",
-    "activeSpecId": "user-authentication",
+    "activeSpecId": "2026-05-25-1430-user-authentication",
     "loopCount": 1,
     "gitRef": "a1b2c3d4"
   },
@@ -103,7 +103,8 @@ Pi Coder persists its FSM state to `.pi-coder/state.json` on every state transit
 ```
 
 This is the minimum needed to restore the state machine. Everything else is already on disk:
-- Spec content → `.pi-coder/specs/{id}.md`
+- Spec content → `.pi-coder/specs/{id}/spec.md`
+- User's original request → `.pi-coder/specs/{id}/request.md`
 - Project learnings → `.pi-coder/knowledge/`
 - Cycle history → `.pi-coder/logs/` (JSONL)
 - Code changes → git (the branch and checkpoint are preserved)
@@ -209,7 +210,7 @@ How feature branches are merged back after approval:
 
 ### `branchPrefix`
 
-Prefix prepended to all pi-coder branches. Branches are created as `{branchPrefix}{spec-id}` (e.g. `pi-coder/user-authentication`).
+Prefix prepended to all pi-coder branches. Branches are created as `{branchPrefix}{spec-id}` (e.g. `pi-coder/2026-05-25-1430-user-authentication`). Spec IDs use the format `YYYY-MM-DD-HHmm-slug` — a timestamp prefix that prevents duplicate names and gives natural chronological ordering.
 
 ### `nudge`
 
@@ -345,7 +346,7 @@ Knowledge file naming rules: `.md` extension, 3-50 character stem, lowercase alp
 
 ### Research & Spec
 
-1. You make a request → orchestrator advances the FSM to SPEC_WORK
+1. You make a request → orchestrator advances the FSM to SPEC_WORK (this creates the spec directory with `request.md` for crash recovery)
 2. Orchestrator delegates to researcher (can do multiple rounds)
 3. Orchestrator prunes research to only what's needed: acceptance criteria, constraints, key files
 4. Orchestrator creates an **implementation plan** — breaking the spec into atomic units, each with its own ACs and key files
@@ -415,6 +416,7 @@ your-project/
 │   ├── logs/                # Interaction telemetry (JSONL)
 │   └── specs/
 │       └── {spec-id}/
+│           ├── request.md    # User's original request (created on SPEC_WORK entry)
 │           ├── spec.md      # Human-readable spec content
 │           └── state.json   # Per-spec FSM state + evidence flags
 └── .pi/
