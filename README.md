@@ -19,6 +19,7 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
 - [Damage Control](#damage-control)
 - [Configuration](#configuration)
 - [Customization](#customization)
+  - [MCP Server Access for Subagents](#mcp-server-access-for-subagents)
 - [The TDD Lifecycle](#the-tdd-lifecycle)
 - [Extension Events](#extension-events)
 - [Project Structure](#project-structure)
@@ -693,6 +694,48 @@ The orchestrator `.md` file contains template variables that are substituted at 
 #### Project-scope overrides
 
 The extension checks for `.pi/agents/pi-coder-orchestrator.md` first (project customization), falling back to the package default. This means you can customize the orchestrator prompt per-project without affecting the package files.
+
+### MCP Server Access for Subagents
+
+If you have [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter) installed, you can give subagents access to MCP servers by adding `mcp:server-name` entries to their `tools:` frontmatter. This is the per-agent access control — each subagent only sees the MCP servers you explicitly grant.
+
+**Example:** Give the researcher read-only Supabase access so it can query your database schema:
+
+Edit `.pi/agents/pi-coder-researcher.md`:
+
+```markdown
+---
+name: researcher
+package: pi-coder
+description: Investigates codebase, knowledge base, and external sources for TDD implementation context
+tools: read, bash, grep, find, ls, mcp:supabase
+---
+```
+
+**Specific tools only** — use the `mcp:server-name/tool_name` format to grant access to individual tools:
+
+```markdown
+tools: read, bash, grep, find, ls, mcp:supabase/query
+```
+
+**Configuration steps:**
+
+1. Install pi-mcp-adapter: `pi install npm:pi-mcp-adapter`
+2. Configure your MCP server in `.mcp.json` (project) or `~/.config/mcp/mcp.json` (global)
+3. Edit the agent `.md` file in `.pi/agents/` to add the `mcp:` entry
+4. Restart Pi — the adapter caches tool metadata at startup
+
+**Common patterns:**
+
+| Subagent | MCP servers to consider | Why |
+|---|---|---|
+| Researcher | `mcp:supabase` | Query database schema, inspect tables and relations |
+| Researcher | `mcp:postgres` | Direct SQL queries for schema discovery |
+| Researcher | `mcp:github` | Search repos, read issues and PRs |
+| Implementor | `mcp:supabase` | Generate migrations, insert seed data |
+| Reviewer | *(usually none)* | Reviewer checks code, not external services |
+
+**Note:** Global `directTools: true` in mcp.json is **not** enough for subagents — the `mcp:` entries must be in the agent frontmatter. This is a security feature: you explicitly control which subagents can reach which external services. The generic `mcp` proxy tool is still available for discovery when MCP tools aren't declared explicitly.
 
 ### The Orchestrator Skill
 
