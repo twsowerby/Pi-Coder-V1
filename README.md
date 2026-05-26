@@ -122,7 +122,29 @@ Writes are **atomic** (write to `.tmp`, then rename) so a crash mid-write leaves
 ### When to resume vs. restart
 
 - **Resume**: If you close your terminal, start a new session, or run `/pi-coder` again — the orchestrator picks up where it left off
-- **Restart**: Use `/pi-coder-reset-agents` to reset agent files, or manually delete `.pi-coder/state.json` to force a fresh cycle
+- **Restart**: Use `/pi-coder-reset-agents` to reset agent files, or manually delete `.pi-coder/state.json` (and the relevant `.pi-coder/specs/{id}/state.json`) to force a fresh cycle
+
+## Transition Guards & Evidence Flags
+
+The FSM **enforces invariants**, not just the orchestrator prompt. Before allowing a transition, the state machine checks that required evidence is present. If evidence is missing, the transition is blocked with a clear error message.
+
+### Evidence Flags
+
+| Flag | Set by | Cleared by | Purpose |
+|---|---|---|---|
+| `spec_saved` | `pi_coder_save_spec` | IDLE reset | Spec file exists on disk |
+| `spec_user_approved` | `interview` tool_result in SPEC_WORK | IDLE reset | User saw and approved the spec |
+| `test_run_this_state` | `pi_coder_run_tests` | Any state transition | Tests were actually run in this validation state |
+
+### Guarded Transitions
+
+| Transition | Evidence required | Why |
+|---|---|---|
+| SPEC_WORK → SPEC_APPROVED | `spec_saved` + `spec_user_approved` | Cannot implement without a saved, user-approved spec |
+| TDD_RED_VALIDATE → TDD_GREEN_WRITE | `test_run_this_state` | Cannot skip RED validation — must actually run tests |
+| TDD_GREEN_VALIDATE → exits | `test_run_this_state` | Cannot skip GREEN validation — must actually run tests |
+
+This prevents the LLM from shortcutting through validation states without executing tests, or advancing to implementation without user spec approval. The FSM is the single source of truth for process invariants.
 
 ## Commands
 
@@ -328,7 +350,7 @@ Knowledge file naming rules: `.md` extension, 3-50 character stem, lowercase alp
 3. Orchestrator prunes research to only what's needed: acceptance criteria, constraints, key files
 4. Orchestrator creates an **implementation plan** — breaking the spec into atomic units, each with its own ACs and key files
 5. Orchestrator presents the spec for approval via `interview` with **multiple focused questions** (scope, ACs, constraints, plan) — not one big dump
-6. On approval: `pi_coder_advance_fsm` advances to SPEC_APPROVED, then git checkpoint creates a feature branch
+6. On approval: `pi_coder_advance_fsm` advances to SPEC_APPROVED (FSM guard requires `spec_saved` + `spec_user_approved` evidence), then git checkpoint creates a feature branch
 
 ### Per-Unit TDD Cycle
 
@@ -358,7 +380,7 @@ Implementation happens **one unit at a time**. For each unit in the implementati
 
 1. Orchestrator delegates to reviewer with acceptance criteria + git diff
 2. Reviewer checks: test alignment, bugs, security, correctness (skips style, nitpicks)
-3. Verdict: ✅ Approved / ⚠️ Needs Changes / ❌ Request Changes
+3. Verdict: ✅ Approved / ⚠️ Needs Changes — this **auto-transitions** the FSM (like test results)
 4. If needs changes → **functional fix**: loop back to RED (up to `maxLoops`); **non-functional fix** (test cleanup, comments): advance directly to REVIEWING
 
 ### Delivery
@@ -377,10 +399,10 @@ Pi Coder hooks into pi's extension lifecycle to enforce invariants:
 
 | Event | What the extension does |
 |---|---|
-| `session_start` | Load config, initialize state machine, register tools, restore persisted state from `.pi-coder/state.json` with integrity checks |
+| `session_start` | Load config, initialize state machine, register tools, restore persisted state from `.pi-coder/state.json` + `.pi-coder/specs/{id}/state.json` with integrity checks |
 | `before_agent_start` | Replace system prompt with orchestrator identity, filter tools, check nudge thresholds |
 | `tool_call` | Validate tool calls against FSM state, block raw git commands, track subagent starts |
-| `tool_result` | Auto-transition FSM on test results and subagent completions, filter subagent list output to pi-coder agents only, persist state to disk, log events |
+| `tool_result` | Auto-transition FSM on test results, subagent completions, and review verdicts; set evidence flags (`spec_user_approved`, `test_run_this_state`); filter subagent list output to pi-coder agents only; persist state to disk; log events |
 
 ## Project Structure
 
@@ -391,7 +413,10 @@ your-project/
 │   ├── state.json           # Persisted FSM state (auto-managed)
 │   ├── knowledge/           # Persisted project learnings
 │   ├── logs/                # Interaction telemetry (JSONL)
-│   └── specs/               # Spec files (Markdown + YAML frontmatter)
+│   └── specs/
+│       └── {spec-id}/
+│           ├── spec.md      # Human-readable spec content
+│           └── state.json   # Per-spec FSM state + evidence flags
 └── .pi/
     ├── agents/
     │   ├── pi-coder-orchestrator.md    # Orchestrator system prompt (from prompts/)
@@ -429,7 +454,7 @@ This prevents the LLM from accidentally delegating to a built-in `researcher` in
 
 ```bash
 npm install          # Install dependencies
-npm test             # Run test suite (475 tests)
+npm test             # Run test suite (465 tests)
 npm run typecheck    # TypeScript strict mode check
 ```
 
