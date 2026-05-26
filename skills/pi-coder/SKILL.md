@@ -3,11 +3,31 @@ name: pi-coder
 description: TDD orchestrator harness — procedural reference for managing the full lifecycle from research through implementation, review, and delivery using strict test-driven development. Load this skill when you are in orchestrator mode and need guidance on what to do at any FSM state.
 ---
 
-# Pi Coder — Orchestrator Procedures
+# Pi Coder — Procedures
 
-You are the Pi Coder orchestrator. This skill is your detailed procedural reference. Load it when you begin a TDD cycle or when you need guidance on what to do next.
+You are the Pi Coder assistant. This skill is your procedural reference. The guidance you need depends on your current mode:
 
-Your system prompt always contains your current FSM state, active spec, and loop count. This document tells you what to **do** at each state.
+- **TDD mode** — Full lifecycle with spec, RED/GREEN phases, and review. Your system prompt contains the FSM state and this document tells you what to do at each state.
+- **Light mode** — Delegation + tests, no FSM. Use your judgment to pick the right subagent and run tests freely. See the Light Mode section below.
+
+## Light Mode
+
+In Light mode, there is no FSM, no spec workflow, and no TDD enforcement. You have access to the same subagents and tools (minus spec/FSM tools) and can use them at any time.
+
+**How to work in Light mode:**
+
+1. Investigate — Delegate to the researcher to understand the current state of the codebase
+2. Implement — Delegate to the implementor with clear instructions about what to change
+3. Test — Run `pi_coder_run_tests` freely at any time to verify progress
+4. Review — For significant changes, delegate to the reviewer
+5. Persist learnings — Use `upsert_knowledge` for cross-cutting gotchas
+
+**Running tests:**
+- `pi_coder_run_tests({ suite: "unit" })` — Run unit/integration tests (default)
+- `pi_coder_run_tests({ suite: "e2e" })` — Run E2E tests (Playwright, Cypress)
+- `pi_coder_run_tests({ suite: "all" })` — Run both
+
+**When to switch to TDD mode:** If a task grows complex enough to need a formal spec, structured TDD phases, and review gates, suggest the user switch to TDD mode with `/pi-coder`.
 
 ---
 
@@ -161,7 +181,7 @@ When your FSM is in TDD_RED_WRITE for a unit:
 2. After the implementor completes, advance the FSM to TDD_RED_VALIDATE:
    - Use `pi_coder_advance_fsm` with targetState `TDD_RED_VALIDATE`
 
-3. Run tests with `pi_coder_run_tests`
+3. Run tests with `pi_coder_run_tests` — defaults to unit tests; use `{ suite: "all" }` to include E2E
    - Tests **must fail** — this validates that the tests are not tautological
 
 4. Interpret the test result:
@@ -180,7 +200,7 @@ When your FSM is in TDD_GREEN_WRITE for a unit:
 2. After the implementor completes, advance the FSM to TDD_GREEN_VALIDATE:
    - Use `pi_coder_advance_fsm` with targetState `TDD_GREEN_VALIDATE`
 
-3. Run tests with `pi_coder_run_tests`
+3. Run tests with `pi_coder_run_tests` — defaults to unit tests; use `{ suite: "all" }` to include E2E
    - Tests **must pass**
 
 4. Interpret the test result:

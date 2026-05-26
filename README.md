@@ -65,13 +65,21 @@ This creates:
 - `.pi/agents/pi-coder-*.md` — agent definition files (copied from package defaults)
 - `.pi/settings.json` — disables built-in subagents so only `pi-coder.*` agents are visible
 
-### 3. Toggle orchestrator mode
+### 3. Choose your mode
 
 ```
 /pi-coder
 ```
 
-Activates orchestrator mode. You'll see `🔧 pi-coder` in the status bar. Type it again to return to normal Pi mode.
+Shows a mode selection menu:
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **TDD** | Full lifecycle with spec, RED/GREEN phases, review | New features, bug fixes |
+| **Light** | Delegation + tests, no FSM ceremony | Spot fixes, existing projects, infrastructure work |
+| **Off** | Normal Pi — unrestricted | Quick questions, anything outside pi-coder |
+
+You'll see the current mode in the status bar: `🔧 TDD`, `⚡ Light`, or nothing (off).
 
 ### 4. Make a request
 
@@ -83,27 +91,67 @@ Just describe what you want built. The orchestrator will:
 5. Alternate RED (write tests) → GREEN (make tests pass) → **Review**
 6. Merge on approval, persist knowledge learnings
 
+In **Light mode**, there's no formal spec or TDD cycle — the orchestrator uses its judgment to pick the right subagent for the task and runs tests freely.
+
+## Modes
+
+Pi Coder has three modes, selected via `/pi-coder`:
+
+### TDD Mode
+
+Full lifecycle enforcement. The orchestrator must follow the FSM: research → spec → approval → implementation (RED/GREEN) → review → merge. The state machine tracks progress, evidence flags enforce invariants, and the nudge system pushes the orchestrator forward if it stalls.
+
+**When to use:** New features with clear acceptance criteria, bug fixes that need structured verification, any task where you want the discipline of test-first development.
+
+### Light Mode
+
+Delegation without ceremony. Same subagents (researcher, implementor, reviewer), same tools (git, tests, knowledge), but no FSM, no spec files, no evidence flags. The orchestrator picks the right subagent for the task and runs tests freely.
+
+**When to use:** Spot fixes, infrastructure changes, existing projects where the full TDD lifecycle feels heavy, requests that don't fit a spec-first workflow ("rebuild the test setup", "debug why auth is broken").
+
+**Key differences from TDD mode:**
+- No `pi_coder_advance_fsm` — there's no FSM to advance
+- No `pi_coder_save_spec` / `pi_coder_read_spec` — no spec files
+- Subagent delegation available at any time — no FSM state gating
+- `pi_coder_run_tests` returns plain results — no auto-transitions
+- Prompt is simplified — no FSM diagram, no state tracking
+
+### Off
+
+Normal Pi. Full tool access, no orchestrator identity, no subagent scoping, no knowledge system.
+
+**When to use:** Quick questions, tasks that don't need delegation, anything where you want unstructured access to Pi's full capabilities.
+
 ## State Persistence
 
 Pi Coder persists its FSM state to `.pi-coder/state.json` on every state transition and toggle. This means **your TDD cycles survive session restarts, context clears, and crashes**.
 
 ### What's stored
 
+**Global state** (`.pi-coder/state.json`) — slim pointer:
+
 ```json
 {
   "version": 1,
-  "piCoderActive": true,
-  "fsm": {
-    "currentState": "TDD_GREEN_WRITE",
-    "activeSpecId": "2026-05-25-1430-user-authentication",
-    "loopCount": 1,
-    "gitRef": "a1b2c3d4"
-  },
+  "piCoderMode": "tdd",
+  "activeSpecId": "2026-05-25-1430-user-authentication",
   "updatedAt": "2026-05-25T14:30:00.000Z"
 }
 ```
 
-This is the minimum needed to restore the state machine. Everything else is already on disk:
+**Per-spec state** (`.pi-coder/specs/{id}/state.json`) — FSM + evidence:
+
+```json
+{
+  "version": 1,
+  "currentState": "TDD_GREEN_WRITE",
+  "loopCount": 1,
+  "gitRef": "a1b2c3d4",
+  "evidence": ["spec_saved", "spec_user_approved", "test_run_this_state"],
+  "createdAt": "2026-05-25T14:30:00.000Z",
+  "updatedAt": "2026-05-25T14:45:00.000Z"
+}
+```
 - Spec content → `.pi-coder/specs/{id}/spec.md`
 - User's original request → `.pi-coder/specs/{id}/request.md`
 - Project learnings → `.pi-coder/knowledge/`
@@ -152,7 +200,7 @@ This prevents the LLM from shortcutting through validation states without execut
 
 | Command | Description |
 |---|---|
-| `/pi-coder` | Toggle orchestrator mode on/off |
+| `/pi-coder` | Switch mode (TDD / Light / Off) |
 | `/pi-coder-init` | Initialize `.pi-coder/` structure and config |
 | `/pi-coder-reset-agents` | Reset agent `.md` files to package defaults (requires confirmation) |
 | `/pi-coder-logs` | Show interaction log statistics |
@@ -164,6 +212,10 @@ All configuration lives in `.pi-coder/config.json` (created by `/pi-coder-init`)
 ```json
 {
   "testCommand": "npx vitest run",
+  "testCommands": {
+    "unit": "npx vitest run",
+    "e2e": "npx playwright test"
+  },
   "maxLoops": 3,
   "gitStrategy": "branch-and-merge",
   "branchPrefix": "pi-coder/",
@@ -190,13 +242,28 @@ All configuration lives in `.pi-coder/config.json` (created by `/pi-coder-init`)
 }
 ```
 
-### `testCommand`
+### `testCommand` (legacy)
 
 The command used to run the project test suite. Auto-detected from `package.json` scripts during init (checks for `vitest` → `jest` → `test`). Examples:
 
 - `"npm test"`
 - `"npx vitest run"`
 - `"npx jest"`
+
+### `testCommands` (recommended)
+
+Structured test commands — separate `unit` and optional `e2e` suites. The `pi_coder_run_tests` tool supports a `suite` parameter that uses these:
+
+```json
+{
+  "testCommands": {
+    "unit": "npx vitest run",
+    "e2e": "npx playwright test"
+  }
+}
+```
+
+When `testCommands` is present, it's used instead of `testCommand`. The `suite` parameter defaults to `"unit"`. Auto-detected during init based on `package.json` dependencies (Playwright, Cypress).
 
 ### `maxLoops`
 
