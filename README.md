@@ -131,15 +131,14 @@ Normal Pi. Full tool access, no orchestrator identity, no subagent scoping, no k
 
 ## Usage Tips
 
-### Start in Light mode for existing projects
+### Let the task decide the mode, not the project
 
-If you're bringing pi-coder to a project that already has code, tests, and infrastructure — start in **Light mode**. The TDD lifecycle assumes you're building something new from a blank canvas. It wants to research, spec, and then implement test-first. On an existing project, that ceremony gets in the way.
+TDD mode isn't just for greenfield projects and Light mode isn't just for existing ones. The right mode depends on what you're asking the orchestrator to do:
 
-Light mode lets the orchestrator investigate the codebase (via the researcher), make changes (via the implementor), and verify them (by running tests) without having to create a formal spec first. Once you're familiar with how pi-coder works on your project, you can graduate to TDD mode for new features.
+- **TDD mode** when you want to *build* something — a new feature, a new module, a bug fix that needs structured verification. The spec approval catches misunderstandings early, RED/GREEN ensures tests exist before code, and the reviewer catches issues before they reach main.
+- **Light mode** when you want to *do* something — investigate a bug, fix a failing test, refactor a module, update a dependency. These tasks benefit from delegation (researcher to investigate, implementor to make changes) but don't need a spec-first workflow.
 
-### Use TDD mode for new features on existing projects
-
-Even on an existing project, TDD mode is valuable when you're adding a **new, well-scoped feature**. The spec approval step catches misunderstandings early. The RED/GREEN cycle ensures tests actually exist before the implementation. The reviewer catches issues before they reach main.
+You'll naturally switch between them as your session evolves — TDD mode for the feature, Light mode for the incidental work it uncovers.
 
 ### Switch modes mid-conversation
 
