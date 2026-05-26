@@ -1839,6 +1839,58 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         warnings.push("Orchestrator prompt template not found in package");
       }
 
+      // 4c. Create starter design_system.md in knowledge — skip if exists
+      const designSystemPath = join(knowledgeDir, "design_system.md");
+      if (!existsSync(designSystemPath)) {
+        const designSystemContent = [
+          "# Design System",
+          "",
+          "This file documents the project's UI component library, patterns, and conventions.",
+          "The implementor and reviewer reference this before writing or reviewing UI code.",
+          "Fill in each section for your project.",
+          "",
+          "## Component Library",
+          "",
+          "<!-- List reusable UI components and their locations. -->",
+          "<!-- e.g., `components/ui/Card.tsx` — bordered card with header slot -->",
+          "<!-- e.g., `components/ui/Button.tsx` — primary/secondary/ghost variants -->",
+          "",
+          "## Layout & Spacing",
+          "",
+          "<!-- Document the spacing system and layout conventions. -->",
+          "<!-- e.g., 4px base grid, gap-2 (8px) between sibling elements -->",
+          "<!-- e.g., max-width container with responsive breakpoints at 640/768/1024px -->",
+          "",
+          "## Colors & Theming",
+          "",
+          "<!-- Document color tokens, dark mode strategy, and theme configuration. -->",
+          "<!-- e.g., CSS custom properties: --color-primary, --color-bg, --color-text -->",
+          "",
+          "## Typography",
+          "",
+          "<!-- Document font families, sizes, and heading hierarchy. -->",
+          "<!-- e.g., Inter for body, heading scale: text-sm / text-base / text-lg / text-xl -->",
+          "",
+          "## Interaction Patterns",
+          "",
+          "<!-- Document common interaction patterns and conventions. -->",
+          "<!-- e.g., Modal dialogs use `Dialog` component with overlay click to dismiss -->",
+          "<!-- e.g., Form validation shows errors inline below each field -->",
+          "<!-- e.g., Loading states use skeleton placeholders, not spinners -->",
+          "",
+          "## Existing Patterns to Follow",
+          "",
+          "<!-- When adding a new feature, what existing components/patterns should be reused? -->",
+          "<!-- e.g., List pages: use DataTable with ColumnDef and server-side pagination -->",
+          "<!-- e.g., Detail pages: use Card layout with header slot and action buttons -->",
+          "",
+        ].join("\n");
+        writeFileSync(designSystemPath, designSystemContent, "utf-8");
+        created.push(".pi-coder/knowledge/design_system.md (starter template — fill in for your project)");
+      } else {
+        skipped.push(".pi-coder/knowledge/design_system.md (already exists)");
+      }
+
       // 5. Warn if subagent tool is not detected
       if (!subagentsAvailable) {
         warnings.push(

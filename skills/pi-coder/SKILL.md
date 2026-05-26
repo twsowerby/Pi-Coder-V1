@@ -32,6 +32,24 @@ When the researcher returns its report, you remain in SPEC_WORK. You can:
 - Synthesize findings and begin drafting a spec
 - Ask the user clarifying questions
 
+### Design System Check
+
+After the researcher returns, assess whether this spec involves UI work. If it does:
+
+1. Check if `design_system.md` exists in `.pi-coder/knowledge/`
+2. If it exists, reference it in the spec constraints — specify which existing components, patterns, and layout conventions the implementor must follow
+3. If it doesn't exist and the spec involves UI decisions, **suggest the user create one** before proceeding — otherwise the implementor has no guidance on component reuse, spacing, or interaction patterns
+
+Common indicators that UI design guidance is needed:
+- New UI components with no existing pattern to follow
+- Layout or interaction decisions not covered by existing design system
+- Visual hierarchy or responsive behavior that needs explicit specification
+
+Skip when:
+- Modifying an existing component's logic without layout changes
+- Backend/API work with no UI surface
+- The researcher found a clear existing pattern to follow
+
 ### Context Extraction
 
 When the researcher returns findings, extract **only** these four things:

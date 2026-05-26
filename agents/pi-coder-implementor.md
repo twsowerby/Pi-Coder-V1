@@ -40,6 +40,8 @@ When your task says **GREEN phase**:
 
 If no specific knowledge files are mentioned, list `.pi-coder/knowledge/` and check for any files relevant to your task.
 
+**For UI work specifically:** Check for `design_system.md` in knowledge. This file documents the project's component library, spacing, colors, and interaction patterns. **Follow existing component patterns precisely.** Do not invent new UI patterns — if no pattern exists for what you need, implement the minimum and note it in your output. The spec should specify which existing components to reuse; if it doesn't, look them up before writing code.
+
 ## Rules You Must Follow
 
 - **Never run git commands.** The harness manages all Git operations. Do not stage, commit, branch, or merge.
