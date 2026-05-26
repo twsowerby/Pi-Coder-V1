@@ -65,13 +65,13 @@ const DEFAULT_RULES: DamageControlRules = {
 		{ pattern: "\\b(?:mkfs|dd\\s+if=)\\b", reason: "This command can destroy filesystems. Do not attempt to work around this restriction." },
 	],
 	zeroAccessPaths: [
+		".env",
+		".env.local",
 		".env.production",
 		"~/.ssh/",
 		"~/.gnupg/",
 	],
 	readOnlyPaths: [
-		".env",
-		".env.local",
 		".git/config",
 	],
 	noDeletePaths: [

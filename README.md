@@ -303,9 +303,11 @@ When a destructive operation is blocked, the extension returns **actionable feed
 
 | Category | Paths | Effect |
 |---|---|---|
-| Zero-access | `.env.production`, `~/.ssh/`, `~/.gnupg/` | No read, write, or bash reference |
-| Read-only | `.env`, `.env.local`, `.git/config` | Can read, cannot write or edit |
+| Zero-access | `.env`, `.env.local`, `.env.production`, `~/.ssh/`, `~/.gnupg/` | No read, write, or bash reference |
+| Read-only | `.git/config` | Can read, cannot write or edit |
 | No-delete | `.git/`, `node_modules/` | Cannot rm or mv |
+
+**Why .env files are zero-access:** Pi does not redact secret values — if the `read` tool opens an `.env` file, API keys and secrets go straight into the LLM's context. By making `.env` files zero-access, the agent cannot read them at all and must assume the values it needs are present. If the agent genuinely needs a non-secret env value (like a `DATABASE_URL`), add it to `readOnlyPaths` in your `damage-control.json`.
 
 ### Configuring rules
 
@@ -321,14 +323,26 @@ Rules are loaded from `.pi-coder/damage-control.json` (created by `/pi-coder-ini
         "reason": "Don't drop databases programmatically"
       }
     ],
-    "zeroAccessPaths": ["secrets/"],
-    "readOnlyPaths": [".env.staging"],
+    "zeroAccessPaths": ["secrets/", ".env.staging"],
+    "readOnlyPaths": ["config/defaults.json"],
     "noDeletePaths": ["migrations/"]
-  ]
+  }
 }
 ```
 
 Add project-specific rules alongside the defaults. To disable damage-control entirely, set `"enabled": false`.
+
+**Adjusting .env access:** By default, `.env`, `.env.local`, and `.env.production` are zero-access (no read at all). If the agent needs to read a non-secret env value, add the file to `readOnlyPaths` — it can then verify values exist without being blocked, but still can't write to it.
+
+```json
+{
+  "rules": {
+    "readOnlyPaths": [".env"]
+  }
+}
+```
+
+This moves `.env` from zero-access to read-only, allowing the agent to check for keys while still preventing writes.
 
 ## Configuration
 

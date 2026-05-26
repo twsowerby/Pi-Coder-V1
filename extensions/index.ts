@@ -2115,9 +2115,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             //   { pattern: "\\bdropdb\\b", reason: "Don't drop databases programmatically." },
             // ],
             // Add project-specific protected paths here:
-            // zeroAccessPaths: ["secrets/"],
-            // readOnlyPaths: [".env.staging"],
+            // zeroAccessPaths: ["secrets/", ".env.staging"],
+            // readOnlyPaths: ["config/defaults.json"],
             // noDeletePaths: ["migrations/"],
+            //
+            // Note: .env, .env.local, .env.production are zero-access by default
+            // (blocked from read, write, grep, bash). If the agent needs to read
+            // a non-secret env value, add it to readOnlyPaths instead.
           },
         }, null, 2) + "\n";
         writeFileSync(damageControlPath, damageControlContent, "utf-8");
