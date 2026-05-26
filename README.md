@@ -63,6 +63,7 @@ This creates:
 - `.pi-coder/knowledge/design_system.md` — starter template for UI patterns and component library
 - `.pi-coder/specs/` — spec files for each feature
 - `.pi-coder/config.json` — configuration (auto-detects your test runner)
+- `.pi-coder/damage-control.json` — destructive command protection rules (sensible defaults)
 - `.pi/agents/pi-coder-*.md` — agent definition files (copied from package defaults)
 - `.pi/settings.json` — disables built-in subagents so only `pi-coder.*` agents are visible
 
@@ -275,6 +276,59 @@ This prevents the LLM from shortcutting through validation states without execut
 | `/pi-coder-init` | Initialize `.pi-coder/` structure and config |
 | `/pi-coder-reset-agents` | Reset agent `.md` files to package defaults (requires confirmation) |
 | `/pi-coder-logs` | Show interaction log statistics |
+
+## Damage Control
+
+Pi Coder ships with a **damage-control extension** that guards against destructive operations — in both the orchestrator session and subagent sessions (researcher, implementor, reviewer). It applies to every session in the project because it's loaded at the package level.
+
+When a destructive operation is blocked, the extension returns **actionable feedback** instead of just "no" — telling the agent what went wrong and how to adapt, so it can find another path in the same turn instead of retrying.
+
+### What's blocked by default
+
+**Bash commands:**
+
+| Pattern | Why |
+|---|---|
+| `rm -rf` / `rm --recursive` | Recursive delete is destructive — use targeted removal |
+| `sudo` | Requires host-level access — ask the user to run it |
+| `git push --force` | Rewrites shared history — use a new commit instead |
+| `git push --delete` | Deleting remote branches is destructive |
+| `git reset --hard` | Discards uncommitted changes — use pi_coder_git rollback |
+| `git clean -` | Removes untracked files — clarify what needs removing |
+| `chmod 777` | Security risk — use minimum permissions |
+| `truncate` | Truncating files is destructive — write new content instead |
+| `mkfs` / `dd if=` | Can destroy filesystems |
+
+**Protected paths:**
+
+| Category | Paths | Effect |
+|---|---|---|
+| Zero-access | `.env.production`, `~/.ssh/`, `~/.gnupg/` | No read, write, or bash reference |
+| Read-only | `.env`, `.env.local`, `.git/config` | Can read, cannot write or edit |
+| No-delete | `.git/`, `node_modules/` | Cannot rm or mv |
+
+### Configuring rules
+
+Rules are loaded from `.pi-coder/damage-control.json` (created by `/pi-coder-init`). When the file doesn't exist, sensible defaults are used.
+
+```json
+{
+  "enabled": true,
+  "rules": {
+    "bashToolPatterns": [
+      {
+        "pattern": "\\bdropdb\\b",
+        "reason": "Don't drop databases programmatically"
+      }
+    ],
+    "zeroAccessPaths": ["secrets/"],
+    "readOnlyPaths": [".env.staging"],
+    "noDeletePaths": ["migrations/"]
+  ]
+}
+```
+
+Add project-specific rules alongside the defaults. To disable damage-control entirely, set `"enabled": false`.
 
 ## Configuration
 
@@ -561,6 +615,7 @@ Pi Coder hooks into pi's extension lifecycle to enforce invariants:
 your-project/
 ├── .pi-coder/
 │   ├── config.json          # Configuration
+│   ├── damage-control.json  # Destructive command protection rules
 │   ├── state.json           # Persisted FSM state (auto-managed)
 │   ├── knowledge/           # Persisted project learnings
 │   ├── logs/                # Interaction telemetry (JSONL)
@@ -583,6 +638,8 @@ your-project/
 Pi Coder follows a **"fat prompts, thin harness"** philosophy — the intelligence lives in the agent `.md` prompts and the SKILL.md procedural reference. The extension code is minimal plumbing:
 
 - **Extension** (`extensions/index.ts`) — event hooks, tool registration, commands
+- **Damage control** (`extensions/damage-control.ts`) — destructive command protection, applies to all sessions including subagents
+- **Light prompt** (`prompts/pi-coder-light.md`) — simplified orchestrator identity for Light mode
 - **Modules** (`src/`) — state machine, state persistence, spec management, git abstraction, TDD runner, knowledge system, tools, logger
 - **Agent prompts** (`agents/`) — three `.md` files defining subagent behavior (researcher, implementor, reviewer)
 - **Orchestrator prompt** (`prompts/`) — template with `{{variables}}` for runtime FSM injection (not in `agents/` to prevent pi-subagents from discovering it as a delegatable target)
@@ -606,7 +663,7 @@ This prevents the LLM from accidentally delegating to a built-in `researcher` in
 
 ```bash
 npm install          # Install dependencies
-npm test             # Run test suite (466 tests)
+npm test             # Run test suite (485 tests)
 npm run typecheck    # TypeScript strict mode check
 ```
 
