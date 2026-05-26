@@ -104,6 +104,26 @@ function continueFeedback(toolName: string, violationReason: string, invocation:
 	].join("\n");
 }
 
+function continueFeedbackCwdBoundary(toolName: string, outsidePath: string, projectCwd: string, invocation: string): string {
+	return [
+		`🛡️ Damage-Control: ${toolName} blocked — write target is outside the project directory`,
+		``,
+		`Attempted: ${invocation}`,
+		`Target: ${outsidePath}`,
+		`Project: ${projectCwd}`,
+		``,
+		`Writing outside the project directory is blocked to prevent accidental changes to`,
+		`unrelated files (including reference projects). This is a defense-in-depth measure.`,
+		``,
+		`→ If you need to modify a file in this project, use a path within the project directory.`,
+		`→ If you need to modify a file outside this project, tell the user what you need and`,
+		`   ask them to handle it. Do not attempt to work around this restriction.`,
+		``,
+		`Reading files outside the project directory is allowed — only writes are blocked.`,
+		`Do not retry this exact call.`,
+	].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Path matching
 // ---------------------------------------------------------------------------
@@ -143,6 +163,62 @@ function isPathMatch(targetPath: string, pattern: string, cwd: string): boolean 
 		targetPath.includes(resolvedPattern) ||
 		relativePath.includes(resolvedPattern)
 	);
+}
+
+/**
+ * Returns true if `resolvedPath` is outside the project CWD.
+ * Uses prefix matching so /home/user/project-subdir is NOT considered inside /home/user/project.
+ */
+function isOutsideProjectCwd(resolvedPath: string, cwd: string): boolean {
+	const normalizedCwd = cwd.endsWith(path.sep) ? cwd : cwd + path.sep;
+	return !resolvedPath.startsWith(normalizedCwd);
+}
+
+/**
+ * Detects bash commands that write to paths outside the project CWD.
+ * Covers common patterns: redirects, sed -i, tee, dd, cp, install, mv, 
+ * awk -i inplace, and scripting languages writing to files.
+ * Returns the outside target path if detected, or null if no violation.
+ */
+function detectBashWriteOutsideCwd(command: string, projectCwd: string): string | null {
+	// Patterns that extract the target path of a write operation.
+	// Each regex captures the path argument that is the write target.
+	const writePatterns: Array<{ regex: RegExp; pathGroupIndex: number }> = [
+		// Redirects: > /path or >> /path (with optional quoting)
+		{ regex: /(?:^|[|;&])\s*(?:\S+\s+)*>?>>?\s*("[^"]+"|'[^']+'|\S+)/, pathGroupIndex: 1 },
+		// sed -i (in-place edit) — last argument is the filename
+		{ regex: /\bsed[^\n]*-i[^\n]*\s(\S+\.[a-zA-Z0-9]+)/, pathGroupIndex: 1 },
+		// awk -i inplace
+		{ regex: /\bawk\s+[^\n]*-i\s+inplace[^\n]*?-f\s*(\S+)/, pathGroupIndex: 1 },
+		// tee /path
+		{ regex: /\btee\s+(?:-[aAp]+\s+)*(\S+)/, pathGroupIndex: 1 },
+		// dd of=/path
+		{ regex: /\bdd\s+[^\n]*\bof=(\S+)/, pathGroupIndex: 1 },
+		// cp ... /dest (last argument is destination)
+		{ regex: /\bcp\s+(?:-[a-lnp-rsvx]+\s+)*\S+\s+(\S+)\s*$/, pathGroupIndex: 1 },
+		// install ... /dest (last argument is destination)
+		{ regex: /\binstall\s+(?:-[a-z]+\s+)*\S+\s+(\S+)\s*$/, pathGroupIndex: 1 },
+		// mv ... /dest (last argument is destination)
+		{ regex: /\bmv\s+(?:-[a-z]+\s+)*\S+\s+(\S+)\s*$/, pathGroupIndex: 1 },
+	];
+
+	for (const { regex, pathGroupIndex } of writePatterns) {
+		const match = regex.exec(command);
+		if (match && match[pathGroupIndex]) {
+			let targetPath = match[pathGroupIndex];
+			// Strip surrounding quotes
+			if ((targetPath.startsWith("'") && targetPath.endsWith("'")) ||
+				(targetPath.startsWith('"') && targetPath.endsWith('"'))) {
+				targetPath = targetPath.slice(1, -1);
+			}
+			const resolved = resolvePath(targetPath, projectCwd);
+			if (isOutsideProjectCwd(resolved, projectCwd)) {
+				return resolved;
+			}
+		}
+	}
+
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +391,35 @@ export default function (pi: ExtensionAPI) {
 		// Note: write can overwrite (which is like delete+create), but the most
 		// common destructive case is editing package-lock.json or similar.
 		// We don't block write/edit to noDeletePaths — that's for rm/mv only.
+
+		// --- CWD write boundary: block write/edit outside project directory ---
+
+		if (!violationReason && (toolName === "write" || toolName === "edit")) {
+			for (const p of inputPaths) {
+				const resolved = resolvePath(p, projectCwd);
+				if (isOutsideProjectCwd(resolved, projectCwd)) {
+					violationReason = `CWD_BOUNDARY`;
+					const invocation = JSON.stringify(input);
+					return {
+						block: true,
+						reason: continueFeedbackCwdBoundary(toolName, resolved, projectCwd, invocation),
+					};
+				}
+			}
+		}
+
+		// --- CWD write boundary: block bash writes outside project directory ---
+
+		if (!violationReason && toolName === "bash") {
+			const command = (input as { command?: string }).command ?? "";
+			const outsidePath = detectBashWriteOutsideCwd(command, projectCwd);
+			if (outsidePath) {
+				return {
+					block: true,
+					reason: continueFeedbackCwdBoundary("bash", outsidePath, projectCwd, command),
+				};
+			}
+		}
 
 		// --- Handle violation ---
 

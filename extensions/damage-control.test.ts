@@ -49,6 +49,41 @@ function isPathMatch(targetPath: string, pattern: string, cwd: string): boolean 
   );
 }
 
+function isOutsideProjectCwd(resolvedPath: string, cwd: string): boolean {
+  const normalizedCwd = cwd.endsWith(path.sep) ? cwd : cwd + path.sep;
+  return !resolvedPath.startsWith(normalizedCwd);
+}
+
+function detectBashWriteOutsideCwd(command: string, projectCwd: string): string | null {
+  const writePatterns: Array<{ regex: RegExp; pathGroupIndex: number }> = [
+    { regex: /(?:^|[|;&])\s*(?:\S+\s+)*>?>>?\s*("[^"]+"|'[^']+'|\S+)/, pathGroupIndex: 1 },
+    { regex: /\bsed[^\n]*-i[^\n]*\s(\S+\.[a-zA-Z0-9]+)/, pathGroupIndex: 1 },
+    { regex: /\bawk\s+[^\n]*-i\s+inplace[^\n]*?-f\s*(\S+)/, pathGroupIndex: 1 },
+    { regex: /\btee\s+(?:-[aAp]+\s+)*(\S+)/, pathGroupIndex: 1 },
+    { regex: /\bdd\s+[^\n]*\bof=(\S+)/, pathGroupIndex: 1 },
+    { regex: /\bcp\s+(?:-[a-lnp-rsvx]+\s+)*\S+\s+(\S+)\s*$/, pathGroupIndex: 1 },
+    { regex: /\binstall\s+(?:-[a-z]+\s+)*\S+\s+(\S+)\s*$/, pathGroupIndex: 1 },
+    { regex: /\bmv\s+(?:-[a-z]+\s+)*\S+\s+(\S+)\s*$/, pathGroupIndex: 1 },
+  ];
+
+  for (const { regex, pathGroupIndex } of writePatterns) {
+    const match = regex.exec(command);
+    if (match && match[pathGroupIndex]) {
+      let targetPath = match[pathGroupIndex];
+      if ((targetPath.startsWith("'") && targetPath.endsWith("'")) ||
+        (targetPath.startsWith('"') && targetPath.endsWith('"'))) {
+        targetPath = targetPath.slice(1, -1);
+      }
+      const resolved = resolvePath(targetPath, projectCwd);
+      if (isOutsideProjectCwd(resolved, projectCwd)) {
+        return resolved;
+      }
+    }
+  }
+
+  return null;
+}
+
 function continueFeedback(toolName: string, violationReason: string, invocation: string): string {
   return [
     `🛡️ Damage-Control: ${toolName} blocked — ${violationReason}`,
@@ -66,6 +101,26 @@ function continueFeedback(toolName: string, violationReason: string, invocation:
     `   Do not invent a workaround that achieves the same destructive effect.`,
     ``,
     `Pick the right path above and continue working. Do not retry this exact call.`,
+  ].join("\n");
+}
+
+function continueFeedbackCwdBoundary(toolName: string, outsidePath: string, projectCwd: string, invocation: string): string {
+  return [
+    `🛡️ Damage-Control: ${toolName} blocked — write target is outside the project directory`,,
+    ``,
+    `Attempted: ${invocation}`,
+    `Target: ${outsidePath}`,
+    `Project: ${projectCwd}`,
+    ``,
+    `Writing outside the project directory is blocked to prevent accidental changes to`,
+    `unrelated files (including reference projects). This is a defense-in-depth measure.`,
+    ``,
+    `→ If you need to modify a file in this project, use a path within the project directory.`,
+    `→ If you need to modify a file outside this project, tell the user what you need and`,
+    `   ask them to handle it. Do not attempt to work around this restriction.`,
+    ``,
+    `Reading files outside the project directory is allowed — only writes are blocked.`,
+    `Do not retry this exact call.`,
   ].join("\n");
 }
 
@@ -223,5 +278,140 @@ describe("damage-control: rule evaluation scenarios", () => {
     const command = "rm -rf migrations/";
     assert.ok(command.includes("migrations/"));
     assert.ok(command.includes("rm"));
+  });
+});
+
+describe("damage-control: CWD write boundary - isOutsideProjectCwd", () => {
+  const cwd = "/home/user/project";
+
+  it("identifies paths outside the project directory", () => {
+    assert.ok(isOutsideProjectCwd("/home/user/other-project/src/index.ts", cwd));
+    assert.ok(isOutsideProjectCwd("/tmp/some-file.ts", cwd));
+    assert.ok(isOutsideProjectCwd("/home/user/project-sibling/file.ts", cwd));
+  });
+
+  it("allows paths inside the project directory", () => {
+    assert.ok(!isOutsideProjectCwd("/home/user/project/src/index.ts", cwd));
+    assert.ok(!isOutsideProjectCwd("/home/user/project/.env", cwd));
+    assert.ok(!isOutsideProjectCwd("/home/user/project/", cwd));
+  });
+
+  it("does not let project-sibling directories through (prefix-without-slash attack)", () => {
+    // /home/user/project-sibling should NOT be considered inside /home/user/project
+    assert.ok(isOutsideProjectCwd("/home/user/project-sibling/file.ts", cwd));
+  });
+});
+
+describe("damage-control: CWD write boundary - write/edit tools", () => {
+  const cwd = "/home/user/project";
+
+  it("write to path outside project is a boundary violation", () => {
+    const p = "/home/user/other-project/src/index.ts";
+    const resolved = resolvePath(p, cwd);
+    assert.ok(isOutsideProjectCwd(resolved, cwd));
+  });
+
+  it("edit to path outside project is a boundary violation", () => {
+    const p = "../other-project/src/index.ts";
+    const resolved = resolvePath(p, cwd);
+    assert.ok(isOutsideProjectCwd(resolved, cwd));
+  });
+
+  it("write to path inside project is allowed", () => {
+    const p = "src/index.ts";
+    const resolved = resolvePath(p, cwd);
+    assert.ok(!isOutsideProjectCwd(resolved, cwd));
+  });
+
+  it("edit to path inside project is allowed", () => {
+    const p = ".env";
+    const resolved = resolvePath(p, cwd);
+    assert.ok(!isOutsideProjectCwd(resolved, cwd));
+  });
+});
+
+describe("damage-control: CWD write boundary - bash write detection", () => {
+  const cwd = "/home/user/project";
+
+  it("detects redirect to path outside project", () => {
+    const result = detectBashWriteOutsideCwd("echo hello > /home/user/other-project/file.txt", cwd);
+    assert.ok(result);
+    assert.ok(result!.includes("/home/user/other-project/file.txt"));
+  });
+
+  it("detects append redirect to path outside project", () => {
+    const result = detectBashWriteOutsideCwd("echo hello >> /home/user/other-project/file.txt", cwd);
+    assert.ok(result);
+  });
+
+  it("detects sed -i on path outside project", () => {
+    const result = detectBashWriteOutsideCwd("sed -i 's/old/new/g' /home/user/other-project/config.ts", cwd);
+    assert.ok(result);
+  });
+
+  it("detects tee to path outside project", () => {
+    const result = detectBashWriteOutsideCwd("echo output | tee /home/user/other-project/log.txt", cwd);
+    assert.ok(result);
+  });
+
+  it("detects dd of= to path outside project", () => {
+    const result = detectBashWriteOutsideCwd("dd if=/dev/zero of=/home/user/other-project/disk.img bs=1M count=10", cwd);
+    assert.ok(result);
+  });
+
+  it("detects cp to path outside project", () => {
+    const result = detectBashWriteOutsideCwd("cp src/file.ts /home/user/other-project/src/file.ts", cwd);
+    assert.ok(result);
+  });
+
+  it("detects mv to path outside project", () => {
+    const result = detectBashWriteOutsideCwd("mv src/file.ts /home/user/other-project/src/file.ts", cwd);
+    assert.ok(result);
+  });
+
+  it("allows redirect to path inside project", () => {
+    const result = detectBashWriteOutsideCwd("echo hello > src/output.txt", cwd);
+    assert.strictEqual(result, null);
+  });
+
+  it("allows sed -i on path inside project", () => {
+    const result = detectBashWriteOutsideCwd("sed -i 's/old/new/g' src/config.ts", cwd);
+    assert.strictEqual(result, null);
+  });
+
+  it("allows read-only commands to paths outside project", () => {
+    assert.strictEqual(detectBashWriteOutsideCwd("cat /home/user/other-project/file.ts", cwd), null);
+    assert.strictEqual(detectBashWriteOutsideCwd("grep -r 'pattern' /home/user/other-project/src/", cwd), null);
+    assert.strictEqual(detectBashWriteOutsideCwd("ls /home/user/other-project/", cwd), null);
+    assert.strictEqual(detectBashWriteOutsideCwd("find /home/user/other-project/ -name '*.ts'", cwd), null);
+  });
+
+  it("handles quoted paths in redirects", () => {
+    const result = detectBashWriteOutsideCwd('echo hello > "/home/user/other-project/file with spaces.txt"', cwd);
+    assert.ok(result);
+  });
+
+  it("allows cp within project", () => {
+    const result = detectBashWriteOutsideCwd("cp src/file.ts lib/file.ts", cwd);
+    assert.strictEqual(result, null);
+  });
+});
+
+describe("damage-control: continueFeedbackCwdBoundary", () => {
+  it("includes the outside path and project path", () => {
+    const feedback = continueFeedbackCwdBoundary("write", "/home/user/other-project/file.ts", "/home/user/project", "{\"path\":\"/home/user/other-project/file.ts\"}");
+    assert.ok(feedback.includes("/home/user/other-project/file.ts"));
+    assert.ok(feedback.includes("/home/user/project"));
+    assert.ok(feedback.includes("outside the project directory"));
+  });
+
+  it("tells the agent that reads are allowed", () => {
+    const feedback = continueFeedbackCwdBoundary("bash", "/tmp/file", "/home/user/project", "echo > /tmp/file");
+    assert.ok(feedback.includes("Reading files outside the project directory is allowed"));
+  });
+
+  it("tells the agent not to retry", () => {
+    const feedback = continueFeedbackCwdBoundary("edit", "/other/file", "/project", "edit");
+    assert.ok(feedback.includes("Do not retry this exact call"));
   });
 });
