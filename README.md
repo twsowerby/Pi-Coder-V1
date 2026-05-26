@@ -245,6 +245,51 @@ If your project has a UI, fill in `.pi-coder/knowledge/design_system.md` (create
 
 Even a minimal design system file ("use these components", "spacing is 4px grid", "colors are in theme.ts") prevents the implementor from freestyling UI decisions.
 
+## Specs
+
+A **spec** is the single source of truth for a TDD cycle. It's a markdown file that captures the what, why, and how of a feature before implementation starts. Specs live in `.pi-coder/specs/{id}/` where `{id}` is a timestamped slug like `2026-05-25-1430-user-authentication`.
+
+### What's in a spec
+
+Every spec has these sections:
+
+| Section | What it contains | Example |
+|---|---|---|
+| **Acceptance Criteria** | Specific, testable statements of what "done" looks like | `User can log in with email and password` |
+| **Constraints** | Hard boundaries the implementation must respect | `Must use existing auth middleware` |
+| **Key Files** | Files the implementor needs to know about | `src/auth/middleware.ts` |
+| **Implementation Plan** | Atomic units of work, each mapping to specific ACs | `Auth API [AC1, AC2] → Session management [AC3]` |
+| **Pruned Context** | Condensed research findings relevant to this spec | Explanation of the existing auth flow |
+
+The **implementation plan** is critical — it breaks the spec into atomic units that the implementor tackles one at a time. Each unit references specific acceptance criteria so the implementor knows exactly what to test and implement. Units can have dependencies ("do X before Y") so the implementor works in the right order.
+
+### Spec lifecycle
+
+1. **SPEC_WORK** — The orchestrator delegates to the researcher, who investigates the codebase. The orchestrator synthesizes findings into a spec with ACs, constraints, key files, and an implementation plan. It saves the spec with `pi_coder_save_spec`.
+2. **Approval** — The orchestrator presents the spec via `interview` with focused questions on scope, ACs, constraints, and the implementation plan. You review, modify, and approve (or reject and request changes).
+3. **Implementation** — The orchestrator delegates each unit to the implementor, one at a time, reading the spec fresh before each delegation. RED (write failing tests) → GREEN (make tests pass), per unit.
+4. **Review** — An independent reviewer checks the full implementation against the spec's ACs and constraints.
+5. **Complete** — On approval, the branch is merged (or left for you to handle). The spec is archived in `.pi-coder/specs/`.
+
+### Spec directory structure
+
+Each spec is a directory containing three files:
+
+```
+.pi-coder/specs/2026-05-25-1430-user-authentication/
+├── request.md   ← Your original request (captured verbatim)
+├── spec.md       ← The spec (markdown with YAML frontmatter)
+└── state.json    ← FSM state, evidence flags, git ref
+```
+
+- **request.md** — What you asked for. Written immediately when the cycle starts, so your request survives crashes.
+- **spec.md** — The structured spec. You can read or edit this file directly if you want to adjust the plan before or during implementation.
+- **state.json** — Machine-readable state for resuming cycles across sessions.
+
+### Editing specs manually
+
+Specs are just markdown files. If the orchestrator's plan doesn't match your intent, edit `.pi-coder/specs/{id}/spec.md` directly. The orchestrator reads the spec fresh before each delegation, so your changes take effect immediately — no restart needed.
+
 ## State Persistence
 
 Pi Coder persists its mode and FSM state to disk. This means **your TDD cycles survive session restarts, context clears, and crashes**.
@@ -275,11 +320,11 @@ Pi Coder persists its mode and FSM state to disk. This means **your TDD cycles s
   "updatedAt": "2026-05-25T14:45:00.000Z"
 }
 ```
-- Spec content → `.pi-coder/specs/{id}/spec.md`
-- User's original request → `.pi-coder/specs/{id}/request.md`
 - Project learnings → `.pi-coder/knowledge/`
 - Cycle history → `.pi-coder/logs/` (JSONL)
 - Code changes → git (the branch and checkpoint are preserved)
+
+See [Specs](#specs) for spec file structure and contents.
 
 ### On session start
 
