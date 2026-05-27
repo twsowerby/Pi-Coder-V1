@@ -198,6 +198,8 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
           COMPLETE: { enabled: false },
         },
       },
+      subagentControl: { enabled: true },
+      notifications: { enabled: false },
     };
 
     const sm = new StateMachine(config);

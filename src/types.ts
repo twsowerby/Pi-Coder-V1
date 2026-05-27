@@ -102,6 +102,21 @@ export interface SubagentControlConfig {
   enabled: boolean;
 }
 
+/** Desktop notification event types */
+export type NotificationEvent =
+  | "agent_end"        // Agent finished processing, waiting for input
+  | "complete"         // FSM reached COMPLETE state
+  | "blocked"          // FSM reached BLOCKED state (needs user intervention)
+  | "spec_approval"    // Spec interview is ready for user approval
+  | "circuit_breaker"; // Max review loops exceeded
+
+export interface NotificationsConfig {
+  /** Enable desktop notifications. Default: false. */
+  enabled: boolean;
+  /** Which events trigger a notification. Default: all. */
+  events?: NotificationEvent[];
+}
+
 export type PiCoderMode = "off" | "light" | "tdd";
 
 export interface TestCommands {
@@ -132,6 +147,8 @@ export interface PiCoderConfig {
   logging: LoggingConfig;
   /** Subagent control/monitoring configuration */
   subagentControl: SubagentControlConfig;
+  /** Desktop notifications configuration */
+  notifications: NotificationsConfig;
   /** ⚠️ EXPERIMENTAL: Named reference projects accessible by the researcher subagent */
   referenceProjects?: Record<string, string>;
 }

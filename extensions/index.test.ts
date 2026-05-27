@@ -47,6 +47,9 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
     subagentControl: {
       enabled: true,
     },
+    notifications: {
+      enabled: false,
+    },
     ...overrides,
   };
 }
@@ -510,5 +513,35 @@ describe("loadConfig: referenceProjects path resolution", () => {
     // An empty object is falsy for practical purposes — the prompt should not render
     // a reference projects section when there are no entries
     assert.ok(Object.keys(config.referenceProjects ?? {}).length === 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notification Config
+// ---------------------------------------------------------------------------
+
+describe("Notification config", () => {
+  it("notifications default to disabled", () => {
+    const config = makeConfig();
+    assert.strictEqual(config.notifications.enabled, false);
+  });
+
+  it("notifications can be enabled", () => {
+    const config = makeConfig({
+      notifications: { enabled: true },
+    });
+    assert.strictEqual(config.notifications.enabled, true);
+  });
+
+  it("notifications events can be filtered", () => {
+    const config = makeConfig({
+      notifications: { enabled: true, events: ["complete", "blocked"] },
+    });
+    assert.deepEqual(config.notifications.events, ["complete", "blocked"]);
+  });
+
+  it("notifications events default to undefined (all events)", () => {
+    const config = makeConfig();
+    assert.strictEqual(config.notifications.events, undefined);
   });
 });

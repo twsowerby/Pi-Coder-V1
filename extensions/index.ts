@@ -24,6 +24,7 @@ import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools } from "../src/tools.ts";
 import type { PiCoderConfig, PiCoderMode, FSMState, TestCommands } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
+import { sendDesktopNotification } from "../src/desktop-notifier.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
 import { join, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -666,6 +667,26 @@ export function resetNudgeState(newState: FSMState): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Check if a notification event should fire based on config.
+ * If config.notifications.events is not set, all events are enabled.
+ */
+function shouldNotify(event: string): boolean {
+  if (!config.notifications.enabled) return false;
+  const allowed = config.notifications.events;
+  if (!allowed) return true; // default: all events
+  return allowed.includes(event as any);
+}
+
+/**
+ * Send a desktop notification if the event is configured.
+ */
+function notify(event: string, title: string, body: string): void {
+  if (shouldNotify(event)) {
+    sendDesktopNotification(title, body);
+  }
+}
+
+/**
  * Format referenceProjects config into a prompt section.
  * Returns empty string if no reference projects configured.
  */
@@ -712,6 +733,9 @@ const DEFAULT_CONFIG: PiCoderConfig = {
   subagentControl: {
     enabled: true,
   },
+  notifications: {
+    enabled: false,
+  },
 };
 
 function loadConfig(cwd: string): PiCoderConfig {
@@ -755,7 +779,7 @@ function loadConfig(cwd: string): PiCoderConfig {
         parsed.referenceProjects = Object.keys(resolved).length > 0 ? resolved : undefined;
       }
 
-      return { ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) } };
+      return { ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) } };
     }
   } catch {
     // Fall through to default
@@ -1150,6 +1174,15 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   });
 
   // -----------------------------------------------------------------------
+  // Desktop Notifications
+  // -----------------------------------------------------------------------
+
+  pi.on("agent_end", async () => {
+    if (piCoderMode === "off") return;
+    notify("agent_end", "Pi Coder", "Ready for input");
+  });
+
+  // -----------------------------------------------------------------------
   // Phase 2: System Prompt Replacement
   // -----------------------------------------------------------------------
 
@@ -1292,6 +1325,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     if (piCoderMode === "off") return;
 
     const { toolName, input } = event;
+
+    // Desktop notification on spec approval interview
+    if (toolName === "interview" && stateMachine.currentState === "SPEC_WORK") {
+      notify("spec_approval", "Pi Coder", "Spec ready for your approval");
+    }
 
     // Determine which tools are allowed based on current mode
     const allowedTools = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
@@ -1566,6 +1604,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // Tests passed unexpectedly → BLOCKED
           stateMachine.transition("BLOCKED");
           transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Tests passed unexpectedly (reason: ${validation.reason ?? "RED_TAUTOLOGY"}). You are now in BLOCKED. Present recovery options to the user.`;
+          notify("blocked", "Pi Coder", "Blocked — needs your intervention");
         }
       }
 
@@ -1626,6 +1665,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
+          notify("circuit_breaker", "Pi Coder", `Circuit breaker: max review loops (${config.maxLoops}) exceeded`);
         }
       }
 
@@ -1638,7 +1678,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       await persistState();
     }
 
-    // Handle pi_coder_git results (auto-transition for checkpoint & merge)
+    // Handle pi_coder_git results (auto-transition for checkpoint & merge)"
     if (toolName === "pi_coder_git" && currentState === "GIT_CHECKPOINT") {
       // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to TDD_RED_WRITE
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
@@ -1681,6 +1721,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           wallClockMs: lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null,
           totalTokens: { ...lifecycleTokens },
         });
+        notify("complete", "Pi Coder", `Spec complete: ${activeSpecId ?? "unknown"}`);
         lifecycleStartTime = null;
         lifecycleTokens = { input: 0, output: 0, total: 0 };
         resetNudgeState(stateMachine.currentState);
@@ -1827,6 +1868,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
           });
+          notify("complete", "Pi Coder", `Spec complete: ${activeSpecId ?? "unknown"}`);
           lifecycleStartTime = null;
           lifecycleTokens = { input: 0, output: 0, total: 0 };
         }
@@ -1848,6 +1890,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
+          notify("circuit_breaker", "Pi Coder", `Circuit breaker: max review loops (${config.maxLoops}) exceeded`);
         }
       }
 
@@ -2067,6 +2110,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           },
           subagentControl: {
             enabled: true,
+          },
+          notifications: {
+            enabled: false,
           },
         };
         writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), "utf-8");

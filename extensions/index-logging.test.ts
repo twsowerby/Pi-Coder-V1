@@ -49,6 +49,12 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
       level: "verbose",
       maxLogFiles: 10,
     },
+    subagentControl: {
+      enabled: true,
+    },
+    notifications: {
+      enabled: false,
+    },
     ...overrides,
   };
 }

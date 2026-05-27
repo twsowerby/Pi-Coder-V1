@@ -19,6 +19,7 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
 - [Damage Control](#damage-control)
 - [Configuration](#configuration)
   - [referenceProjects (Experimental)](#referenceprojects-experimental)
+  - [notifications](#notifications)
 - [Customization](#customization)
   - [MCP Server Access for Subagents](#mcp-server-access-for-subagents)
   - [Per-Agent Model Selection](#per-agent-model-selection)
@@ -703,6 +704,53 @@ If these risks are unacceptable for your reference project, consider:
 - Making the reference project read-only at the filesystem level (`chmod -R a-w`)
 - Using a git worktree with `core.bare = true` on the reference project
 - Running the reference project's test suite after pi-coder sessions to verify no changes were made
+
+### `notifications`
+
+Desktop notifications when the orchestrator needs your attention or finishes work. Useful when you're context-switching while pi-coder runs.
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "events": ["agent_end", "complete", "blocked", "spec_approval", "circuit_breaker"]
+  }
+}
+```
+
+**`notifications.enabled`** — master switch. Default: `false` (opt-in).
+
+**`notifications.events`** — which events trigger a notification. If omitted, all events are enabled. Options:
+
+| Event | When it fires |
+|---|---|
+| `agent_end` | Every time the orchestrator finishes processing and waits for input. This is the broadest option — it covers all the events below. |
+| `complete` | FSM reaches COMPLETE state (spec finished, merged) |
+| `blocked` | FSM reaches BLOCKED state (needs your intervention) |
+| `spec_approval` | Spec interview is presented for your approval |
+| `circuit_breaker` | Max review loops exceeded |
+
+**How it works:** Notifications use the best available method for your environment:
+
+| Platform | Method |
+|---|---|
+| macOS | `osascript` (display notification), falls back to OSC 777 |
+| Linux | `notify-send` (libnotify), falls back to OSC 777 |
+| Kitty | OSC 99 |
+| Ghostty / iTerm2 / WezTerm | OSC 777 |
+| Windows Terminal (WSL) | PowerShell toast |
+
+No additional packages required — it uses built-in OS tools and terminal escape sequences.
+
+**Minimal config** (notify on everything):
+```json
+{ "notifications": { "enabled": true } }
+```
+
+**Targeted config** (only when you need to act):
+```json
+{ "notifications": { "enabled": true, "events": ["blocked", "spec_approval"] } }
+```
 
 ## Customization
 
