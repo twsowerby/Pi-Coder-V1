@@ -230,13 +230,13 @@ describe("Phase 2: Transition Side Effects", () => {
       assert.equal(sm.loopCount, 1);
     });
 
-    it("should NOT increment on NEEDS_CHANGES → REVIEWING (non-functional fix)", () => {
+    it("should increment on NEEDS_CHANGES → REVIEWING (non-functional fix)", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "REVIEWING");
       forceTransition(sm, "NEEDS_CHANGES");
       assert.equal(sm.loopCount, 0);
-      forceTransition(sm, "REVIEWING"); // Non-functional fix — skip RED/GREEN
-      assert.equal(sm.loopCount, 0); // Still 0, not incremented
+      forceTransition(sm, "REVIEWING"); // Non-functional fix — apply fix, re-review
+      assert.equal(sm.loopCount, 1); // Increments — circuit breaker protects both paths
     });
 
     it("should increment on each review cycle", () => {
@@ -821,7 +821,7 @@ describe("RED tautology acknowledge", () => {
     assert.strictEqual(sm.currentState, "BLOCKED");
   });
 
-  it("NEEDS_CHANGES nudge says advance FSM first, not delegate", () => {
+  it("NEEDS_CHANGES allows implementor delegation and nudge reflects this", () => {
     const sm = new StateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
@@ -833,9 +833,11 @@ describe("RED tautology acknowledge", () => {
     forceTransition(sm, "TDD_GREEN_VALIDATE");
     forceTransition(sm, "REVIEWING");
     forceTransition(sm, "NEEDS_CHANGES");
+    // Implementor is now allowed directly in NEEDS_CHANGES for non-functional fixes
+    assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.implementor"), true);
     const nudge = sm.canNudge();
     assert.strictEqual(nudge.shouldNudge, true);
-    assert.strictEqual(nudge.expectedTool, "pi_coder_advance_fsm");
-    assert.ok(nudge.expectedAction.includes("Advance FSM"));
+    assert.strictEqual(nudge.expectedTool, "subagent");
+    assert.ok(nudge.expectedAction.includes("implementor"));
   });
 });

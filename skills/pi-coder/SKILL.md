@@ -236,7 +236,7 @@ The FSM does not track which unit you're on — you do. After each unit passes G
 - If units remain, use `pi_coder_advance_fsm TDD_RED_WRITE` to advance to the next unit's RED phase
 - If all units are complete, the next test pass will auto-transition to REVIEWING
 
-The `loopCount` only increments on review cycles (NEEDS_CHANGES → TDD_RED_WRITE), not on unit-to-unit advances.
+The `loopCount` increments on every review cycle (both NEEDS_CHANGES → TDD_RED_WRITE and NEEDS_CHANGES → REVIEWING), not on unit-to-unit advances.
 
 ---
 
@@ -253,13 +253,13 @@ When your FSM is in REVIEWING (all implementation units complete):
 
    - **✅ Approved** → FSM transitions to APPROVED. Proceed to Final Approval.
    - **⚠️ Needs Changes** → FSM transitions to NEEDS_CHANGES.
-     - **Functional fix** (production code changes): Advance to TDD_RED_WRITE via `pi_coder_advance_fsm TDD_RED_WRITE`. A new RED/GREEN cycle is needed. Loop count increments.
-     - **Non-functional fix** (test cleanup, comments, refactoring): Advance directly to REVIEWING via `pi_coder_advance_fsm REVIEWING`. No RED/GREEN cycle needed — the fix doesn't change production behavior. Loop count does NOT increment.
+     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES. Then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING` for re-review. Loop count increments.
+     - **Functional fix** (production code changes): Advance to TDD_RED_WRITE via `pi_coder_advance_fsm TDD_RED_WRITE`. A full RED/GREEN cycle is needed. Loop count increments.
    - **❌ Request Changes** → Same as Needs Changes — loop back with specific directives.
 
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec. If the reviewer found an issue with the auth middleware, re-delegate for the relevant unit only.
 
-4. Monitor the loop count. Every NEEDS_CHANGES → TDD_RED_WRITE cycle increments the counter (NEEDS_CHANGES → REVIEWING does not). If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
+4. Monitor the loop count. Every NEEDS_CHANGES exit increments the counter (both functional and non-functional fix paths). If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
 
 ---
 

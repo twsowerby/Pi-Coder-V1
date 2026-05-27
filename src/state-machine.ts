@@ -203,7 +203,7 @@ const ACTION_RULES: Array<{
   {
     tool: "subagent",
     agents: ["pi-coder.implementor"],
-    allowedStates: new Set(["TDD_RED_WRITE", "TDD_GREEN_WRITE"]),
+    allowedStates: new Set(["TDD_RED_WRITE", "TDD_GREEN_WRITE", "NEEDS_CHANGES"]),
   },
   {
     tool: "subagent",
@@ -240,7 +240,7 @@ const NUDE_EXPECTATIONS: Record<FSMState, NudgeExpectation> = {
   TDD_GREEN_VALIDATE: { shouldNudge: true, expectedAction: "Run tests (GREEN validation)", expectedTool: "pi_coder_run_tests" },
   REVIEWING: { shouldNudge: true, expectedAction: "Delegate to pi-coder.reviewer", expectedTool: "subagent" },
   APPROVED: { shouldNudge: false, expectedAction: "", expectedTool: "" },
-  NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Advance FSM to TDD_RED_WRITE (functional) or REVIEWING (non-functional), then delegate", expectedTool: "pi_coder_advance_fsm" },
+  NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Delegate implementor for non-functional fix, then advance to REVIEWING; or advance to TDD_RED_WRITE for functional fix", expectedTool: "subagent" },
   FINAL_APPROVAL: { shouldNudge: false, expectedAction: "", expectedTool: "" },
   MERGING: { shouldNudge: true, expectedAction: "Merge feature branch", expectedTool: "pi_coder_git" },
   COMPLETE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
@@ -396,8 +396,10 @@ export class StateMachine {
   // --- Side Effects ---
 
   private applyTransitionSideEffects(from: FSMState, to: FSMState): void {
-    // Increment loop counter on NEEDS_CHANGES → TDD_RED_WRITE
-    if (from === "NEEDS_CHANGES" && to === "TDD_RED_WRITE") {
+    // Increment loop counter on NEEDS_CHANGES exits
+    // Both functional (→ TDD_RED_WRITE) and non-functional (→ REVIEWING) fix
+    // cycles count toward the circuit breaker — any infinite loop is a problem
+    if (from === "NEEDS_CHANGES" && (to === "TDD_RED_WRITE" || to === "REVIEWING")) {
       this._loopCount++;
     }
 

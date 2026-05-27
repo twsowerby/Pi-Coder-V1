@@ -1437,8 +1437,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               guidance += ` The spec must be saved and approved first. Step 1: pi_coder_save_spec. Step 2: interview for approval. Step 3: pi_coder_advance_fsm with targetState "SPEC_APPROVED". Step 4: pi_coder_git checkpoint. Then you can delegate the implementor.`;
             } else if (targetAgent === "pi-coder.implementor" && current === "SPEC_APPROVED") {
               guidance += ` Checkpoint first, then the FSM auto-advances to TDD_RED_WRITE. Step 1: pi_coder_git with action "checkpoint". Step 2: delegate to pi-coder.implementor.`;
-            } else if (targetAgent === "pi-coder.implementor" && current === "NEEDS_CHANGES") {
-              guidance += ` Advance to a TDD state first. Step 1: pi_coder_advance_fsm with targetState "TDD_RED_WRITE" (functional fix) or "REVIEWING" (non-functional fix). Step 2: delegate to pi-coder.implementor.`;
             } else if (targetAgent === "pi-coder.reviewer" && current !== "REVIEWING") {
               guidance += ` The reviewer runs in REVIEWING state. Complete the current implementation cycle first, then pi_coder_advance_fsm with targetState "REVIEWING".`;
             } else {

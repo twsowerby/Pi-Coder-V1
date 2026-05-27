@@ -543,7 +543,7 @@ When `testCommands` is present, it's used instead of `testCommand`. The `suite` 
 
 ### `maxLoops`
 
-Maximum number of NEEDS_CHANGES → TDD_RED_WRITE review cycles before the circuit breaker halts the spec. When tripped, the orchestrator pauses and presents options to the user. Default: `3`.
+Maximum number of review cycles before the circuit breaker halts the spec. Both functional (NEEDS_CHANGES → TDD_RED_WRITE) and non-functional (NEEDS_CHANGES → REVIEWING) fix cycles count toward the limit. When tripped, the orchestrator pauses and presents options to the user. Default: `3`.
 
 ### `createBranch`
 
@@ -970,7 +970,7 @@ Implementation happens **one unit at a time**. For each unit in the implementati
 1. Orchestrator delegates to reviewer with acceptance criteria + git diff
 2. Reviewer checks: test alignment, bugs, security, correctness (skips style, nitpicks)
 3. Verdict: ✅ Approved / ⚠️ Needs Changes — this **auto-transitions** the FSM (like test results)
-4. If needs changes → **functional fix**: loop back to RED (up to `maxLoops`); **non-functional fix** (test cleanup, comments): advance directly to REVIEWING
+4. If needs changes → **functional fix**: advance to TDD_RED_WRITE (full RED/GREEN cycle); **non-functional fix** (test cleanup, comments, naming): delegate implementor directly in NEEDS_CHANGES, then advance to REVIEWING for re-review
 
 ### Delivery
 
