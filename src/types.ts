@@ -108,6 +108,8 @@ export interface IStateMachine {
   canNudge(): { shouldNudge: boolean; expectedAction: string; expectedTool: string };
   /** Set the git ref independently (used after checkpoint) */
   setGitRef(ref: string): void;
+  /** Build a compact FSM diagram string from the state machine definition */
+  buildDiagram(): string;
   /** Full reset to IDLE */
   reset(): void;
   /** Serialize to JSON for persistence */
@@ -118,8 +120,8 @@ export interface IStateMachine {
  * A single legal transition in the FSM.
  */
 export interface FSMTransition {
-  from: FSMState;
-  to: FSMState;
+  from: string;
+  to: string;
   event: string;
 }
 
@@ -152,8 +154,8 @@ export interface NudgeConfig {
   enabled: boolean;
   /** Default thresholds applied to states not explicitly listed */
   defaults: NudgeDefaults;
-  /** Per-state overrides. Keys are FSMState strings. */
-  states: Partial<Record<FSMState, NudgeStateConfig>>;
+  /** Per-state overrides. Keys are state name strings. */
+  states: Partial<Record<string, NudgeStateConfig>>;
 }
 
 /**
@@ -311,7 +313,7 @@ export interface SpecFile {
   /** Ordered implementation units for per-unit TDD delegation */
   implementationPlan: ImplementationUnit[];
   /** Current lifecycle status of the spec */
-  status: FSMState;
+  status: string;
 }
 
 /**
@@ -347,7 +349,7 @@ export interface SpecState {
   /** Schema version */
   version: 1;
   /** Current FSM state */
-  currentState: FSMState;
+  currentState: string;
   /** Review loop count (increments on NEEDS_CHANGES exits) */
   loopCount: number;
   /** Pre-implementation git ref for rollback and diff */

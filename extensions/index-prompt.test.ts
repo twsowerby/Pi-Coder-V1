@@ -96,13 +96,14 @@ describe("Spec 13 Phase 1: Orchestrator Prompt File", () => {
   it("the file reads clearly as Markdown without code knowledge", () => {
     const content = readFileSync(orchestratorPromptPath, "utf-8");
 
-    // After stripping frontmatter and comments, the body should start with the role definition
+    // After stripping frontmatter and comments, the body should start with the critical invariant
     const body = content
       .replace(/^---\n[\s\S]*?\n---\n/, "")
       .replace(/<!--[\s\S]*?-->/, "")
       .trim();
 
-    assert.ok(body.startsWith("You are the Pi Coder orchestrator"), "Body must start with the role definition");
+    assert.ok(body.startsWith("⚠️ CRITICAL"), "Body must start with the critical invariant");
+    assert.ok(body.includes("You are the Pi Coder orchestrator"), "Must include the role definition");
     assert.ok(body.includes("Delegation rules:"), "Must include delegation rules section");
     assert.ok(body.includes("NEVER use edit or write tools"), "Must include the key delegation constraint");
   });

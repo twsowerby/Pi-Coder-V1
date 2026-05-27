@@ -9,30 +9,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { LightStateMachine } from "./light-state-machine.ts";
 import type { LightFSMState, PiCoderConfig, EvidenceFlag } from "./types.ts";
-
-/** Default config for tests. */
-function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
-  return {
-    testCommand: "npm test",
-    maxLoops: 3,
-    createBranch: true,
-    mergeBranch: "merge",
-    branchPrefix: "pi-coder/",
-    nudge: {
-      enabled: true,
-      defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
-      states: {
-        SPEC_WORK: { turnsBeforeNudge: 3 },
-        BLOCKED: { turnsBeforeNudge: 2 },
-        IDLE: { enabled: false },
-        SPEC_APPROVED: { enabled: false },
-        FINAL_APPROVAL: { enabled: false },
-        COMPLETE: { enabled: false },
-      },
-    },
-    ...overrides,
-  };
-}
+import { makeConfig } from "./test/state-machine-helpers.ts";
 
 /**
  * Force a transition, setting required evidence first.
