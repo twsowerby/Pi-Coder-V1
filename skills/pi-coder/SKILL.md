@@ -187,7 +187,9 @@ When your FSM is in TDD_RED_WRITE for a unit:
 
 4. Interpret the test result:
    - **Tests fail** → FSM auto-transitions to TDD_GREEN_WRITE. The tool result will include an AUTO-TRANSITION notice — read it! Do NOT call `pi_coder_advance_fsm` when auto-transitions happen.
-   - **Tests pass** → FSM transitions to BLOCKED with reason RED_TAUTOLOGY. See Recovery Procedures.
+   - **Tests pass** (RED tautology) → The tool result includes guidance with two options:
+     - **Acknowledge and proceed**: Use `pi_coder_advance_fsm TDD_GREEN_WRITE` — appropriate when adding assertions to existing passing tests, or when the implementor applied code+test simultaneously but coverage is valid.
+     - **Block**: Use `pi_coder_advance_fsm BLOCKED` — appropriate when the test suite is genuinely wrong or coverage is incomplete.
 
 ### GREEN Phase (per unit)
 
@@ -218,7 +220,8 @@ The FSM uses both **auto-transitions** (triggered by tool results) and **manual 
 |---|---|---|
 | GIT_CHECKPOINT → TDD_RED_WRITE | Auto | Git checkpoint success |
 | TDD_RED_VALIDATE → TDD_GREEN_WRITE | Auto | RED test result (tests fail as expected) |
-| TDD_RED_VALIDATE → BLOCKED | Auto | RED tautology (tests pass unexpectedly) |
+| TDD_RED_VALIDATE → TDD_GREEN_WRITE | Guided | RED tautology acknowledged — tests passed but coverage is valid |
+| TDD_RED_VALIDATE → BLOCKED | Guided | RED tautology — tests passing is genuinely problematic |
 | TDD_GREEN_VALIDATE → TDD_GREEN_WRITE | Auto | GREEN test result (tests still fail) |
 | TDD_RED_WRITE → TDD_RED_VALIDATE | Manual | After implementor completes RED delegation |
 | TDD_GREEN_WRITE → TDD_GREEN_VALIDATE | Manual | After implementor completes GREEN delegation |
@@ -408,21 +411,22 @@ Do not include the diff itself in the task payload. The reviewer discovers the d
 
 ### RED_TAUTOLOGY — Tests Passed When They Should Fail
 
-When the FSM enters BLOCKED with reason RED_TAUTOLOGY, the tests passed during the RED phase when they should have failed. This means either:
+When RED tests pass unexpectedly, the extension presents guidance with two options (instead of automatically blocking):
 
-- The feature already partially exists and the tests are covering existing behavior
-- The tests are tautological (they assert nothing meaningful)
-- The user's request was already satisfied
+1. **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — The test coverage is valid even though tests passed immediately. This is common when:
+   - Adding assertions to existing passing tests (verification, not TDD)
+   - The implementor applied code+test simultaneously but coverage is valid
+   - The feature already partially exists and you're extending coverage
 
-Present the user with three options using `interview`:
+2. **Block and recover** (`pi_coder_advance_fsm BLOCKED`) — The tests passing is genuinely problematic. This means either:
+   - The tests are tautological (they assert nothing meaningful)
+   - The test suite is fundamentally wrong
 
-1. **Continue anyway** — Tests already cover existing behavior. Skip to GREEN phase and write only the new code for any uncovered acceptance criteria.
+   In BLOCKED state, present the user with options using `interview`:
+   - **Rewrite tests** — Loop back to TDD_RED_WRITE. In your next delegation to the implementor, explicitly state: "Write tests for only the NEW behavior that does not already exist. The existing tests cover {what they cover}. Write tests only for: {uncovered AC items}."
+   - **Abort spec** — Rollback to the pre-implementation checkpoint and return to IDLE. No code changes are preserved.
 
-2. **Rewrite tests** — Loop back to TDD_RED_WRITE. In your next delegation to the implementor, explicitly state: "Write tests for only the NEW behavior that does not already exist. The existing tests cover {what they cover}. Write tests only for: {uncovered AC items}."
-
-3. **Abort spec** — Rollback to the pre-implementation checkpoint and return to IDLE. No code changes are preserved.
-
-Do not proceed without user input. The BLOCKED state exists to prevent the harness from making assumptions about why tests passed.
+**Most RED tautologies are benign.** If you added a test assertion for behavior that already exists, the test is valid — acknowledge and proceed. Only block if the test is wrong, not if the code is right.
 
 ### CIRCUIT_BREAKER — Max Review Loops Reached
 

@@ -1432,13 +1432,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             // Contextual guidance based on what they tried and where they are
             let guidance = `🛡️ Cannot delegate to ${targetAgent} in ${current}.`;
             if (targetAgent === "pi-coder.researcher" && current === "IDLE") {
-              guidance += ` The FSM needs to be in SPEC_WORK first. Use pi_coder_advance_fsm with targetState "SPEC_WORK" to start the research phase.`;
-            } else if (targetAgent === "pi-coder.implementor" && (current === "SPEC_WORK" || current === "SPEC_APPROVED")) {
-              guidance += ` The spec must be approved and checkpointed first. Save the spec with pi_coder_save_spec, get user approval via interview, then advance with pi_coder_advance_fsm.`;
+              guidance += ` Step 1: pi_coder_advance_fsm with targetState "SPEC_WORK". Step 2: delegate to pi-coder.researcher.`;
+            } else if (targetAgent === "pi-coder.implementor" && current === "SPEC_WORK") {
+              guidance += ` The spec must be saved and approved first. Step 1: pi_coder_save_spec. Step 2: interview for approval. Step 3: pi_coder_advance_fsm with targetState "SPEC_APPROVED". Step 4: pi_coder_git checkpoint. Then you can delegate the implementor.`;
+            } else if (targetAgent === "pi-coder.implementor" && current === "SPEC_APPROVED") {
+              guidance += ` Checkpoint first, then the FSM auto-advances to TDD_RED_WRITE. Step 1: pi_coder_git with action "checkpoint". Step 2: delegate to pi-coder.implementor.`;
+            } else if (targetAgent === "pi-coder.implementor" && current === "NEEDS_CHANGES") {
+              guidance += ` Advance to a TDD state first. Step 1: pi_coder_advance_fsm with targetState "TDD_RED_WRITE" (functional fix) or "REVIEWING" (non-functional fix). Step 2: delegate to pi-coder.implementor.`;
             } else if (targetAgent === "pi-coder.reviewer" && current !== "REVIEWING") {
-              guidance += ` The reviewer can only be called in REVIEWING state. Complete the implementation cycle (RED/GREEN) first, then advance to REVIEWING with pi_coder_advance_fsm.`;
+              guidance += ` The reviewer runs in REVIEWING state. Complete the current implementation cycle first, then pi_coder_advance_fsm with targetState "REVIEWING".`;
             } else {
-              guidance += ` Use pi_coder_advance_fsm to advance the FSM to an appropriate state first.`;
+              const validTargets = stateMachine.getValidTransitions();
+              guidance += ` Valid advance targets from ${current}: ${validTargets.join(", ")}. Use pi_coder_advance_fsm to advance, then delegate.`;
             }
             guidance += ` Do not retry this exact call.`;
             logEvent("tool_call_blocked", {
@@ -1601,10 +1606,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           stateMachine.transition("TDD_GREEN_WRITE");
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
-          // Tests passed unexpectedly → BLOCKED
-          stateMachine.transition("BLOCKED");
-          transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Tests passed unexpectedly (reason: ${validation.reason ?? "RED_TAUTOLOGY"}). You are now in BLOCKED. Present recovery options to the user.`;
-          notify("blocked", "Pi Coder", "Blocked — needs your intervention");
+          // Tests passed unexpectedly during RED phase
+          // Don't auto-transition to BLOCKED — this is common for:
+          //   - Adding assertions to existing passing tests (verification, not TDD)
+          //   - Implementor applied code+test simultaneously
+          //   - Small fixes where separate RED/GREEN is overkill
+          // Instead, append guidance with two options.
+          const reason = validation.reason ?? "RED_TAUTOLOGY";
+          transitionSteer =
+            `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have two options:` +
+            `\n1. Acknowledge and proceed: Use pi_coder_advance_fsm with targetState "TDD_GREEN_WRITE" (event: red_tautology_acknowledge) — this skips GREEN since the code already works.` +
+            `\n2. If this is a genuine problem (tests are wrong, coverage is incomplete): use pi_coder_advance_fsm with targetState "BLOCKED" to pause and present recovery options to the user.` +
+            `\nMost of the time, option 1 is correct — the test suite now has new coverage whether or not it failed first.`;
         }
       }
 
@@ -1646,17 +1659,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           loopCount: stateMachine.loopCount,
           specId: activeSpecId,
         });
-
-        // Log lifecycle end on BLOCKED (RED tautology)
-        if (stateMachine.currentState === "BLOCKED") {
-          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
-          logEvent("lifecycle_end", {
-            specId: activeSpecId,
-            outcome: "BLOCKED",
-            wallClockMs,
-            totalTokens: { ...lifecycleTokens },
-          });
-        }
 
         // Log circuit breaker
         if (stateMachine.circuitBreakerTripped()) {

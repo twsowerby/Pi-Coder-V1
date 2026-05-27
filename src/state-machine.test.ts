@@ -73,6 +73,7 @@ describe("Phase 1: State & Transition Table", () => {
       { from: "TDD_RED_WRITE", to: "TDD_RED_VALIDATE", event: "tests_written" },
       { from: "TDD_RED_VALIDATE", to: "TDD_GREEN_WRITE", event: "tests_fail_as_expected" },
       { from: "TDD_RED_VALIDATE", to: "BLOCKED", event: "tests_pass_unexpectedly" },
+      { from: "TDD_RED_VALIDATE", to: "TDD_GREEN_WRITE", event: "red_tautology_acknowledge" },
       { from: "TDD_GREEN_WRITE", to: "TDD_GREEN_VALIDATE", event: "code_written" },
       { from: "TDD_GREEN_VALIDATE", to: "REVIEWING", event: "tests_pass" },
       { from: "TDD_GREEN_VALIDATE", to: "TDD_GREEN_WRITE", event: "tests_still_fail" },
@@ -774,3 +775,67 @@ function fullReviewCycle(sm: StateMachine, n: number): void {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5: RED Tautology Acknowledge
+// ---------------------------------------------------------------------------
+
+describe("RED tautology acknowledge", () => {
+  it("allows TDD_RED_VALIDATE → TDD_GREEN_WRITE via red_tautology_acknowledge", () => {
+    const sm = new StateMachine(makeConfig());
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    // GIT_CHECKPOINT → TDD_RED_WRITE is auto-transitioned, but we need to force it
+    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    const result = sm.transition("TDD_GREEN_WRITE");
+    assert.strictEqual(result, undefined, "Transition should succeed");
+    assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE");
+  });
+
+  it("requires test_run_this_state evidence for red_tautology_acknowledge", () => {
+    const sm = new StateMachine(makeConfig());
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    // No test_run_this_state evidence
+    const result = sm.transition("TDD_GREEN_WRITE");
+    assert.ok(result !== undefined, "Should return a guard error");
+    assert.ok("missingEvidence" in result!);
+    assert.ok((result as any).missingEvidence.includes("test_run_this_state"));
+  });
+
+  it("TDD_RED_VALIDATE → BLOCKED is still available for hard failures", () => {
+    const sm = new StateMachine(makeConfig());
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    const result = sm.transition("BLOCKED");
+    assert.strictEqual(result, undefined, "BLOCKED transition should succeed");
+    assert.strictEqual(sm.currentState, "BLOCKED");
+  });
+
+  it("NEEDS_CHANGES nudge says advance FSM first, not delegate", () => {
+    const sm = new StateMachine(makeConfig());
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
+    forceTransition(sm, "NEEDS_CHANGES");
+    const nudge = sm.canNudge();
+    assert.strictEqual(nudge.shouldNudge, true);
+    assert.strictEqual(nudge.expectedTool, "pi_coder_advance_fsm");
+    assert.ok(nudge.expectedAction.includes("Advance FSM"));
+  });
+});

@@ -615,9 +615,10 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     const details = result.details as Record<string, unknown>;
     assert.strictEqual(details.previousState, "IDLE");
     assert.strictEqual(details.newState, "SPEC_WORK");
-    // Verify spec directory was initialized
+    // Verify spec ID was generated (listSpecs called) but no directory created yet
     assert.strictEqual(mockSpec.calls[0].method, "listSpecs");
-    assert.strictEqual(mockSpec.calls[1].method, "initSpecDir");
+    // initSpecDir is NOT called on SPEC_WORK entry anymore — directory is created
+    // lazily when pi_coder_save_spec is called
   });
 
   it("advances SPEC_WORK → SPEC_APPROVED", async () => {

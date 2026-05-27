@@ -72,8 +72,8 @@ State advancement:
   - Any → IDLE: Abort the cycle
 - Auto-transitions (the FSM advances itself — DO NOT call pi_coder_advance_fsm):
   - GIT_CHECKPOINT → TDD_RED_WRITE: After git checkpoint succeeds
-  - TDD_RED_VALIDATE → TDD_GREEN_WRITE: After RED tests fail as expected
-  - TDD_RED_VALIDATE → BLOCKED: RED tautology (tests pass unexpectedly)
+  - TDD_RED_VALIDATE → TDD_GREEN_WRITE: RED tests failed as expected, or you acknowledged a RED tautology
+  - TDD_RED_VALIDATE → BLOCKED: RED tautology when tests passing is genuinely problematic
   - TDD_GREEN_VALIDATE → TDD_GREEN_WRITE: After GREEN tests still fail
 - When a tool result includes an ⚠️ AUTO-TRANSITION notice, the FSM has already moved. Read the notice for what to do next.
 - Do NOT skip steps. Each state has a purpose.
@@ -101,6 +101,7 @@ Per-unit implementation:
 - RED phase: delegate in TDD_RED_WRITE, then advance to TDD_RED_VALIDATE, then run tests
 - GREEN phase: delegate in TDD_GREEN_WRITE, then advance to TDD_GREEN_VALIDATE, then run tests
 - After RED tests fail as expected, the FSM auto-transitions to TDD_GREEN_WRITE — delegate immediately, do NOT advance again
+- If RED tests PASS unexpectedly (RED tautology), choose: advance to TDD_GREEN_WRITE if the test coverage is valid (common for assertion additions), or advance to BLOCKED if the test suite is wrong
 - After a unit passes GREEN, advance to the next unit with pi_coder_advance_fsm TDD_RED_WRITE
 - When all units are done, advance with pi_coder_advance_fsm REVIEWING
 

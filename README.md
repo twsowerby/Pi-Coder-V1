@@ -89,7 +89,8 @@ IDLE → SPEC_WORK → SPEC_APPROVED →
 GIT_CHECKPOINT → TDD_RED_WRITE → TDD_RED_VALIDATE →
 TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →
 (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
-(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) | BLOCKED
+(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) |
+(TDD_RED_VALIDATE → TDD_GREEN_WRITE | BLOCKED) → user intervention
 ```
 
 ### Three Subagents
@@ -299,17 +300,15 @@ The **implementation plan** is critical — it breaks the spec into atomic units
 
 ### Spec directory structure
 
-Each spec is a directory containing three files:
+Each spec is a directory containing two files:
 
 ```
 .pi-coder/specs/2026-05-25-1430-user-authentication/
-├── request.md   ← Your original request (captured verbatim)
 ├── spec.md       ← The spec (markdown with YAML frontmatter)
 └── state.json    ← FSM state, evidence flags, git ref
 ```
 
-- **request.md** — What you asked for. Written immediately when the cycle starts, so your request survives crashes.
-- **spec.md** — The structured spec. You can read or edit this file directly if you want to adjust the plan before or during implementation.
+- **spec.md** — The structured spec. Created when `pi_coder_save_spec` is called (not before — no stale empty directories). You can read or edit this file directly if you want to adjust the plan before or during implementation.
 - **state.json** — Machine-readable state for resuming cycles across sessions.
 
 ### Editing specs manually
@@ -389,6 +388,19 @@ The FSM **enforces invariants**, not just the orchestrator prompt. Before allowi
 | TDD_GREEN_VALIDATE → exits | `test_run_this_state` | Cannot skip GREEN validation — must actually run tests |
 
 This prevents the LLM from shortcutting through validation states without executing tests, or advancing to implementation without user spec approval. The FSM is the single source of truth for process invariants.
+
+### RED Tautology Handling
+
+When tests pass during the RED phase (RED tautology), the FSM no longer auto-transitions to BLOCKED. Instead, the extension appends guidance to the test result with two options:
+
+1. **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — the test coverage is valid even though tests passed immediately. This is the common case for:
+   - Adding assertions to existing passing tests (verification, not TDD)
+   - Implementor applied code+test simultaneously but coverage is valid
+   - Extending test coverage for behavior that already exists
+
+2. **Block and recover** (`pi_coder_advance_fsm BLOCKED`) — the tests passing is genuinely problematic (tests are tautological or wrong). In BLOCKED, the orchestrator presents recovery options.
+
+The key insight: the invariant is "all behavior is tested," NOT "every test must fail before it passes." A verification test that passes immediately is still a valid test.
 
 ## Commands
 
@@ -920,7 +932,7 @@ When a spec involves UI work, the orchestrator checks for this file:
 
 ### Research & Spec
 
-1. You make a request → orchestrator advances the FSM to SPEC_WORK (this creates the spec directory with `request.md` for crash recovery)
+1. You make a request → orchestrator advances the FSM to SPEC_WORK (spec ID is generated immediately, but the directory is created when the spec is saved with `pi_coder_save_spec`)
 2. Orchestrator delegates to researcher (can do multiple rounds)
 3. Orchestrator checks for `design_system.md` in knowledge if the spec involves UI work — if missing, suggests you create one
 4. Orchestrator prunes research to only what's needed: acceptance criteria, constraints, key files
@@ -937,10 +949,11 @@ Implementation happens **one unit at a time**. For each unit in the implementati
 1. Orchestrator delegates to implementor in **RED mode** for **one unit only** — "write tests for these ACs"
 2. Implementor writes failing tests for that unit's acceptance criteria
 3. `pi_coder_run_tests` validates the tests — they **must fail** (that's the point)
-4. If tests pass unexpectedly → **RED_TAUTOLOGY** — the harness enters BLOCKED and presents three options:
-   - **Continue anyway** — skip to GREEN for new behavior
-   - **Rewrite tests** — loop back to RED with instruction to test only new behavior
-   - **Abort spec** — rollback to checkpoint, return to IDLE
+4. If tests pass unexpectedly → **RED_TAUTOLOGY** — the extension presents guidance with two options:
+   - **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — the test coverage is valid even though it passed immediately. This is common for assertion additions to existing tests, or when the implementor applied code+test simultaneously.
+   - **Block** (`pi_coder_advance_fsm BLOCKED`) — the tests passing is genuinely problematic. In BLOCKED, present options to rewrite tests or abort the spec.
+
+   **Most RED tautologies are benign.** If the test is valid, acknowledge and proceed. Only block if the test is wrong, not if the code is right.
 
 #### GREEN Phase (per unit)
 

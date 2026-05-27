@@ -622,17 +622,16 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           };
         }
 
-        // On SPEC_WORK entry: create spec directory + request.md + state.json + set activeSpecId
+        // On SPEC_WORK entry: generate spec ID and set active, but delay
+        // directory creation until pi_coder_save_spec (avoids stale empty dirs)
         if (targetState === "SPEC_WORK") {
           const requestText = request || "(no request text provided)";
           const existingSpecs = await specManager.listSpecs();
           const specId = generateSpecId(requestText, existingSpecs);
 
-          await specManager.initSpecDir(specId, requestText);
           setActiveSpecId(specId);
-
-          // Per-spec state.json will be persisted by the extension's persistState()
-          // after this tool completes (tool_result catch-all).
+          // Directory is created when pi_coder_save_spec is called, not here.
+          // This prevents directories with only request.md from cluttering .pi-coder/specs/
         }
 
         // On IDLE entry: clean up abandoned specs (directory with no spec.md)
@@ -646,7 +645,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         // Provide contextual guidance so the orchestrator knows what to do next
         const nextActionHints: Partial<Record<FSMState, string>> = {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",
-          SPEC_WORK: "Spec directory created. Delegate to pi-coder.researcher to research the spec.",
+          SPEC_WORK: "Spec ID generated. Delegate to pi-coder.researcher to research. Save with pi_coder_save_spec before presenting for approval.",
           SPEC_APPROVED: config.createBranch ? "Create a feature branch with pi_coder_git checkout_branch, then checkpoint with pi_coder_git checkpoint." : "Checkpoint with pi_coder_git checkpoint (branch creation is disabled — working on current branch).",
           GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE when ready.",
           TDD_RED_WRITE: "Delegate to pi-coder.implementor to write RED (failing) tests.",
