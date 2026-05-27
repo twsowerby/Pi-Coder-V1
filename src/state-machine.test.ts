@@ -307,29 +307,21 @@ describe("Phase 2: Transition Side Effects", () => {
   });
 
   describe("activeSpecId and gitRef", () => {
-    it("should start as null", () => {
+    it("should start with null gitRef", () => {
       const sm = new StateMachine(makeConfig());
-      assert.equal(sm.activeSpecId, null);
       assert.equal(sm.gitRef, null);
     });
 
-    it("should track activeSpecId after setActiveSpec", () => {
+    it("should track gitRef after setGitRef", () => {
       const sm = new StateMachine(makeConfig());
-      sm.setActiveSpec("user-authentication");
-      assert.equal(sm.activeSpecId, "user-authentication");
-    });
-
-    it("should track gitRef after setActiveSpec", () => {
-      const sm = new StateMachine(makeConfig());
-      sm.setActiveSpec("user-authentication", "abc1234");
+      sm.setGitRef("abc1234");
       assert.equal(sm.gitRef, "abc1234");
     });
 
-    it("should clear both on reset()", () => {
+    it("should clear gitRef on reset()", () => {
       const sm = new StateMachine(makeConfig());
-      sm.setActiveSpec("user-authentication", "abc1234");
+      sm.setGitRef("abc1234");
       sm.reset();
-      assert.equal(sm.activeSpecId, null);
       assert.equal(sm.gitRef, null);
       assert.equal(sm.currentState, "IDLE");
       assert.equal(sm.loopCount, 0);
@@ -694,7 +686,6 @@ describe("Phase 4: Persistence", () => {
         const json = sm.toJSON();
         const restored = StateMachine.fromJSON(json, makeConfig());
         assert.equal(restored.currentState, state);
-        assert.equal(restored.activeSpecId, sm.activeSpecId);
         assert.equal(restored.gitRef, sm.gitRef);
         assert.equal(restored.loopCount, sm.loopCount);
       });

@@ -391,7 +391,6 @@ describe("Phase 2: pi_coder_git", () => {
     const { tools, sm, mockGit, setActiveSpec } = setupMocks();
     advanceToState(sm, "GIT_CHECKPOINT");
     setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
-    sm.setActiveSpec("my-spec");
     await executeTool(tools, "pi_coder_git", { action: "checkpoint" });
     assert.strictEqual(mockGit.calls[0].args[0], "wip: checkpoint-test-spec");
   });
@@ -400,7 +399,7 @@ describe("Phase 2: pi_coder_git", () => {
     const { tools, sm, mockGit, setActiveSpec } = setupMocks();
     advanceToState(sm, "GIT_CHECKPOINT");
     setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
-    sm.setActiveSpec("test-spec", "original-ref");
+    sm.setGitRef("original-ref");
     const result = await executeTool(tools, "pi_coder_git", { action: "rollback" });
     assert.ok(!result.isError, "rollback should succeed");
     assert.strictEqual(sm.currentState, "IDLE", "FSM should transition to IDLE after rollback");
@@ -731,7 +730,6 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
 describe("Phase 6: Spec File Tools", () => {
   it("saves a spec and sets activeSpecId", async () => {
     const { tools, sm, mockSpec } = setupMocks();
-    assert.strictEqual(sm.activeSpecId, null);
     const result = await executeTool(tools, "pi_coder_save_spec", {
       id: "user-auth",
       title: "User Authentication",

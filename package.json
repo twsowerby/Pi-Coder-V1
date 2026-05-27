@@ -15,7 +15,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test src/**/*.test.ts",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts' 'extensions/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "pi": {

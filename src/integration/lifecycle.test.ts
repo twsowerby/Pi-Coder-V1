@@ -253,7 +253,7 @@ describe("Phase 1: Test Infrastructure", () => {
 
   it("state machine starts in IDLE state", () => {
     assert.strictEqual(stateMachine.currentState, "IDLE");
-    assert.strictEqual(stateMachine.activeSpecId, null);
+    assert.strictEqual(stateMachine.gitRef, null);
     assert.strictEqual(stateMachine.loopCount, 0);
   });
 
@@ -350,10 +350,10 @@ describe("Phase 2: Happy Path Lifecycle", () => {
 
     // Store the git ref in the state machine (like the extension does)
     if (checkpointResult.ref) {
-      stateMachine.setActiveSpec(specId, checkpointResult.ref);
+      stateMachine.setGitRef(checkpointResult.ref);
     }
-    assert.strictEqual(stateMachine.activeSpecId, specId);
     assert.ok(stateMachine.gitRef);
+    assert.strictEqual(stateMachine.gitRef, checkpointResult.ref);
 
     // Transition: GIT_CHECKPOINT → TDD_RED_WRITE
     forceTransition(stateMachine, "TDD_RED_WRITE");
@@ -483,11 +483,10 @@ describe("Phase 2: Happy Path Lifecycle", () => {
     assert.ok(checkpointResult.ref, "Checkpoint should return a commit SHA");
 
     // Store the ref
-    stateMachine.setActiveSpec(specId, checkpointResult.ref);
+    stateMachine.setGitRef(checkpointResult.ref);
 
     // Verify the ref is available for reviewer briefing
     assert.strictEqual(stateMachine.gitRef, checkpointResult.ref);
-    assert.strictEqual(stateMachine.activeSpecId, specId);
 
     // The reviewer task payload would include this ref:
     // "Review the diff against commit {stateMachine.gitRef}. Run git diff {stateMachine.gitRef}."
@@ -672,7 +671,7 @@ describe("Phase 3: Failure & Edge Cases", () => {
     forceTransition(stateMachine, "TDD_RED_WRITE");
 
     // Set spec info
-    stateMachine.setActiveSpec("mid-cycle-spec", "abc1234");
+    stateMachine.setGitRef("abc1234");
     assert.strictEqual(stateMachine.currentState, "TDD_RED_WRITE");
     // activeSpecId is now module-level, not on StateMachine
     // Check evidence instead — spec should be saved if we got this far
@@ -835,7 +834,7 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.ok(checkpointResult.success);
 
     if (checkpointResult.ref) {
-      stateMachine.setActiveSpec("rollback-test", checkpointResult.ref);
+      stateMachine.setGitRef(checkpointResult.ref);
     }
 
     forceTransition(stateMachine, "TDD_RED_WRITE");

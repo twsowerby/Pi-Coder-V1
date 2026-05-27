@@ -240,7 +240,7 @@ interface NudgeExpectation {
   expectedTool: string;
 }
 
-const NUDE_EXPECTATIONS: Record<FSMState, NudgeExpectation> = {
+const NUDGE_EXPECTATIONS: Record<FSMState, NudgeExpectation> = {
   IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
   SPEC_WORK: { shouldNudge: true, expectedAction: "Delegate to pi-coder.researcher or advance to SPEC_APPROVED", expectedTool: "subagent" },
   SPEC_APPROVED: { shouldNudge: false, expectedAction: "", expectedTool: "" },
@@ -278,8 +278,6 @@ export interface StateMachineJSON {
 
 export class StateMachine implements IStateMachine {
   private _currentState: FSMState = "IDLE";
-  /** @deprecated Use module-level activeSpecId instead. Kept for compat. */
-  private _activeSpecId: string | null = null;
   private _loopCount: number = 0;
   private _gitRef: string | null = null;
   private _evidence: Set<EvidenceFlag> = new Set();
@@ -293,11 +291,6 @@ export class StateMachine implements IStateMachine {
 
   get currentState(): FSMState {
     return this._currentState;
-  }
-
-  /** @deprecated Use module-level activeSpecId instead. */
-  get activeSpecId(): string | null {
-    return this._activeSpecId;
   }
 
   get loopCount(): number {
@@ -420,15 +413,7 @@ export class StateMachine implements IStateMachine {
     return this._loopCount >= this._config.maxLoops;
   }
 
-  // --- Spec & Git Tracking ---
-
-  /** @deprecated Use module-level activeSpecId instead. */
-  setActiveSpec(specId: string, gitRef?: string): void {
-    this._activeSpecId = specId;
-    if (gitRef !== undefined) {
-      this._gitRef = gitRef;
-    }
-  }
+  // --- Git Tracking ---
 
   /** Set the git ref independently (used after checkpoint). */
   setGitRef(ref: string): void {
@@ -437,7 +422,6 @@ export class StateMachine implements IStateMachine {
 
   reset(): void {
     this._currentState = "IDLE";
-    this._activeSpecId = null;
     this._loopCount = 0;
     this._gitRef = null;
     this._evidence.clear();
@@ -493,7 +477,7 @@ export class StateMachine implements IStateMachine {
    * Pure read — does not modify state or counters.
    */
   canNudge(): NudgeExpectation {
-    return NUDE_EXPECTATIONS[this._currentState];
+    return NUDGE_EXPECTATIONS[this._currentState];
   }
 
   // --- Persistence ---

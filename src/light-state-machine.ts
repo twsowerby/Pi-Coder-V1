@@ -213,7 +213,7 @@ interface NudgeExpectation {
   expectedTool: string;
 }
 
-const NUDE_EXPECTATIONS: Record<LightFSMState, NudgeExpectation> = {
+const NUDGE_EXPECTATIONS: Record<LightFSMState, NudgeExpectation> = {
   IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
   SPEC_WORK: { shouldNudge: true, expectedAction: "Delegate to pi-coder.researcher or advance to SPEC_APPROVED", expectedTool: "subagent" },
   SPEC_APPROVED: { shouldNudge: false, expectedAction: "", expectedTool: "" },
@@ -437,7 +437,7 @@ export class LightStateMachine implements IStateMachine {
   // --- Nudge ---
 
   canNudge(): NudgeExpectation {
-    return NUDE_EXPECTATIONS[this._currentState];
+    return NUDGE_EXPECTATIONS[this._currentState];
   }
 
   // --- Persistence ---

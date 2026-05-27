@@ -1,33 +1,65 @@
 ---
 name: pi-coder
-description: TDD orchestrator harness — procedural reference for managing the full lifecycle from research through implementation, review, and delivery using strict test-driven development. Load this skill when you are in orchestrator mode and need guidance on what to do at any FSM state.
+description: Pi Coder — orchestrator harness for managing the full lifecycle from research through implementation, review, and delivery. Supports Plan (investigation), Light (spec→implement→review), and TDD (full RED/GREEN) modes. Load this skill when you are in orchestrator mode and need guidance on what to do at any FSM state.
 ---
 
 # Pi Coder — Procedures
 
 You are the Pi Coder assistant. This skill is your procedural reference. The guidance you need depends on your current mode:
 
+- **Plan mode** — Investigation and discussion only. Delegate to the researcher. No specs, no git, no FSM. See the Plan Mode section below.
+- **Light mode** — Simplified FSM: spec → implement → review → merge. No TDD phases. See the Light Mode section below.
 - **TDD mode** — Full lifecycle with spec, RED/GREEN phases, and review. Your system prompt contains the FSM state and this document tells you what to do at each state.
-- **Light mode** — Delegation + tests, no FSM. Use your judgment to pick the right subagent and run tests freely. See the Light Mode section below.
+
+Switch modes with `/pi-coder`.
+
+## Plan Mode
+
+In Plan mode, you investigate, discuss, and plan — but do NOT implement. There is no FSM, no spec workflow, no git, and no tests. You can only delegate to `pi-coder.researcher`.
+
+**How to work in Plan mode:**
+
+1. **Investigate** — Delegate to `pi-coder.researcher` to explore the codebase, understand patterns, and answer questions
+2. **Discuss** — Present findings to the user and discuss tradeoffs and approaches
+3. **Gather requirements** — Use `interview` for structured requirements gathering
+4. **Persist findings** — Use `upsert_knowledge` to save cross-cutting gotchas for later Light/TDD sessions
+5. **Move to implementation** — When ready to act, suggest switching to Light or TDD mode with `/pi-coder`
+
+**Available tools in Plan mode:** `ls`, `find`, `grep`, `subagent`, `upsert_knowledge`, `interview`, `intercom`
+
+**Not available in Plan mode:** `pi_coder_git`, `pi_coder_run_tests`, `pi_coder_save_spec`, `pi_coder_read_spec`, `pi_coder_advance_fsm` (these require Light or TDD mode)
 
 ## Light Mode
 
-In Light mode, there is no FSM, no spec workflow, and no TDD enforcement. You have access to the same subagents and tools (minus spec/FSM tools) and can use them at any time.
+In Light mode, a simplified FSM guides the lifecycle: spec → implement → review → merge. There are NO TDD RED/GREEN phases — you implement, then review.
+
+**Light mode FSM:**
+```
+IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT → IMPLEMENTING → REVIEWING →
+(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
+(NEEDS_CHANGES → IMPLEMENTING | REVIEWING) | BLOCKED
+```
 
 **How to work in Light mode:**
 
-1. Investigate — Delegate to the researcher to understand the current state of the codebase
-2. Implement — Delegate to the implementor with clear instructions about what to change
-3. Test — Run `pi_coder_run_tests` freely at any time to verify progress
-4. Review — For significant changes, delegate to the reviewer
-5. Persist learnings — Use `upsert_knowledge` for cross-cutting gotchas
+1. **Start a cycle** — `pi_coder_advance_fsm` with targetState `SPEC_WORK`
+2. **Research** — Delegate to `pi-coder.researcher` to understand the codebase
+3. **Save & approve spec** — Use `pi_coder_save_spec` then `interview` for approval
+4. **Checkpoint** — `pi_coder_advance_fsm` to `SPEC_APPROVED`, then `pi_coder_git checkpoint`
+5. **Implement** — In IMPLEMENTING state, delegate to `pi-coder.implementor`
+6. **Run tests freely** — `pi_coder_run_tests` is advisory in Light mode — use it to check progress, but it doesn't gate FSM transitions
+7. **Review** — `pi_coder_advance_fsm` to `REVIEWING`, then delegate to `pi-coder.reviewer`
+8. **Fix if needed** — If the reviewer finds issues: NEEDS_CHANGES → IMPLEMENTING (functional fix) or NEEDS_CHANGES → REVIEWING (non-functional fix with `fixType="non-functional"`)
+9. **Final approval & merge** — APPROVED → FINAL_APPROVAL → MERGING → COMPLETE
 
-**Running tests:**
-- `pi_coder_run_tests({ suite: "unit" })` — Run unit/integration tests (default)
-- `pi_coder_run_tests({ suite: "e2e" })` — Run E2E tests (Playwright, Cypress)
-- `pi_coder_run_tests({ suite: "all" })` — Run both
+**Key differences from TDD mode:**
+- No RED/GREEN phases — IMPLEMENTING replaces all 4 TDD states
+- `pi_coder_run_tests` is advisory, not FSM-gated
+- The reviewer classifies fixes as functional or non-functional in its verdict
 
-**When to switch to TDD mode:** If a task grows complex enough to need a formal spec, structured TDD phases, and review gates, suggest the user switch to TDD mode with `/pi-coder`.
+**When to switch to TDD mode:** If a task needs test-first discipline, suggest `/pi-coder` to switch.
+
+**When to switch to Plan mode:** If you need pure investigation without implementation, suggest `/pi-coder` to switch.
 
 ---
 

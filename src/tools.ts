@@ -51,7 +51,6 @@ const GIT_ACTION_ENUM = StringEnum([
   "checkpoint",
   "rollback",
   "merge",
-  "push",
 ] as const);
 
 const PI_CODER_GIT_PARAMS = Type.Object({
