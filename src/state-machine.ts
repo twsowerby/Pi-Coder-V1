@@ -16,7 +16,7 @@
  * advancing (e.g., spec saved, user approved, tests run).
  */
 
-import type { FSMState, PiCoderConfig, EvidenceFlag } from "./types.ts";
+import type { FSMState, PiCoderConfig, EvidenceFlag, IStateMachine, TransitionGuardError as ITransitionGuardError } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Transition Table
@@ -87,7 +87,7 @@ function buildTransitionSet(): Set<TransitionKey> {
   return set;
 }
 
-const TRANSITION_SET: Set<TransitionKey> = buildTransitionSet();
+const TRANSITION_SET: Set<string> = buildTransitionSet() as Set<string>;
 
 /**
  * Build a map from each state to its valid target states.
@@ -276,18 +276,7 @@ export interface StateMachineJSON {
   evidence: EvidenceFlag[];
 }
 
-/** Result of a failed transition guard check. */
-export interface TransitionGuardError {
-  /** The transition that was attempted */
-  from: FSMState;
-  to: FSMState;
-  /** Evidence flags that were required but missing */
-  missingEvidence: EvidenceFlag[];
-  /** Human-readable error message */
-  message: string;
-}
-
-export class StateMachine {
+export class StateMachine implements IStateMachine {
   private _currentState: FSMState = "IDLE";
   /** @deprecated Use module-level activeSpecId instead. Kept for compat. */
   private _activeSpecId: string | null = null;
@@ -354,8 +343,8 @@ export class StateMachine {
    * Returns a TransitionGuardError if evidence is missing.
    * Throws on illegal transitions (topology violations).
    */
-  transition(to: FSMState): TransitionGuardError | void {
-    const key: TransitionKey = `${this._currentState}→${to}`;
+  transition(to: string): ITransitionGuardError | void {
+    const key = `${this._currentState}→${to}` as string;
 
     // 1. Check transition topology
     if (!TRANSITION_SET.has(key)) {
@@ -385,10 +374,10 @@ export class StateMachine {
 
     // 3. Apply transition
     const previousState = this._currentState;
-    this._currentState = to;
+    this._currentState = to as FSMState;
 
     // Side effects
-    this.applyTransitionSideEffects(previousState, to);
+    this.applyTransitionSideEffects(previousState, to as FSMState);
 
     // Clear transient evidence (e.g., test_run_this_state)
     this.clearTransientEvidence();
@@ -400,7 +389,7 @@ export class StateMachine {
    * Get the list of valid target states from the current state.
    * Used by pi_coder_advance_fsm to give clear error messages.
    */
-  getValidTransitions(): FSMState[] {
+  getValidTransitions(): string[] {
     return TRANSITION_MAP.get(this._currentState) ?? [];
   }
 
@@ -505,13 +494,13 @@ export class StateMachine {
 
   // --- Persistence ---
 
-  toJSON(): StateMachineJSON {
+  toJSON(): Record<string, unknown> {
     return {
       currentState: this._currentState,
       loopCount: this._loopCount,
       gitRef: this._gitRef,
       evidence: [...this._evidence],
-    };
+    } as Record<string, unknown>;
   }
 
   static fromJSON(data: StateMachineJSON, config: PiCoderConfig): StateMachine {

@@ -33,12 +33,15 @@ import type { FSMState, GlobalState, SpecState } from "./types.ts";
 const STATE_FILENAME = "state.json";
 const TEMP_FILENAME = "state.json.tmp";
 
-const VALID_STATES: Set<string> = new Set<FSMState>([
+const VALID_STATES: Set<string> = new Set([
+  // TDD mode states
   "IDLE", "SPEC_WORK", "SPEC_APPROVED",
   "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
   "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
   "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL", "MERGING",
   "COMPLETE", "BLOCKED",
+  // Light mode states
+  "IMPLEMENTING",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -192,7 +195,7 @@ function isValidGlobalState(value: unknown): value is GlobalState {
   if (obj.version !== 1) return false;
   // piCoderMode is required for new state, piCoderActive is for migration
   if (obj.piCoderMode !== undefined) {
-    if (typeof obj.piCoderMode !== "string" || !["off", "light", "tdd"].includes(obj.piCoderMode)) return false;
+    if (typeof obj.piCoderMode !== "string" || !["off", "plan", "light", "tdd"].includes(obj.piCoderMode)) return false;
   } else if (typeof obj.piCoderActive !== "boolean") {
     return false;
   }

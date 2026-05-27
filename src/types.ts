@@ -37,6 +37,84 @@ export type FSMState =
   | "BLOCKED";
 
 /**
+ * FSM states for Light mode — same lifecycle as TDD but with the
+ * RED/GREEN phases collapsed into a single IMPLEMENTING state.
+ *
+ * Flow:
+ *   IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →
+ *   IMPLEMENTING → REVIEWING →
+ *   (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
+ *   (NEEDS_CHANGES → IMPLEMENTING | REVIEWING) | BLOCKED
+ */
+export type LightFSMState =
+  | "IDLE"
+  | "SPEC_WORK"
+  | "SPEC_APPROVED"
+  | "GIT_CHECKPOINT"
+  | "IMPLEMENTING"
+  | "REVIEWING"
+  | "APPROVED"
+  | "NEEDS_CHANGES"
+  | "FINAL_APPROVAL"
+  | "MERGING"
+  | "COMPLETE"
+  | "BLOCKED";
+
+/**
+ * Error returned by IStateMachine.transition() when evidence guards fail.
+ * Both StateMachine and LightStateMachine return this shape.
+ */
+export interface TransitionGuardError {
+  /** The state the transition was attempted from */
+  from: string;
+  /** The state the transition was attempted to */
+  to: string;
+  /** Evidence flags that were required but missing */
+  missingEvidence: EvidenceFlag[];
+  /** Human-readable error message */
+  message: string;
+}
+
+/**
+ * Shared interface for all FSM implementations.
+ * The extension holds a single `stateMachine` variable typed as this,
+ * allowing mode switches to swap implementations.
+ *
+ * Plan mode and Off mode set stateMachine to null.
+ * TDD mode uses StateMachine. Light mode uses LightStateMachine.
+ */
+export interface IStateMachine {
+  /** Current FSM state (FSMState for TDD, LightFSMState for Light) */
+  readonly currentState: string;
+  /** Review loop counter */
+  loopCount: number;
+  /** Pre-implementation git ref for rollback and diff */
+  readonly gitRef: string | null;
+  /** Attempt a state transition. Returns TransitionGuardError if guard fails. Throws on illegal transitions. */
+  transition(targetState: string): TransitionGuardError | void;
+  /** Set an evidence flag */
+  setEvidence(flag: EvidenceFlag): void;
+  /** Check if an evidence flag is set */
+  hasEvidence(flag: EvidenceFlag): boolean;
+  /** Get all current evidence flags */
+  getEvidence(): EvidenceFlag[];
+  /** Check if a tool/agent action is allowed in the current state */
+  isActionAllowed(tool: string, agent?: string): boolean;
+  /** Get valid transition targets from the current state */
+  getValidTransitions(): string[];
+  /** Whether the circuit breaker has tripped */
+  circuitBreakerTripped(): boolean;
+  /** Whether the current state should trigger nudges */
+  canNudge(): { shouldNudge: boolean; expectedAction: string; expectedTool: string };
+  /** Set the git ref independently (used after checkpoint) */
+  setGitRef(ref: string): void;
+  /** Full reset to IDLE */
+  reset(): void;
+  /** Serialize to JSON for persistence */
+  toJSON(): Record<string, unknown>;
+}
+
+/**
  * A single legal transition in the FSM.
  */
 export interface FSMTransition {
@@ -117,7 +195,7 @@ export interface NotificationsConfig {
   events?: NotificationEvent[];
 }
 
-export type PiCoderMode = "off" | "light" | "tdd";
+export type PiCoderMode = "off" | "plan" | "light" | "tdd";
 
 export interface TestCommands {
   /** Command to run unit/integration tests (e.g. "npx vitest run", "npm test") */
@@ -270,7 +348,7 @@ export interface SpecState {
   version: 1;
   /** Current FSM state */
   currentState: FSMState;
-  /** Review loop count (increments on NEEDS_CHANGES → TDD_RED_WRITE) */
+  /** Review loop count (increments on NEEDS_CHANGES exits) */
   loopCount: number;
   /** Pre-implementation git ref for rollback and diff */
   gitRef: string | null;
@@ -289,7 +367,7 @@ export interface SpecState {
 export interface GlobalState {
   /** Schema version */
   version: 1;
-  /** Current pi-coder mode: off, light (no FSM), or tdd (full lifecycle) */
+  /** Current pi-coder mode: off, plan (investigation only), light (FSM, no TDD), or tdd (full lifecycle) */
   piCoderMode: PiCoderMode;
   /** @deprecated Use piCoderMode instead. Kept for migration. */
   piCoderActive?: boolean;

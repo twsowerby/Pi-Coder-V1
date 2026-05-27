@@ -22,7 +22,7 @@ import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools } from "../src/tools.ts";
-import type { PiCoderConfig, PiCoderMode, FSMState, TestCommands } from "../src/types.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, TestCommands } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { sendDesktopNotification } from "../src/desktop-notifier.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
@@ -425,10 +425,10 @@ export async function persistState(): Promise<void> {
       const fsmJson = stateMachine.toJSON();
       const specState: SpecState = {
         version: 1,
-        currentState: fsmJson.currentState,
-        loopCount: fsmJson.loopCount,
-        gitRef: fsmJson.gitRef,
-        evidence: fsmJson.evidence,
+        currentState: fsmJson.currentState as FSMState,
+        loopCount: fsmJson.loopCount as number,
+        gitRef: fsmJson.gitRef as string | null,
+        evidence: fsmJson.evidence as EvidenceFlag[],
         createdAt: specStateCreatedAt ?? now,
         updatedAt: now,
       };
@@ -2106,8 +2106,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Notify user of mode change
       const modeLabels: Record<PiCoderMode, string> = {
+        plan: "Plan Mode — Investigation and discussion only",
         tdd: "TDD Mode — Full lifecycle with spec, RED/GREEN, and review",
-        light: "Light Mode — Delegation with tests, no FSM",
+        light: "Light Mode — Spec, implementation, and review (no TDD)",
         off: "Off — Normal Pi mode",
       };
       ctx.ui.notify(`Pi Coder: ${modeLabels[piCoderMode]}`, "info");
@@ -2119,8 +2120,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // know right now that the rules have changed.
       if (piCoderMode !== "off") {
         const modeDescriptions: Record<PiCoderMode, string> = {
+          plan: "Plan mode — Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
           tdd: "TDD mode — Full lifecycle with FSM, spec approval, RED/GREEN phases, and review. Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
-          light: "Light mode — Delegation and tests, no FSM. Call any subagent at any time. Run tests freely with pi_coder_run_tests. No spec workflow, no RED/GREEN enforcement. Use your judgment.",
+          light: "Light mode — Spec, implement, and review lifecycle with FSM. No RED/GREEN TDD phases. Follow the FSM state machine.",
           off: "",
         };
         pi.sendMessage(
