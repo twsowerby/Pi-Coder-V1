@@ -970,7 +970,7 @@ Implementation happens **one unit at a time**. For each unit in the implementati
 1. Orchestrator delegates to reviewer with acceptance criteria + git diff
 2. Reviewer checks: test alignment, bugs, security, correctness (skips style, nitpicks)
 3. Verdict: ✅ Approved / ⚠️ Needs Changes — this **auto-transitions** the FSM (like test results)
-4. If needs changes → **functional fix**: advance to TDD_RED_WRITE (full RED/GREEN cycle); **non-functional fix** (test cleanup, comments, naming): delegate implementor directly in NEEDS_CHANGES, then advance to REVIEWING for re-review
+4. If needs changes → **functional fix**: advance to TDD_RED_WRITE (full RED/GREEN cycle); **non-functional fix** (test cleanup, comments, naming): delegate implementor directly in NEEDS_CHANGES, then advance to REVIEWING with `fixType="non-functional"` for re-review
 
 ### Delivery
 

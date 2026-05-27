@@ -836,9 +836,19 @@ function extractReviewVerdict(result: unknown): {
 
   const r = result as Record<string, unknown>;
 
-  // Try to get text content from the result
+  // Extract text from the pi-subagents Details format:
+  // details = { mode, results: [{ finalOutput, messages, ... }], ... }
+  // Fallback: raw content blocks (for tests or non-standard formats)
   let text = "";
-  if (typeof r.content === "string") {
+  if (Array.isArray(r.results)) {
+    // pi-subagents Details format — use finalOutput from first result
+    const firstResult = (r.results as Array<Record<string, unknown>>)[0];
+    if (firstResult) {
+      text = typeof firstResult.finalOutput === "string"
+        ? firstResult.finalOutput
+        : "";
+    }
+  } else if (typeof r.content === "string") {
     text = r.content;
   } else if (Array.isArray(r.content)) {
     // Tool result content is often an array of content blocks
@@ -1868,7 +1878,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
             : reviewVerdict.fixType === "non-functional"
-              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING for re-review.`
+              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with fixType=\"non-functional\" for re-review.`
               : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to TDD_RED_WRITE for a full RED/GREEN cycle.`;
 
           // Append to tool result content

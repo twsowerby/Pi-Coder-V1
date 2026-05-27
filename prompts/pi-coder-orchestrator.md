@@ -66,7 +66,7 @@ State advancement:
   - TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed, advance to next unit's RED phase
   - TDD_GREEN_VALIDATE → REVIEWING: All units complete, proceed to review
   - NEEDS_CHANGES → TDD_RED_WRITE: Functional fix needed — start a new RED/GREEN cycle (advance FSM first)
-  - NEEDS_CHANGES (delegate implementor directly): Non-functional fix — apply fix, then advance to REVIEWING for re-review
+  - NEEDS_CHANGES (delegate implementor directly): Non-functional fix — apply fix, then advance to REVIEWING with fixType="non-functional" for re-review
   - APPROVED → FINAL_APPROVAL: Review passed, present for final OK (use interview)
   - FINAL_APPROVAL → MERGING: User gave final approval
   - Any → IDLE: Abort the cycle

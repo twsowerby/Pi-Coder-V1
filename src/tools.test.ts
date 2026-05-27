@@ -812,3 +812,56 @@ describe("Phase 6: Spec File Tools", () => {
     assert.ok(content.includes("Disk full"), `Should mention error, got: ${content}`);
   });
 });
+
+describe("Phase 6: pi_coder_advance_fsm fixType parameter", () => {
+  it("blocks NEEDS_CHANGES → REVIEWING without fixType=non-functional", async () => {
+    const { tools, sm, setActiveSpec } = setupMocks();
+    // Walk to NEEDS_CHANGES
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("REVIEWING");
+    sm.transition("NEEDS_CHANGES");
+
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "REVIEWING",
+    });
+    assert.ok(result.isError, "Should be blocked without fixType");
+    assert.strictEqual(sm.currentState, "NEEDS_CHANGES", "State should not change");
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("non_functional_classified") || content.includes("reviewer classification"), `Should mention evidence, got: ${content}`);
+  });
+
+  it("allows NEEDS_CHANGES → REVIEWING with fixType=non-functional", async () => {
+    const { tools, sm, setActiveSpec } = setupMocks();
+    // Walk to NEEDS_CHANGES
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("REVIEWING");
+    sm.transition("NEEDS_CHANGES");
+
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "REVIEWING",
+      fixType: "non-functional",
+    });
+    assert.ok(!result.isError, "Should succeed with fixType");
+    assert.strictEqual(sm.currentState, "REVIEWING");
+  });
+});

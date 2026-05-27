@@ -253,7 +253,7 @@ When your FSM is in REVIEWING (all implementation units complete):
 
    - **✅ Approved** → FSM transitions to APPROVED. Proceed to Final Approval.
    - **⚠️ Needs Changes** → FSM transitions to NEEDS_CHANGES.
-     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES. Then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING` for re-review. Loop count increments.
+     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES. Then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING fixType="non-functional"` for re-review. Loop count increments.
      - **Functional fix** (production code changes): Advance to TDD_RED_WRITE via `pi_coder_advance_fsm TDD_RED_WRITE`. A full RED/GREEN cycle is needed. Loop count increments.
    - **❌ Request Changes** → Same as Needs Changes — loop back with specific directives.
 

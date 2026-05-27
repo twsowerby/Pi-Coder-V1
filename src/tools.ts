@@ -74,6 +74,7 @@ const UPSERT_KNOWLEDGE_PARAMS = Type.Object({
 const ADVANCE_FSM_PARAMS = Type.Object({
   targetState: Type.String({ description: "The FSM state to advance to (e.g., SPEC_WORK, SPEC_APPROVED, GIT_CHECKPOINT, IDLE)" }),
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
+  fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. Required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path). The reviewer classifies each fix as functional or non-functional in its output." })),
 });
 
 // ---------------------------------------------------------------------------
@@ -571,12 +572,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
       "Any state → IDLE: Abort the current cycle. Use this to restart or unwind.",
       "NEEDS_CHANGES → TDD_RED_WRITE: Review requires functional fixes. Start a new RED/GREEN cycle.",
-      "NEEDS_CHANGES → REVIEWING: Review requires non-functional fixes only (test fixes, comments, refactoring). Skip the RED/GREEN cycle and go directly back to review.",
+      "NEEDS_CHANGES → REVIEWING: Review requires non-functional fixes only (test fixes, comments, refactoring). Skip the RED/GREEN cycle and go directly back to review. Set fixType=\"non-functional\" to satisfy the evidence gate.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { targetState, request } = params;
+      const { targetState, request, fixType } = params;
       const previousState = smRef.current.currentState;
 
       // Validate targetState is a valid FSMState
@@ -600,6 +601,15 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // No ad-hoc guards here — the StateMachine.transition() method
       // checks TRANSITION_GUARDS (evidence requirements) internally.
       // If a guard fails, it returns a TransitionGuardError.
+      //
+      // Exception: fixType parameter can set the non_functional_classified
+      // evidence flag for the NEEDS_CHANGES → REVIEWING transition.
+      // This serves as a manual escape hatch when the auto-transition
+      // handler didn't fire (e.g., review output saved to artifact file
+      // rather than inline, so extractReviewVerdict couldn't parse it).
+      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING") {
+        smRef.current.setEvidence("non_functional_classified");
+      }
 
       try {
         const guardError = smRef.current.transition(targetState as FSMState);
@@ -654,7 +664,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           TDD_GREEN_VALIDATE: "Run tests with pi_coder_run_tests. GREEN validation: expect tests to PASS.",
           REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
           APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
-          NEEDS_CHANGES: "Advance to TDD_RED_WRITE (functional fix) or REVIEWING (non-functional fix).",
+          NEEDS_CHANGES: "Delegate to pi-coder.implementor for non-functional fixes (then advance to REVIEWING with fixType=\"non-functional\"), or advance to TDD_RED_WRITE for functional fixes.",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
           MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",
