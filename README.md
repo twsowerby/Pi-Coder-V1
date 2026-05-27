@@ -1,8 +1,8 @@
 # Pi Coder v1
 
-A TDD orchestrator/worker harness for [pi](https://github.com/earendil-works/pi-coding-agent) — semi-deterministic coding with strict test-driven development.
+A multi-mode orchestrator/worker harness for [pi](https://github.com/earendil-works/pi-coding-agent) — structured coding with test-driven development, lightweight implementation, or investigation-only workflows.
 
-Pi Coder replaces the default "you're a coding assistant" mode with a structured orchestrator that delegates all implementation to specialized subagents. It offers two modes: **TDD mode** enforces a strict Red→Green→Review lifecycle with a state machine; **Light mode** gives you the same delegation model without the ceremony. The orchestrator cannot edit files, read file contents, or run arbitrary commands — it can only delegate, observe, and decide.
+Pi Coder replaces the default "you're a coding assistant" mode with a structured orchestrator that delegates all implementation to specialized subagents. It offers three modes: **TDD mode** enforces a strict Red→Green→Review lifecycle with a state machine; **Light mode** provides a spec→implement→review lifecycle without TDD phases; **Plan mode** restricts you to investigation and discussion only. The orchestrator cannot edit files, read file contents, or run arbitrary commands — it can only delegate, observe, and decide.
 
 ## Table of Contents
 
@@ -24,6 +24,7 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
   - [MCP Server Access for Subagents](#mcp-server-access-for-subagents)
   - [Per-Agent Model Selection](#per-agent-model-selection)
 - [The TDD Lifecycle](#the-tdd-lifecycle)
+- [The Light Mode Lifecycle](#the-light-mode-lifecycle)
 - [Extension Events](#extension-events)
 - [Project Structure](#project-structure)
 - [Architecture](#architecture)
@@ -79,7 +80,8 @@ Pi Coder adds an **orchestrator mode** to pi. When active, your pi session trans
 - The system prompt is replaced with the orchestrator identity
 - Tool access is restricted to delegation and observation tools only
 - In **TDD mode**: a finite state machine (FSM) tracks the lifecycle, subagent calls are validated against FSM state, test results and review verdicts auto-advance the machine
-- In **Light mode**: no FSM — delegate any subagent at any time, run tests freely
+- In **Light mode**: a simplified FSM enforces spec→implement→review→merge with no TDD phases
+- In **Plan mode**: no FSM, researcher delegation only — investigation and discussion
 - State and mode are persisted to disk — cycles survive crashes and session restarts
 
 In TDD mode, the orchestrator follows this lifecycle:
@@ -93,6 +95,16 @@ TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE
 (TDD_RED_VALIDATE → TDD_GREEN_WRITE | BLOCKED) → user intervention
 ```
 
+In Light mode, the FSM is simpler — IMPLEMENTING replaces all four TDD states:
+
+```
+IDLE → SPEC_WORK → SPEC_APPROVED →
+GIT_CHECKPOINT → IMPLEMENTING → REVIEWING →
+(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
+(NEEDS_CHANGES → IMPLEMENTING | REVIEWING) |
+BLOCKED → user intervention
+```
+
 ### Three Subagents
 
 | Agent | Role | Tools |
@@ -101,11 +113,11 @@ TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE
 | **Implementor** | Writes code in exclusive RED (tests only) or GREEN (implementation only) mode | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` |
 | **Reviewer** | Independent adversarial review — checks test alignment, bugs, security, correctness | `read`, `bash`, `grep`, `find`, `ls` |
 
-### Key Invariant (TDD Mode)
+### Key Invariant
 
 The orchestrator can **never** put the FSM into an invalid state. Tool calls are validated against the current state. Invalid delegations are blocked. Deterministic events (test results, subagent completions) auto-transition the FSM. The LLM decides *what* to do; the extension guards *whether* it can.
 
-In Light mode, there is no FSM — the extension trusts the orchestrator's judgment. Subagent delegation and test running are available at any time.
+In Light mode, the FSM is simpler but still enforces the same non-negotiables: spec approval before implementation, review before merge. In Plan mode, there is no FSM — the extension restricts you to researcher delegation only.
 
 ## Quick Start
 
@@ -156,10 +168,11 @@ Shows a mode selection menu:
 | Mode | Description | Best For |
 |------|-------------|----------|
 | **TDD** | Full lifecycle with spec, RED/GREEN phases, review | New features, bug fixes |
-| **Light** | Delegation + tests, no FSM ceremony | Spot fixes, existing projects, infrastructure work |
+| **Light** | Spec→implement→review without TDD phases | Spot fixes, infrastructure work, existing projects |
+| **Plan** | Investigation and discussion only | Research, requirements gathering, exploration |
 | **Off** | Normal Pi — unrestricted | Quick questions, anything outside pi-coder |
 
-You'll see the current mode in the status bar: `● TDD`, `⚡ Light`, or nothing (off). Mode switches don't trigger an LLM turn — the mode indicator is injected into the system prompt on the next turn and a notification is queued for delivery.
+You'll see the current mode in the status bar: `● TDD`, `⚡ Light`, `🔍 Plan`, or nothing (off). Mode switches don't trigger an LLM turn — the mode indicator is injected into the system prompt on the next turn and a notification is queued for delivery.
 
 ### 4. Make a request
 
@@ -167,15 +180,17 @@ Just describe what you want built. The orchestrator will:
 1. Delegate to the **researcher** to investigate the codebase
 2. Prune the research into an actionable **spec** with acceptance criteria
 3. Present the spec for your approval
-4. Create a git checkpoint and begin the **TDD cycle**
-5. Alternate RED (write tests) → GREEN (make tests pass) → **Review**
-6. Merge on approval, persist knowledge learnings
+4. Create a git checkpoint and begin implementation
 
-In **Light mode**, there's no formal spec or TDD cycle — the orchestrator uses its judgment to pick the right subagent for the task and runs tests freely.
+**In TDD mode:** Alternate RED (write tests) → GREEN (make tests pass) per unit → **Review** → merge
+
+**In Light mode:** Delegate to implementor → run tests → **Review** → merge (no RED/GREEN phases)
+
+**In Plan mode:** Only investigation and discussion — no spec, no git, no implementation. Switch to TDD or Light mode when you're ready to act.
 
 ## Modes
 
-Pi Coder has three modes, selected via `/pi-coder`:
+Pi Coder has four modes, selected via `/pi-coder`:
 
 ### TDD Mode
 
@@ -183,22 +198,54 @@ Full lifecycle enforcement. The orchestrator must follow the FSM: research → s
 
 **When to use:** New features with clear acceptance criteria, bug fixes that need structured verification, any task where you want the discipline of test-first development.
 
+**FSM lifecycle:**
+```
+IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT → TDD_RED_WRITE ↔ TDD_RED_VALIDATE →
+TDD_GREEN_WRITE ↔ TDD_GREEN_VALIDATE → REVIEWING →
+APPROVED → FINAL_APPROVAL → MERGING → COMPLETE
+NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING
+```
+
 **Available tools:** `ls`, `find`, `grep`, `subagent`, `pi_coder_git`, `pi_coder_run_tests`, `upsert_knowledge`, `pi_coder_save_spec`, `pi_coder_read_spec`, `pi_coder_advance_fsm`, `interview`, `intercom`
 
 ### Light Mode
 
-Delegation without ceremony. Same subagents (researcher, implementor, reviewer), same tools (git, tests, knowledge), but no FSM, no spec files, no evidence flags. The orchestrator picks the right subagent for the task and runs tests freely.
+A simplified FSM that enforces spec → implement → review → merge without TDD RED/GREEN phases. The orchestrator writes a spec, gets your approval, delegates to the implementor, and sends the result to the reviewer. There's one implementation state (IMPLEMENTING) instead of four TDD states.
 
-**When to use:** Spot fixes, infrastructure changes, existing projects where the full TDD lifecycle feels heavy, requests that don't fit a spec-first workflow ("rebuild the test setup", "debug why auth is broken").
+**When to use:** Spot fixes, infrastructure changes, existing projects where RED/GREEN phases feel heavy, tasks that benefit from structured delegation but don't need test-first discipline.
 
 **Key differences from TDD mode:**
-- No `pi_coder_advance_fsm` — there's no FSM to advance
-- No `pi_coder_save_spec` / `pi_coder_read_spec` — no spec files
-- Subagent delegation available at any time — no FSM state gating
-- `pi_coder_run_tests` returns plain results — no auto-transitions
-- Prompt is simplified — no FSM diagram, no state tracking
+- IMPLEMENTING replaces TDD_RED_WRITE / TDD_RED_VALIDATE / TDD_GREEN_WRITE / TDD_GREEN_VALIDATE
+- `pi_coder_run_tests` is advisory — it doesn't gate FSM transitions (no auto-transitions based on pass/fail)
+- No per-unit cycle — the implementor does all the work in one delegation
+- Reviewer classifies fixes as functional or non-functional; non-functional fixes shortcut back to REVIEWING without re-implementation
+- Spec workflow is the same: save → approve → checkpoint → implement → review → merge
 
-**Available tools:** `ls`, `find`, `grep`, `subagent`, `pi_coder_run_tests`, `pi_coder_git`, `upsert_knowledge`, `interview`, `intercom`
+**FSM lifecycle:**
+```
+IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT → IMPLEMENTING → REVIEWING →
+APPROVED → FINAL_APPROVAL → MERGING → COMPLETE
+NEEDS_CHANGES → IMPLEMENTING | REVIEWING
+```
+
+**Available tools:** `ls`, `find`, `grep`, `subagent`, `pi_coder_run_tests`, `pi_coder_git`, `upsert_knowledge`, `pi_coder_save_spec`, `pi_coder_read_spec`, `pi_coder_advance_fsm`, `interview`, `intercom`
+
+### Plan Mode
+
+Investigation and discussion only. No FSM, no spec workflow, no git, no tests. The orchestrator can only delegate to `pi-coder.researcher` — the implementor and reviewer are not available.
+
+**When to use:** Requirements gathering, codebase exploration, architecture discussions, debugging investigations, understanding how something works before committing to implementation.
+
+**Available tools:** `ls`, `find`, `grep`, `subagent`, `upsert_knowledge`, `interview`, `intercom`
+
+**Not available in Plan mode:** `pi_coder_git`, `pi_coder_run_tests`, `pi_coder_save_spec`, `pi_coder_read_spec`, `pi_coder_advance_fsm`
+
+**Typical workflow:**
+1. Investigate — delegate to researcher to explore the codebase
+2. Discuss — present findings and tradeoffs
+3. Gather requirements — use `interview` for structured requirements
+4. Persist findings — use `upsert_knowledge` to save cross-cutting gotchas
+5. Switch to Light or TDD mode — use `/pi-coder` when you're ready to implement
 
 ### Off
 
@@ -208,30 +255,33 @@ Normal Pi. Full tool access, no orchestrator identity, no subagent scoping, no k
 
 **Mode switching:** Switch modes at any time with `/pi-coder`. The mode change takes effect immediately — no LLM turn is triggered. The system prompt is rebuilt with the new mode's identity and tools on the next turn, and a `[MODE: ...]` indicator is prepended so the LLM always knows its current mode (even after mid-conversation switches).
 
+**Cross-mode spec restore:** A spec started in one mode cannot be resumed in a different mode. If you started a TDD spec and switch to Light mode mid-cycle, you'll be warned that the on-disk state is incompatible. Start a fresh spec in the new mode, or switch back to the original mode to resume.
+
 ## Usage Tips
 
 ### Let the task decide the mode, not the project
 
-TDD mode isn't just for greenfield projects and Light mode isn't just for existing ones. The right mode depends on what you're asking the orchestrator to do:
+The right mode depends on what you're asking the orchestrator to do:
 
 - **TDD mode** when you want to *build* something — a new feature, a new module, a bug fix that needs structured verification. The spec approval catches misunderstandings early, RED/GREEN ensures tests exist before code, and the reviewer catches issues before they reach main.
-- **Light mode** when you want to *do* something — investigate a bug, fix a failing test, refactor a module, update a dependency. These tasks benefit from delegation (researcher to investigate, implementor to make changes) but don't need a spec-first workflow.
-
-You'll naturally switch between them as your session evolves — TDD mode for the feature, Light mode for the incidental work it uncovers.
+- **Light mode** when you want to *do* something — fix a bug, update a dependency, refactor a module. These tasks benefit from delegation (researcher → implementor → reviewer) but don't need the test-first RED/GREEN cycle.
+- **Plan mode** when you want to *understand* something — investigate a bug, explore a codebase, gather requirements, discuss architecture. No code changes happen — you get research and discussion only.
+- **Off** for quick questions that don't need delegation at all ("what does this function do?").
 
 ### Switch modes mid-conversation
 
 You can switch at any time with `/pi-coder`. Common patterns:
 
+- **Start in Plan → switch to TDD or Light** when investigation is done and you're ready to implement. The researcher's findings and any knowledge saved in Plan mode carry forward.
 - **Start in TDD → switch to Light** when the task turns out to be simpler than expected ("actually just fix that one test"). The FSM will be in whatever state it was in — switch back when you want to continue the formal lifecycle.
 - **Start in Light → switch to TDD** when a spot fix reveals a bigger task. You'll need to start a new TDD cycle from IDLE.
-- **Switch to Off** for quick questions that don't need delegation ("what does this function do?"). Switch back when you're ready to work.
+- **Switch to Off** for quick questions that don't need delegation. Switch back when you're ready to work.
 
 ### Running tests is always available
 
-`pi_coder_run_tests` works in **any FSM state** and in **both TDD and Light modes**. Only in TDD mode's validation states (`TDD_RED_VALIDATE`, `TDD_GREEN_VALIDATE`) do test results trigger auto-transitions. In all other cases, you just get the results back.
+`pi_coder_run_tests` works in **any FSM state** and in **both TDD and Light modes**. Only in TDD mode's validation states (`TDD_RED_VALIDATE`, `TDD_GREEN_VALIDATE`) do test results trigger auto-transitions. In Light mode and all other TDD states, you just get the results back — no FSM side-effects.
 
-This means you can run tests at any time to check your bearings — in IDLE, during SPEC_WORK, after a review — without the FSM side-effecting your workflow.
+This means you can run tests at any time to check your bearings — in IDLE, during SPEC_WORK, after a review — without the FSM advancing unexpectedly.
 
 ### Configure your test commands in config.json
 
@@ -259,12 +309,13 @@ If you find yourself in a TDD cycle where the orchestrator keeps going in circle
 ### Don't force non-TDD tasks through the TDD lifecycle
 
 The TDD lifecycle is for building things. If you just want to:
-- **Run tests** → Switch to Light mode and ask the orchestrator to run them, or switch to Off and run them yourself
-- **Investigate a bug** → Light mode — delegate to the researcher
+- **Explore or investigate** → Plan mode — delegate to the researcher
+- **Run tests** → Light mode and ask the orchestrator to run them, or switch to Off
+- **Investigate a bug** → Plan mode first, then Light mode to fix it
 - **Make a quick change** → Light mode — delegate to the implementor, run tests to verify
 - **Ask a question** → Off — just ask normally
 
-The FSM will block you if you try to use TDD mode for these tasks. That's by design — it's enforcing a process that doesn't apply.
+The TDD FSM will block you if you try to use it for these tasks. That's by design — it's enforcing a process that doesn't apply.
 
 ### Fill in design_system.md for UI projects
 
@@ -294,7 +345,9 @@ The **implementation plan** is critical — it breaks the spec into atomic units
 
 1. **SPEC_WORK** — The orchestrator delegates to the researcher, who investigates the codebase. The orchestrator synthesizes findings into a spec with ACs, constraints, key files, and an implementation plan. It saves the spec with `pi_coder_save_spec`.
 2. **Approval** — The orchestrator presents the spec via `interview` with focused questions on scope, ACs, constraints, and the implementation plan. You review, modify, and approve (or reject and request changes).
-3. **Implementation** — The orchestrator delegates each unit to the implementor, one at a time, reading the spec fresh before each delegation. RED (write failing tests) → GREEN (make tests pass), per unit.
+3. **Implementation** —
+   - **TDD mode:** The orchestrator delegates each unit to the implementor, one at a time, reading the spec fresh before each delegation. RED (write failing tests) → GREEN (make tests pass), per unit.
+   - **Light mode:** The orchestrator delegates the full implementation to the implementor in one go. No per-unit cycle, no RED/GREEN phases.
 4. **Review** — An independent reviewer checks the full implementation against the spec's ACs and constraints.
 5. **Complete** — On approval, the branch is merged (or left for you to handle). The spec is archived in `.pi-coder/specs/`.
 
@@ -331,6 +384,8 @@ Pi Coder persists its mode and FSM state to disk. This means **your TDD cycles s
   "updatedAt": "2026-05-25T14:30:00.000Z"
 }
 ```
+
+`piCoderMode` can be `"tdd"`, `"light"`, `"plan"`, or `"off"`. When set to `"plan"` or `"off"`, there is no active FSM.
 
 **Per-spec state** (`.pi-coder/specs/{id}/state.json`) — FSM + evidence:
 
@@ -378,6 +433,7 @@ The FSM **enforces invariants**, not just the orchestrator prompt. Before allowi
 | `spec_saved` | `pi_coder_save_spec` | IDLE reset | Spec file exists on disk |
 | `spec_user_approved` | `interview` tool_result in SPEC_WORK | IDLE reset | User saw and approved the spec |
 | `test_run_this_state` | `pi_coder_run_tests` | Any state transition | Tests were actually run in this validation state |
+| `non_functional_classified` | Reviewer verdict extraction (needs `fixType: non-functional`) | IDLE reset | Fix was classified as non-functional by the reviewer |
 
 ### Guarded Transitions
 
@@ -386,8 +442,9 @@ The FSM **enforces invariants**, not just the orchestrator prompt. Before allowi
 | SPEC_WORK → SPEC_APPROVED | `spec_saved` + `spec_user_approved` | Cannot implement without a saved, user-approved spec |
 | TDD_RED_VALIDATE → TDD_GREEN_WRITE | `test_run_this_state` | Cannot skip RED validation — must actually run tests |
 | TDD_GREEN_VALIDATE → exits | `test_run_this_state` | Cannot skip GREEN validation — must actually run tests |
+| NEEDS_CHANGES → REVIEWING (non-functional) | `non_functional_classified` | Cannot shortcut to re-review without reviewer classification |
 
-This prevents the LLM from shortcutting through validation states without executing tests, or advancing to implementation without user spec approval. The FSM is the single source of truth for process invariants.
+This prevents the LLM from shortcutting through validation states without executing tests, or advancing to implementation without user spec approval, or claiming a fix is non-functional without the reviewer's independent classification. The FSM is the single source of truth for process invariants.
 
 ### RED Tautology Handling
 
@@ -406,7 +463,7 @@ The key insight: the invariant is "all behavior is tested," NOT "every test must
 
 | Command | Description |
 |---|---|
-| `/pi-coder` | Switch mode (TDD / Light / Off) |
+| `/pi-coder` | Switch mode (TDD / Light / Plan / Off) via selection menu |
 | `/pi-coder-init` | Initialize `.pi-coder/` structure and config |
 | `/pi-coder-reset-agents` | Reset agent `.md` files to package defaults (requires confirmation) |
 | `/pi-coder-logs` | Show interaction log statistics |
@@ -768,33 +825,43 @@ No additional packages required — it uses built-in OS tools and terminal escap
 
 ### Agent Prompts
 
-All four agent `.md` files are copied to `.pi/agents/` during init. Edit them to customize behavior:
+All four agent `.md` files are copied to `.pi/agents/` during init. Edit them to customize subagent behavior. The orchestrator system prompts live in `prompts/` (not copied to agents) — one per mode.
 
 | File | Controls |
 |---|---|
-| `pi-coder-orchestrator.md` | The orchestrator's system prompt — role, delegation rules, FSM context |
+| `pi-coder-orchestrator.md` | The orchestrator's subagent definition — name, package, tools | 
 | `pi-coder-researcher.md` | Researcher behavior — investigation approach, output format |
 | `pi-coder-implementor.md` | Implementor behavior — RED/GREEN mode boundaries, output format |
 | `pi-coder-reviewer.md` | Reviewer behavior — focus/skip areas, verdict format, severity levels |
 
+**Mode prompts** (in `prompts/`, not copied to agents):
+
+| File | Mode | Controls |
+|---|---|---|
+| `pi-coder-orchestrator.md` | TDD | Full FSM lifecycle, RED/GREEN phases, per-unit TDD cycle |
+| `pi-coder-light.md` | Light | Simplified FSM, IMPLEMENTING state, reviewer fix classification |
+| `pi-coder-plan.md` | Plan | Researcher delegation only, no FSM/spec/git |
+
 **Your customizations are preserved.** Running `/pi-coder-init` again skips existing files. Running `/pi-coder-reset-agents` overwrites them back to defaults (requires confirmation).
 
-#### Orchestrator prompt template variables
+#### Prompt template variables
 
-The orchestrator `.md` file contains template variables that are substituted at runtime:
+All three mode prompt files (TDD, Light, Plan) contain template variables that are substituted at runtime:
 
-| Variable | Replaced with |
-|---|---|
-| `{{fsmDiagram}}` | Compact FSM state diagram (generated from transition table) |
-| `{{currentState}}` | Current FSM state name (e.g. `"SPEC_WORK"`) |
-| `{{activeSpecId}}` | Active spec ID or `"none"` |
-| `{{loopCount}}` | Current TDD review loop count |
-| `{{maxLoops}}` | Configured maximum loops |
-| `{{toolList}}` | Filtered tool list with descriptions |
+| Variable | Replaced with | Used in |
+|---|---|---|
+| `{{fsmDiagram}}` | Compact FSM state diagram (generated from state machine) | TDD, Light |
+| `{{currentState}}` | Current FSM state name (e.g. `"SPEC_WORK"`) | TDD, Light |
+| `{{activeSpecId}}` | Active spec ID or `"none"` | TDD, Light |
+| `{{loopCount}}` | Current review loop count | TDD, Light |
+| `{{maxLoops}}` | Configured maximum loops | TDD, Light |
+| `{{toolList}}` | Filtered tool list with descriptions | All |
+| `{{interviewTimeout}}` | Configured interview timeout (0 = no timeout) | All |
+| `{{referenceProjects}}` | Configured reference project names + paths | All |
 
 #### Project-scope overrides
 
-The extension checks for `.pi/agents/pi-coder-orchestrator.md` first (project customization), falling back to the package default. This means you can customize the orchestrator prompt per-project without affecting the package files.
+The extension checks for prompt files in `prompts/` — project customization takes priority over package defaults. This means you can customize the orchestrator prompt per-project without affecting the package files. Edit the files directly in your project's `.pi-coder/prompts/` or the package's `prompts/` directory.
 
 ### MCP Server Access for Subagents
 
@@ -930,6 +997,8 @@ When a spec involves UI work, the orchestrator checks for this file:
 
 ## The TDD Lifecycle
 
+> This section describes the TDD mode lifecycle. For the Light mode lifecycle, see below.
+
 ### Research & Spec
 
 1. You make a request → orchestrator advances the FSM to SPEC_WORK (spec ID is generated immediately, but the directory is created when the spec is saved with `pi_coder_save_spec`)
@@ -980,7 +1049,39 @@ Implementation happens **one unit at a time**. For each unit in the implementati
 
 ### Circuit Breaker
 
-If the TDD review cycle loops `maxLoops` times without converging, the circuit breaker halts the spec. The orchestrator presents the current state and asks you to intervene: refine the spec, change constraints, or abort.
+If the TDD review cycle loops `maxLoops` times without converging, the circuit breaker halts the spec. The orchestrator presents the current state and asks you to intervene: refine the spec, change constraints, or abort. This applies to both TDD and Light modes — both increment `loopCount` on every NEEDS_CHANGES exit.
+
+---
+
+## The Light Mode Lifecycle
+
+Light mode uses a simpler FSM with one implementation state instead of four TDD states. The spec workflow (research → spec → approval → checkpoint) and the review workflow (review → approval → merge) are the same as TDD mode. The difference is the middle:
+
+### IMPLEMENTING state
+
+Instead of per-unit RED/GREEN phases, the orchestrator delegates the entire implementation to the implementor in one or more delegations. `pi_coder_run_tests` can be run at any time for advisory feedback, but test results don't gate FSM transitions.
+
+### Review & fixes
+
+The reviewer operates the same way as in TDD mode — it runs the full test suite and gives a verdict. The key difference is how fixes work:
+
+- **Functional fix** (production code changes) → advance to IMPLEMENTING. The implementor makes changes and the cycle continues.
+- **Non-functional fix** (test cleanup, comments, naming) → the reviewer classifies the fix type, and the extension records it as a `non_functional_classified` evidence flag. The orchestrator delegates directly in NEEDS_CHANGES and advances to REVIEWING with `fixType="non-functional"` for re-review.
+
+Both fix paths increment `loopCount` toward the circuit breaker.
+
+### When to use Light mode instead of TDD
+
+- You're fixing a bug and don't need test-first discipline
+- The task is straightforward enough that per-unit TDD phases add overhead without value
+- You want structured delegation (spec → implement → review) but not RED/GREEN enforcement
+- The project already has good test coverage and you're adding to it
+
+### When to switch from Light to TDD
+
+- The implementation grows complex enough to benefit from per-unit test-first development
+- A Light mode review keeps finding bugs that TDD would have caught earlier
+- You want the safety net of RED-phase validation (tests must fail before implementation)
 
 ## Extension Events
 
@@ -989,7 +1090,8 @@ Pi Coder hooks into pi's extension lifecycle to enforce invariants:
 | Event | What the extension does |
 |---|---|
 | `session_start` | Load config, initialize state machine, register tools, restore persisted state from `.pi-coder/state.json` + `.pi-coder/specs/{id}/state.json` with integrity checks |
-| `before_agent_start` | Replace system prompt with orchestrator identity, filter tools, check nudge thresholds |
+| `session_shutdown` | Clean up timers, persist final state, reset session counters |
+| `before_agent_start` | Replace system prompt with mode-specific orchestrator identity, filter tools, prepend `[MODE: ...]` indicator, check nudge thresholds |
 | `tool_call` | Validate tool calls against FSM state, block raw git commands, track subagent starts |
 | `tool_result` | Auto-transition FSM on test results, subagent completions, and review verdicts; set evidence flags (`spec_user_approved`, `test_run_this_state`); filter subagent list output to pi-coder agents only; persist state to disk; log events |
 
@@ -1017,16 +1119,18 @@ your-project/
     └── settings.json                   # subagents.disableBuiltins + pi settings
 ```
 
+Note: Orchestrator prompts live in `prompts/` (not `agents/`) to prevent pi-subagents from discovering them as delegatable targets. There are three prompt files: `pi-coder-orchestrator.md` (TDD mode), `pi-coder-light.md` (Light mode), and `pi-coder-plan.md` (Plan mode).
+
 ## Architecture
 
 Pi Coder follows a **"fat prompts, thin harness"** philosophy — the intelligence lives in the agent `.md` prompts and the SKILL.md procedural reference. The extension code is minimal plumbing:
 
 - **Extension** (`extensions/index.ts`) — event hooks, tool registration, commands
 - **Damage control** (`extensions/damage-control.ts`) — destructive command protection, applies to all sessions including subagents
-- **Light prompt** (`prompts/pi-coder-light.md`) — simplified orchestrator identity for Light mode
-- **Modules** (`src/`) — state machine, state persistence, spec management, git abstraction, TDD runner, knowledge system, tools, logger
+- **Prompts** (`prompts/`) — orchestrator identity for each mode: `pi-coder-orchestrator.md` (TDD), `pi-coder-light.md` (Light), `pi-coder-plan.md` (Plan)
+- **Modules** (`src/`) — state machine (TDD + Light), state persistence, spec management, git abstraction, TDD runner, knowledge system, tools, logger
 - **Agent prompts** (`agents/`) — three `.md` files defining subagent behavior (researcher, implementor, reviewer)
-- **Orchestrator prompt** (`prompts/`) — template with `{{variables}}` for runtime FSM injection (not in `agents/` to prevent pi-subagents from discovering it as a delegatable target)
+- **Orchestrator prompts** (`prompts/`) — templates with `{{variables}}` for runtime FSM injection. One file per mode: `pi-coder-orchestrator.md` (TDD), `pi-coder-light.md` (Light), `pi-coder-plan.md` (Plan). NOT in `agents/` to prevent pi-subagents from discovering them as delegatable targets
 - **Skill** (`skills/pi-coder/SKILL.md`) — orchestrator procedural reference
 
 The orchestrator has **bounded awareness** — it can `ls`, `find`, and `grep` to write effective delegation briefs, but it cannot `read` file contents, `edit`, `write`, or run `bash`. This forces delegation and preserves the context window for orchestration decisions.
@@ -1047,7 +1151,7 @@ This prevents the LLM from accidentally delegating to a built-in `researcher` in
 
 ```bash
 npm install          # Install dependencies
-npm test             # Run test suite (485 tests)
+npm test             # Run test suite (685 tests)
 npm run typecheck    # TypeScript strict mode check
 ```
 
