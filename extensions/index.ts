@@ -1005,19 +1005,40 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             reason: ctrl.reason,
             currentTool: ctrl.currentTool,
           });
-          pi.sendMessage(
-            {
-              customType: "pi-coder-subagent-attention",
-              content: `⚠️ Subagent ${ctrl.agent} needs attention: ${ctrl.message}. Run: subagent({ action: "status", id: "${ctrl.runId}" }) to inspect.`,
-              display: true,
-            },
-            { deliverAs: "steer", triggerTurn: true },
-          );
-        } else if (ctrl.type === "active_long_running") {
-          // If pi-coder already knows the subagent completed (tool_result processed),
-          // suppress this notification. pi-subagents' event bus can lag behind,
-          // causing stale notifications that stack up and burn LLM turns.
+          // Don't send as steer while subagent is running in foreground —
+          // the agent is blocked on the tool call and can't act on it.
+          // A queued steer gets delivered AFTER tool_result, creating stale
+          // notifications that burn turns. The widget already shows the
+          // attention state in the UI. If the subagent completes, the result
+          // will be handled by the tool_result handler. If it's truly stuck,
+          // the user can manually check via /pi-coder commands.
+          //
+          // For async subagents (not yet supported), steer delivery would
+          // be appropriate since the agent isn't blocked.
           if (!subagentRunning) return;
+          // Log only — no pi.sendMessage for foreground subagents
+          // pi.sendMessage(
+          //   {
+          //     customType: "pi-coder-subagent-attention",
+          //     content: `⚠️ Subagent ${ctrl.agent} needs attention: ${ctrl.message}. Run: subagent({ action: "status", id: "${ctrl.runId}" }) to inspect.`,
+          //     display: true,
+          //   },
+          //   { deliverAs: "steer", triggerTurn: true },
+          // );
+        } else if (ctrl.type === "active_long_running") {
+          // Log but do NOT send as a pi.sendMessage steer.
+          //
+          // In foreground mode, the agent is blocked on the subagent tool
+          // call and CANNOT act on this notification. Queueing it as a
+          // steer means it gets delivered AFTER the tool_result — completely
+          // stale by then. Worse, each stale steer triggers an LLM turn
+          // (acknowledging the notification), which causes another turn,
+          // creating a feedback loop that burns 10+ turns on "ignoring
+          // stale notification" before the user can speak.
+          //
+          // The subagent widget timer already shows elapsed time in the
+          // UI for real-time monitoring. This event is just logged for
+          // debugging/audit purposes.
           const elapsed = ctrl.elapsedMs ? Math.floor(ctrl.elapsedMs / 1000) : "?";
           logEvent("subagent_control", {
             type: ctrl.type,
@@ -1026,14 +1047,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             elapsedSeconds: elapsed,
             currentTool: ctrl.currentTool,
           });
-          pi.sendMessage(
-            {
-              customType: "pi-coder-subagent-running",
-              content: `⏱️ Subagent ${ctrl.agent} has been running for ${elapsed}s. Current tool: ${ctrl.currentTool ?? "unknown"}. Run: subagent({ action: "status", id: "${ctrl.runId}" }) to check progress.`,
-              display: true,
-            },
-            { deliverAs: "steer", triggerTurn: false },
-          );
         }
       });
     }
