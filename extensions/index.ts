@@ -1786,6 +1786,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             };
           }
         }
+
+        // Disable pi-subagents control events for foreground runs.
+        // In foreground mode, the orchestrator is blocked waiting for the
+        // subagent result and CANNOT act on real-time notifications.
+        // These notifications get queued as steer messages and delivered
+        // AFTER the tool_result — completely stale by then. Each stale
+        // steer triggers an LLM turn, creating a feedback loop that burns
+        // 10+ turns on "acknowledging stale notification" before the user
+        // can speak. Disabling at the source prevents emissions entirely.
+        (input as Record<string, unknown>).control = { enabled: false };
+
         // Track subagent timing
         subagentStartTime = Date.now();
         lastSubagentAgent = targetAgent;
