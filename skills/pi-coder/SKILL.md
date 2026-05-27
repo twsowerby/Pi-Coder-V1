@@ -541,8 +541,10 @@ Do not forward user messages directly to subagents. You are the orchestrator —
 
 ## Subagent Monitoring
 
-When a subagent completes, control event information may be available retrospectively. However, because Pi Coder uses synchronous (foreground) subagent delegation, the orchestrator cannot check on a running subagent in real-time — it's blocked waiting for the result.
+Pi Coder automatically disables pi-subagents' control event emissions for all foreground subagent delegations. This prevents stale notifications from being delivered as steer messages that the LLM would react to on subsequent turns (burning turns on acknowledging outdated alerts).
+
+Because Pi Coder uses synchronous (foreground) subagent delegation, the orchestrator cannot check on a running subagent in real-time — it's blocked waiting for the result.
 
 **Auto-transitions are the primary mechanism for keeping the orchestrator on track.** When a tool result includes an ⚠️ AUTO-TRANSITION notice, read it carefully — it tells you the current state and what to do next.
 
-**For debugging**: If a subagent ran for a long time or had repeated tool failures, the `subagent:control-event` notifications may provide useful diagnostic information after the fact.
+**Advisory monitoring**: The orchestrator CAN use `subagent({ action: "status", id: "<runId>" })` and `subagent({ action: "interrupt", id: "<runId>" })` for manual inspection. These are management actions, not execution calls — they don't need real-time control events.

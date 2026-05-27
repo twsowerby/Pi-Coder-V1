@@ -713,15 +713,13 @@ Structured interaction logging for harness improvement. Logs are JSONL files in 
 
 Monitoring of long-running or stuck subagents:
 
-- **`subagentControl.enabled`** — when true, the extension listens for pi-subagents control events (active long-running, needs attention) and surfaces them as steer messages to the orchestrator. Default: `true`.
+- **`subagentControl.enabled`** — when true, the extension listens for pi-subagents control events (active long-running, needs attention) and logs them for debugging. Default: `true`.
 
-The extension listens on the `subagent:control-event` event bus channel and surfaces:
-- **⏱️ Active long-running** — subagent has been running for 2+ minutes. Informational; the subagent is making progress.
-- **⚠️ Needs attention** — subagent has been inactive for 60+ seconds or has repeated tool failures. May need intervention.
+**Note:** Pi Coder automatically injects `control: { enabled: false }` into every subagent tool call. This disables pi-subagents' control event emissions at the source, preventing stale notifications from being delivered as steer messages during foreground (synchronous) subagent execution. In foreground mode, the orchestrator is blocked waiting for the result and cannot act on real-time notifications — they only arrive after the subagent completes, creating a stale feedback loop that burns LLM turns.
 
-The orchestrator can check status with `subagent({ action: "status", id: "<runId>" })` and interrupt with `subagent({ action: "interrupt", id: "<runId>" })`.
+The `subagentControl` config in `.pi-coder/config.json` is reserved for future async delegation support. For now, it only controls whether the event bus listener is active (for diagnostic logging if events somehow still arrive).
 
-Thresholds (60s/240s) are configured via pi-subagents' own config, not Pi Coder's config.
+The orchestrator can check status with `subagent({ action: "status", id: "<runId>" })` and interrupt with `subagent({ action: "interrupt", id: "<runId>" })`. These are advisory — the orchestrator's tool_call handler does not pass `control` overrides for management actions.
 
 Log file naming: `pi-coder-YYYY-MM-DD.log` (one file per calendar day).
 
