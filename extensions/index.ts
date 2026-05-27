@@ -142,6 +142,7 @@ const STATE_STYLE: Record<string, { icon: string; color: "success" | "warning" |
   SPEC_WORK:          { icon: "●", color: "accent" },
   SPEC_APPROVED:      { icon: "✓", color: "success" },
   GIT_CHECKPOINT:     { icon: "⟳", color: "accent" },
+  IMPLEMENTING:       { icon: "●", color: "accent" },
   TDD_RED_WRITE:      { icon: "●", color: "warning" },
   TDD_RED_VALIDATE:   { icon: "●", color: "warning" },
   TDD_GREEN_WRITE:    { icon: "●", color: "accent" },
@@ -161,6 +162,7 @@ const STATE_LABEL: Record<string, string> = {
   SPEC_WORK:          "Spec Work",
   SPEC_APPROVED:      "Spec Approved",
   GIT_CHECKPOINT:     "Checkpoint",
+  IMPLEMENTING:       "Implementing",
   TDD_RED_WRITE:      "RED",
   TDD_RED_VALIDATE:   "RED Validate",
   TDD_GREEN_WRITE:    "GREEN",
@@ -461,7 +463,7 @@ export async function persistState(): Promise<void> {
       const fsmJson = stateMachine!.toJSON();
       const specState: SpecState = {
         version: 1,
-        currentState: fsmJson.currentState as FSMState,
+        currentState: fsmJson.currentState as string,
         loopCount: fsmJson.loopCount as number,
         gitRef: fsmJson.gitRef as string | null,
         evidence: fsmJson.evidence as EvidenceFlag[],
@@ -479,15 +481,47 @@ export async function persistState(): Promise<void> {
   return ourSave;
 }
 
-/** Log a structured event. Convenience wrapper that adds sessionId and timestamp. */
+/** Log a structured event. Convenience wrapper that adds sessionId, timestamp, and turnCount. */
 function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
   if (!logger) return; // Not initialized yet — no-op
   logger.log({
     timestamp: new Date().toISOString(),
     sessionId,
     type,
-    payload,
+    payload: { ...payload, turnCount: sessionTurnCount },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Tool Input Summary Helper — for logging tool_call events
+// ---------------------------------------------------------------------------
+
+/**
+ * Summarize tool input for logging. Extracts key field names/values
+ * without logging sensitive data (file contents, API keys, full interview questions).
+ */
+function summarizeToolInput(toolName: string, input: unknown): Record<string, unknown> {
+  const inp = input as Record<string, unknown>;
+  switch (toolName) {
+    case "pi_coder_advance_fsm":
+      return { targetState: inp.targetState, fixType: inp.fixType };
+    case "pi_coder_run_tests":
+      return { suite: inp.suite, filter: inp.filter };
+    case "pi_coder_git":
+      return { action: inp.action };
+    case "pi_coder_save_spec":
+      return { id: inp.id, title: inp.title };
+    case "pi_coder_read_spec":
+      return { id: inp.id };
+    case "subagent":
+      return { agent: inp.agent, task: typeof inp.task === "string" ? inp.task.slice(0, 100) : undefined };
+    case "interview":
+      return { questions: "..." }; // Don't log interview content
+    case "upsert_knowledge":
+      return { filename: inp.filename };
+    default:
+      return {}; // ls, find, grep — no sensitive data, but also not worth logging the pattern
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -497,49 +531,7 @@ function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
 /** Cached orchestrator prompt template loaded from .md file. */
 let orchestratorPromptTemplate: string | null = null;
 
-/**
- * Build the compact FSM diagram for the system prompt.
- * Generated programmatically from the state machine's transition table.
- */
-function buildFSMDiagram(): string {
-  return [
-    "FSM States & Transitions:",
-    "IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →",
-    "TDD_RED_WRITE → TDD_RED_VALIDATE →",
-    "TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →",
-    "(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |",
-    "(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) | BLOCKED → user intervention",
-    "",
-    "Manual advances: Use pi_coder_advance_fsm to advance the FSM when your work in a state is complete.",
-    "  IDLE → SPEC_WORK (start a new cycle)",
-    "  SPEC_WORK → SPEC_APPROVED (spec ready for approval)",
-    "  SPEC_APPROVED → GIT_CHECKPOINT (spec approved, time to checkpoint)",
-    "  APPROVED → FINAL_APPROVAL (review passed, present for final OK)",
-    "  FINAL_APPROVAL → MERGING (user gave final approval)",
-    "  Any → IDLE (abort cycle)",
-    "Auto-transitions: Happen on subagent/test results (deterministic).",
-  ].join("\n");
-}
-
-function buildLightFSMDiagram(): string {
-  return [
-    "FSM States & Transitions (Light Mode — no TDD phases):",
-    "IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →",
-    "IMPLEMENTING → REVIEWING →",
-    "(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |",
-    "(NEEDS_CHANGES → IMPLEMENTING | REVIEWING) | BLOCKED",
-    "",
-    "Manual advances: Use pi_coder_advance_fsm to advance the FSM when your work in a state is complete.",
-    "  IDLE → SPEC_WORK (start a new cycle)",
-    "  SPEC_WORK → SPEC_APPROVED (spec ready for approval)",
-    "  SPEC_APPROVED → GIT_CHECKPOINT (spec approved, time to checkpoint)",
-    "  IMPLEMENTING → REVIEWING (implementation complete, time for review)",
-    "  APPROVED → FINAL_APPROVAL (review passed, present for final OK)",
-    "  FINAL_APPROVAL → MERGING (user gave final approval)",
-    "  Any → IDLE (abort cycle)",
-    "Auto-transitions: Happen on subagent/git results (deterministic).",
-  ].join("\n");
-}
+// FSM diagram is now built by BaseStateMachine.buildDiagram() — see Unit 1
 
 /** Plan mode prompt template — cached for the session. */
 let planModePromptTemplate: string | null = null;
@@ -666,7 +658,7 @@ function buildOrchestratorPrompt(
     .join("\n");
 
   return template
-    .replace("{{fsmDiagram}}", buildFSMDiagram())
+    .replace("{{fsmDiagram}}", sm.buildDiagram())
     .replace("{{currentState}}", sm.currentState)
     .replace("{{activeSpecId}}", activeSpecId ?? "none")
     .replace("{{loopCount}}", String(sm.loopCount))
@@ -731,8 +723,8 @@ Available tools:
     .map(([name, snippet]) => `- ${name}: ${snippet}`)
     .join("\n");
 
-  return lightModePromptTemplate
-    .replace("{{fsmDiagram}}", buildLightFSMDiagram())
+  return lightModePromptTemplate!
+    .replace("{{fsmDiagram}}", sm.buildDiagram())
     .replace("{{currentState}}", sm.currentState)
     .replace("{{activeSpecId}}", activeSpecId ?? "none")
     .replace("{{loopCount}}", String(sm.loopCount))
@@ -1282,6 +1274,22 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           lastUpdatedAt: progress.lastActivityAt ?? Date.now(),
         };
 
+        // Detect skill reads for logging — fast, synchronous, no latency impact
+        if (progress.currentTool === "read" && progress.currentPath?.includes("SKILL.md")) {
+          const pathParts = progress.currentPath.split("/").filter(Boolean);
+          // Parent directory of SKILL.md is the skill name
+          const skillName = pathParts.length >= 2
+            ? pathParts[pathParts.length - 2]
+            : "unknown";
+          logEvent("skill_read", {
+            skillName,
+            skillPath: progress.currentPath,
+            subagentAgent: progress.agent,
+            fsmState: stateMachine?.currentState ?? "N/A",
+            mode: piCoderMode,
+          });
+        }
+
         // Update the subagent widget
         refreshSubagentWidget();
       });
@@ -1533,11 +1541,22 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       fullPrompt += "</project_context>\n";
     }
 
+    // Filter skills to mode-relevant ones only
+    const allSkills = systemPromptOptions.skills ?? [];
+    const filteredSkills = allSkills.filter(skill => {
+      if (skill.name === 'pi-coder-core') return true;  // Always include core
+      if (piCoderMode === 'tdd' && skill.name === 'pi-coder-tdd') return true;
+      if (piCoderMode === 'light' && skill.name === 'pi-coder-light') return true;
+      if (piCoderMode === 'plan' && skill.name === 'pi-coder-plan') return true;
+      // Include non-pi-coder skills (pi-subagents, pi-intercom, librarian, etc.)
+      if (!skill.name.startsWith('pi-coder-')) return true;
+      return false;
+    });
+
     // Manually append skills since read is excluded from selectedTools
     // buildSystemPrompt only includes <available_skills> when read is in selectedTools
-    const skills = systemPromptOptions.skills ?? [];
-    if (skills.length > 0) {
-      fullPrompt += formatSkillsForPrompt(skills as Skill[]);
+    if (filteredSkills.length > 0) {
+      fullPrompt += formatSkillsForPrompt(filteredSkills as Skill[]);
     }
 
     // Append date and working directory (matches buildSystemPrompt behavior)
@@ -1597,6 +1616,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
     }
     } // end TDD/Light-mode nudge
+
+    // Log prompt size before returning — measures prompt restructuring impact
+    logEvent("prompt_size", {
+      promptChars: fullPrompt.length,
+      skillCount: filteredSkills.length,
+      skillNames: filteredSkills.map(s => s.name),
+      toolCount: Object.keys(filteredSnippets).length,
+      contextFileCount: contextFiles.length,
+      contextFileChars: contextFiles.reduce((sum, f) => sum + f.content.length, 0),
+      fsmState: stateMachine?.currentState ?? "N/A",
+      mode: piCoderMode,
+    });
 
     // Return the replaced system prompt
     return { systemPrompt: fullPrompt };
@@ -1863,6 +1894,15 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       nudgeState.actionAttempted = true;
     }
 
+    // Log allowed tool call — only for validated, allowed calls
+    logEvent("tool_call", {
+      toolName,
+      fsmState: stateMachine?.currentState ?? "N/A",
+      mode: piCoderMode,
+      specId: activeSpecId ?? "none",
+      inputSummary: summarizeToolInput(toolName, input),
+    });
+
     // Tool passed validation — allow
     return undefined;
   });
@@ -1902,6 +1942,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     const { details } = event;
     const currentState = stateMachine!.currentState;
+
+    // Log lifecycle_start on IDLE → SPEC_WORK transitions (pi_coder_advance_fsm)
+    // This replaces the old lifecycle_start that fired on first subagent completion (too late)
+    if (toolName === "pi_coder_advance_fsm" && currentState === "SPEC_WORK" && lifecycleStartTime === null) {
+      lifecycleStartTime = Date.now();
+      lifecycleTokens = { input: 0, output: 0, total: 0 };
+      logEvent("lifecycle_start", {
+        specId: activeSpecId ?? "none",
+        userRequest: "(spec work initiated)",
+      });
+    }
 
     // Evidence: interview tool completion in SPEC_WORK → spec_user_approved
     if ((piCoderMode === "tdd" || piCoderMode === "light") && toolName === "interview" && currentState === "SPEC_WORK") {
@@ -2168,7 +2219,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // AUTO-TRANSITION: review verdict drives next state
           // This replaces the need for manual pi_coder_advance_fsm REVIEWING → APPROVED/NEEDS_CHANGES
           const target = reviewVerdict.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
-          stateMachine!.transition(target as FSMState);
+          stateMachine!.transition(target);
 
           // If reviewer classified fix as non-functional, set evidence
           // This gates the NEEDS_CHANGES → REVIEWING path and implementor delegation
@@ -2196,15 +2247,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // SPEC_WORK: Researcher subagent completed — stay in SPEC_WORK
       // The orchestrator may need multiple research rounds, or may
       // advance to SPEC_APPROVED via pi_coder_advance_fsm.
-      if (currentState === "SPEC_WORK" && lifecycleStartTime === null) {
-        // Log lifecycle start on first subagent delegation in a cycle
-        lifecycleStartTime = Date.now();
-        lifecycleTokens = { input: 0, output: 0, total: 0 };
-        logEvent("lifecycle_start", {
-          specId: activeSpecId,
-          userRequest: "",
-        });
-      }
+      // lifecycle_start is now logged on IDLE→SPEC_WORK transition instead of
+      // first subagent completion (see pi_coder_advance_fsm handler above).
 
       // Log FSM transition
       if (stateMachine!.currentState !== previousState) {

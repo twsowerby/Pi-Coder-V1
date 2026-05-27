@@ -15,7 +15,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { FSMState, PiCoderConfig, PiCoderMode, SpecFile, TestRunResult } from "./types.ts";
+import type { PiCoderConfig, PiCoderMode, SpecFile, TestRunResult } from "./types.ts";
 import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
@@ -446,7 +446,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             keyFiles: u.keyFiles,
             dependsOn: u.dependsOn ?? [],
           })) ?? [],
-          status: smRef.current.currentState as SpecFile["status"],
+          status: smRef.current.currentState,
         };
 
         const path = await specManager.createSpec(spec);
@@ -599,7 +599,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       }
 
       try {
-        const guardError = smRef.current.transition(targetState as FSMState);
+        const guardError = smRef.current.transition(targetState);
 
         // Handle transition guard errors (missing evidence)
         if (guardError) {

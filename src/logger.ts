@@ -41,7 +41,10 @@ export type LogEventType =
   | "tool_call_blocked"
   | "state_restore"
   | "subagent_control"
-  | "mode_switch";
+  | "mode_switch"
+  | "prompt_size"
+  | "skill_read"
+  | "tool_call";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -66,6 +69,9 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   review_result: "standard",
   command: "standard",
   user_intervention: "standard",
+  prompt_size: "standard",
+  skill_read: "standard",
+  tool_call: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

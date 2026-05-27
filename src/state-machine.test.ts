@@ -10,31 +10,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { StateMachine } from "./state-machine.ts";
+import { LightStateMachine } from "./light-state-machine.ts";
 import type { FSMState, PiCoderConfig, EvidenceFlag } from "./types.ts";
-
-/** Default config for tests. */
-function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
-  return {
-    testCommand: "npm test",
-    maxLoops: 3,
-    createBranch: true,
-    mergeBranch: "merge",
-    branchPrefix: "pi-coder/",
-    nudge: {
-      enabled: true,
-      defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
-      states: {
-        SPEC_WORK: { turnsBeforeNudge: 3 },
-        BLOCKED: { turnsBeforeNudge: 2 },
-        IDLE: { enabled: false },
-        SPEC_APPROVED: { enabled: false },
-        FINAL_APPROVAL: { enabled: false },
-        COMPLETE: { enabled: false },
-      },
-    },
-    ...overrides,
-  };
-}
+import { makeConfig } from "./test/state-machine-helpers.ts";
 
 /**
  * Force a transition, setting required evidence first.
@@ -871,5 +849,36 @@ describe("RED tautology acknowledge", () => {
     const result = sm.transition("REVIEWING");
     assert.strictEqual(result, undefined, "Transition should succeed");
     assert.strictEqual(sm.currentState, "REVIEWING");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit 1: buildDiagram
+// ---------------------------------------------------------------------------
+
+describe("Unit 1: buildDiagram", () => {
+  it("TDD mode diagram contains RED_VALIDATE triple exit", () => {
+    const sm = new StateMachine(makeConfig());
+    const diagram = sm.buildDiagram();
+    assert.ok(diagram.includes("TDD_RED_WRITE → TDD_RED_VALIDATE"));
+    assert.ok(diagram.includes("RED tautology"));
+    assert.ok(diagram.includes("BLOCKED (genuinely problematic)"));
+    assert.ok(diagram.includes("TDD_GREEN_WRITE (acknowledge tautology)"));
+    assert.ok(diagram.includes("FSM States & Transitions:"));
+    // TDD mode should NOT have Any → BLOCKED wildcard
+    assert.ok(!diagram.includes("Any → BLOCKED (emergency"));
+    // TDD mode has manual advance for RED_VALIDATE → BLOCKED
+    assert.ok(diagram.includes("TDD_RED_VALIDATE → BLOCKED"));
+  });
+
+  it("Light mode diagram contains Any → BLOCKED wildcard", () => {
+    const sm = new LightStateMachine(makeConfig());
+    const diagram = sm.buildDiagram();
+    assert.ok(diagram.includes("IMPLEMENTING"));
+    assert.ok(diagram.includes("FSM States & Transitions (Light Mode"));
+    assert.ok(diagram.includes("Any → BLOCKED (emergency override"));
+    // Light mode should NOT have TDD references
+    assert.ok(!diagram.includes("TDD_RED"));
+    assert.ok(!diagram.includes("RED tautology"));
   });
 });

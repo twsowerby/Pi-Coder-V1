@@ -24,6 +24,9 @@ import {
   computeRedTautologyCount,
   computeFullSummary,
   formatSummary,
+  computeTimeInState,
+  computeOrchestratorTurnsPerSpec,
+  computeSkillUtilization,
   type LogEntry,
 } from "../src/log-analysis.ts";
 
@@ -251,5 +254,100 @@ describe("Phase 3: Log Analysis", () => {
   it("handles empty JSONL", () => {
     const entries = parseLogEntries("");
     assert.strictEqual(entries.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit 5g: New Analysis Functions
+// ---------------------------------------------------------------------------
+
+describe("Unit 5g: New Analysis Functions", () => {
+  it("computeTimeInState computes avg/min/max per state", () => {
+    const entries = [
+      { type: "fsm_transition", payload: { from: "IDLE", to: "SPEC_WORK" }, sessionId: "s1", timestamp: "2026-05-25T10:00:00.000Z" },
+      { type: "fsm_transition", payload: { from: "SPEC_WORK", to: "SPEC_APPROVED" }, sessionId: "s1", timestamp: "2026-05-25T10:01:00.000Z" },
+      { type: "fsm_transition", payload: { from: "SPEC_APPROVED", to: "GIT_CHECKPOINT" }, sessionId: "s1", timestamp: "2026-05-25T10:02:30.000Z" },
+      { type: "fsm_transition", payload: { from: "GIT_CHECKPOINT", to: "TDD_RED_WRITE" }, sessionId: "s1", timestamp: "2026-05-25T10:03:00.000Z" },
+    ] as LogEntry[];
+
+    const result = computeTimeInState(entries);
+
+    // IDLE: 60s (10:00 → 10:01)
+    assert.ok(result.IDLE);
+    assert.strictEqual(result.IDLE.avgMs, 60000);
+    assert.strictEqual(result.IDLE.count, 1);
+
+    // SPEC_WORK: 90s (10:01 → 10:02:30)
+    assert.ok(result.SPEC_WORK);
+    assert.strictEqual(result.SPEC_WORK.avgMs, 90000);
+
+    // SPEC_APPROVED: 30s (10:02:30 → 10:03)
+    assert.ok(result.SPEC_APPROVED);
+    assert.strictEqual(result.SPEC_APPROVED.avgMs, 30000);
+  });
+
+  it("computeTimeInState handles empty entries", () => {
+    const result = computeTimeInState([]);
+    assert.deepStrictEqual(result, {});
+  });
+
+  it("computeTimeInState handles single transition (no duration)", () => {
+    const entries = [
+      { type: "fsm_transition", payload: { from: "IDLE", to: "SPEC_WORK" }, sessionId: "s1", timestamp: "2026-05-25T10:00:00.000Z" },
+    ] as LogEntry[];
+    const result = computeTimeInState(entries);
+    assert.deepStrictEqual(result, {});
+  });
+
+  it("computeOrchestratorTurnsPerSpec counts tool_calls by specId", () => {
+    const entries = [
+      { type: "tool_call", payload: { toolName: "pi_coder_advance_fsm", specId: "spec-a" }, sessionId: "s1", timestamp: "2026-05-25T10:00:00.000Z" },
+      { type: "tool_call", payload: { toolName: "subagent", specId: "spec-a" }, sessionId: "s1", timestamp: "2026-05-25T10:01:00.000Z" },
+      { type: "tool_call", payload: { toolName: "pi_coder_advance_fsm", specId: "spec-b" }, sessionId: "s1", timestamp: "2026-05-25T10:02:00.000Z" },
+    ] as LogEntry[];
+
+    const result = computeOrchestratorTurnsPerSpec(entries);
+    assert.strictEqual(result["spec-a"], 2);
+    assert.strictEqual(result["spec-b"], 1);
+  });
+
+  it("computeOrchestratorTurnsPerSpec handles none specId", () => {
+    const entries = [
+      { type: "tool_call", payload: { toolName: "ls", specId: "none" }, sessionId: "s1", timestamp: "2026-05-25T10:00:00.000Z" },
+    ] as LogEntry[];
+
+    const result = computeOrchestratorTurnsPerSpec(entries);
+    assert.strictEqual(result["none"], 1);
+  });
+
+  it("computeSkillUtilization counts skill_reads by skillName", () => {
+    const entries = [
+      { type: "skill_read", payload: { skillName: "pi-coder-core" }, sessionId: "s1", timestamp: "2026-05-25T10:00:00.000Z" },
+      { type: "skill_read", payload: { skillName: "pi-coder-tdd" }, sessionId: "s1", timestamp: "2026-05-25T10:01:00.000Z" },
+      { type: "skill_read", payload: { skillName: "pi-coder-core" }, sessionId: "s1", timestamp: "2026-05-25T10:02:00.000Z" },
+    ] as LogEntry[];
+
+    const result = computeSkillUtilization(entries);
+    assert.strictEqual(result["pi-coder-core"], 2);
+    assert.strictEqual(result["pi-coder-tdd"], 1);
+  });
+
+  it("computeSkillUtilization handles empty entries", () => {
+    const result = computeSkillUtilization([]);
+    assert.deepStrictEqual(result, {});
+  });
+
+  it("computeFullSummary includes new fields", () => {
+    const entries = [
+      { type: "lifecycle_start", payload: { specId: "spec-a" }, sessionId: "s1", timestamp: "2026-05-25T10:00:00.000Z" },
+      { type: "lifecycle_end", payload: { specId: "spec-a", outcome: "COMPLETE", wallClockMs: 45000, totalTokens: { input: 100, output: 200, total: 300 } }, sessionId: "s1", timestamp: "2026-05-25T10:01:00.000Z" },
+    ] as LogEntry[];
+
+    const summary = computeFullSummary(entries);
+
+    // New fields should exist
+    assert.ok("timeInState" in summary);
+    assert.ok("orchestratorTurnsPerSpec" in summary);
+    assert.ok("skillUtilization" in summary);
   });
 });

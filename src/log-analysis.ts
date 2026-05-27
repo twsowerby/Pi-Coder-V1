@@ -43,6 +43,12 @@ export interface LogSummary {
   redTautologyCount: number;
   /** Spec count (for averaging) */
   specCount: number;
+  /** Time-in-state distributions: average ms spent in each FSM state */
+  timeInState: Record<string, { avgMs: number; count: number; minMs: number; maxMs: number }>;
+  /** Orchestrator turns per spec: tool_call events grouped by specId */
+  orchestratorTurnsPerSpec: Record<string, number>;
+  /** Skill utilization: skill_read events grouped by skillName */
+  skillUtilization: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +315,73 @@ export function computeSpecCount(entries: LogEntry[]): number {
   return specIds.size;
 }
 
+/**
+ * Compute time-in-state distributions from consecutive fsm_transition events.
+ * For each transition, the duration = next_transition.timestamp - this_transition.timestamp,
+ * grouped by the `from` state.
+ */
+export function computeTimeInState(entries: LogEntry[]): Record<string, { avgMs: number; count: number; minMs: number; maxMs: number }> {
+  const transitions = entries.filter(e => e.type === "fsm_transition");
+  const durationsByState: Record<string, number[]> = {};
+
+  for (let i = 0; i < transitions.length - 1; i++) {
+    const current = transitions[i];
+    const next = transitions[i + 1];
+    const from = current.payload.from as string;
+
+    try {
+      const currentTs = new Date(current.timestamp).getTime();
+      const nextTs = new Date(next.timestamp).getTime();
+      const duration = nextTs - currentTs;
+      if (duration > 0) {
+        if (!durationsByState[from]) durationsByState[from] = [];
+        durationsByState[from].push(duration);
+      }
+    } catch {
+      // Skip entries with invalid timestamps
+    }
+  }
+
+  const result: Record<string, { avgMs: number; count: number; minMs: number; maxMs: number }> = {};
+  for (const [state, durations] of Object.entries(durationsByState)) {
+    const avgMs = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const minMs = Math.min(...durations);
+    const maxMs = Math.max(...durations);
+    result[state] = { avgMs, count: durations.length, minMs, maxMs };
+  }
+  return result;
+}
+
+/**
+ * Compute orchestrator turns per spec from tool_call events grouped by specId.
+ */
+export function computeOrchestratorTurnsPerSpec(entries: LogEntry[]): Record<string, number> {
+  const toolCalls = entries.filter(e => e.type === "tool_call");
+  const counts: Record<string, number> = {};
+
+  for (const tc of toolCalls) {
+    const specId = (tc.payload.specId as string) ?? "none";
+    counts[specId] = (counts[specId] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+/**
+ * Compute skill utilization from skill_read events grouped by skillName.
+ */
+export function computeSkillUtilization(entries: LogEntry[]): Record<string, number> {
+  const skillReads = entries.filter(e => e.type === "skill_read");
+  const counts: Record<string, number> = {};
+
+  for (const sr of skillReads) {
+    const skillName = (sr.payload.skillName as string) ?? "unknown";
+    counts[skillName] = (counts[skillName] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
 // ---------------------------------------------------------------------------
 // Full Summary
 // ---------------------------------------------------------------------------
@@ -327,6 +400,9 @@ export function computeFullSummary(entries: LogEntry[]): LogSummary {
     tokenUsage: computeTokenUsage(entries),
     redTautologyCount: computeRedTautologyCount(entries),
     specCount: computeSpecCount(entries),
+    timeInState: computeTimeInState(entries),
+    orchestratorTurnsPerSpec: computeOrchestratorTurnsPerSpec(entries),
+    skillUtilization: computeSkillUtilization(entries),
   };
 }
 
@@ -384,6 +460,39 @@ export function formatSummary(summary: LogSummary): string {
 
   if (summary.redTautologyCount > 0) {
     lines.push(`\n🔴 RED tautology occurrences: ${summary.redTautologyCount}`);
+  }
+
+  // Time-in-state distributions
+  const timeInState = summary.timeInState;
+  const timeInStateEntries = Object.entries(timeInState);
+  if (timeInStateEntries.length > 0) {
+    lines.push(`\n⏱️ Time in state:`);
+    for (const [state, info] of timeInStateEntries.sort((a, b) => b[1].avgMs - a[1].avgMs)) {
+      const avgSecs = (info.avgMs / 1000).toFixed(1);
+      const minSecs = (info.minMs / 1000).toFixed(1);
+      const maxSecs = (info.maxMs / 1000).toFixed(1);
+      lines.push(`  ${state}: avg ${avgSecs}s (${info.count} transitions, ${minSecs}s–${maxSecs}s)`);
+    }
+  }
+
+  // Orchestrator turns per spec
+  const turnsPerSpec = summary.orchestratorTurnsPerSpec;
+  const turnsEntries = Object.entries(turnsPerSpec).filter(([id]) => id !== "none");
+  if (turnsEntries.length > 0) {
+    lines.push(`\n🔧 Orchestrator turns per spec:`);
+    for (const [specId, count] of turnsEntries.sort((a, b) => b[1] - a[1])) {
+      lines.push(`  ${specId}: ${count} tool calls`);
+    }
+  }
+
+  // Skill utilization
+  const skillUtil = summary.skillUtilization;
+  const skillEntries = Object.entries(skillUtil);
+  if (skillEntries.length > 0) {
+    lines.push(`\n📚 Skill utilization:`);
+    for (const [skillName, count] of skillEntries.sort((a, b) => b[1] - a[1])) {
+      lines.push(`  ${skillName}: ${count} reads`);
+    }
   }
 
   return lines.join("\n");
