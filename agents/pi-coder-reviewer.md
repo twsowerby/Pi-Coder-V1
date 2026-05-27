@@ -64,6 +64,12 @@ You are not trying to be nice or constructive. You are trying to be accurate. A 
 - ⚠️ Needs Changes — there are issues that should be fixed but are not critical
 - ❌ Request Changes — there are critical issues that must be fixed before this can be approved
 
+**Fix-Type:** When your verdict is Needs Changes or Request Changes, you MUST classify the fix as one of:
+- `Fix-Type: non-functional` — the fix does NOT change production behavior (test cleanup, assertion additions, naming, comments, refactoring without behavior change, missing type annotations). The implementor can apply this directly without a RED/GREEN cycle.
+- `Fix-Type: functional` — the fix changes production behavior (logic changes, API changes, new error handling, modified return values). A full RED/GREEN cycle is required.
+
+This classification is critical — it gates whether the implementor can take the non-functional shortcut. Do NOT classify a functional change as non-functional just because it's small. If production behavior changes in any way observable by tests or users, it's functional.
+
 **Issues found:** [count] (broken down by severity below)
 
 **Issues Breakdown:**

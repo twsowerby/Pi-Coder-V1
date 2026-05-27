@@ -828,6 +828,7 @@ function extractTokenUsage(result: unknown): { input: number; output: number; to
  */
 function extractReviewVerdict(result: unknown): {
   verdict: "approved" | "needs_changes" | "request_changes";
+  fixType: "functional" | "non-functional" | null;
   issueCount: number;
   highSeverityCount: number;
 } | null {
@@ -861,13 +862,23 @@ function extractReviewVerdict(result: unknown): {
     return null; // Can't determine verdict
   }
 
+  // Extract fix type classification from reviewer output
+  // The reviewer is prompted to include a fix type in its verdict
+  let fixType: "functional" | "non-functional" | null = null;
+  if (verdict !== "approved") {
+    const fixTypeMatch = text.match(/fix.?type:\s*(functional|non-functional|non_functional)/i);
+    if (fixTypeMatch) {
+      fixType = fixTypeMatch[1].toLowerCase().replace("_", "-") === "non-functional" ? "non-functional" : "functional";
+    }
+  }
+
   // Count issues — look for severity markers
   const highSeverity = (text.match(/🔴/g) ?? []).length;
   const medSeverity = (text.match(/🟠/g) ?? []).length;
   const lowSeverity = (text.match(/🟡/g) ?? []).length;
   const issueCount = highSeverity + medSeverity + lowSeverity;
 
-  return { verdict, issueCount, highSeverityCount: highSeverity };
+  return { verdict, fixType, issueCount, highSeverityCount: highSeverity };
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,6 +1463,32 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             });
             return { block: true, reason: guidance };
           }
+
+          // Soft gate: implementor in NEEDS_CHANGES requires non_functional_classified evidence
+          // The reviewer must have classified the fix as non-functional before the
+          // orchestrator can take the shortcut (skip RED/GREEN). This prevents the
+          // orchestrator from self-authorizing untested code changes.
+          if (
+            targetAgent === "pi-coder.implementor" &&
+            stateMachine.currentState === "NEEDS_CHANGES" &&
+            !stateMachine.hasEvidence("non_functional_classified")
+          ) {
+            logEvent("tool_call_blocked", {
+              toolName,
+              targetAgent,
+              fsmState: stateMachine.currentState,
+              reason: "missing_non_functional_evidence",
+            });
+            return {
+              block: true,
+              reason:
+                `🛡️ Cannot delegate implementor in NEEDS_CHANGES without reviewer classification. ` +
+                `The reviewer must classify the fix as non-functional (include 'Fix-Type: non-functional' in its verdict) ` +
+                `before the implementor can be delegated here. ` +
+                `If the fix is functional (changes production behavior), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead. ` +
+                `Do not retry this exact call.`,
+            };
+          }
         }
         // In light mode, any pi-coder subagent can be called at any time
 
@@ -1821,10 +1858,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // This replaces the need for manual pi_coder_advance_fsm REVIEWING → APPROVED/NEEDS_CHANGES
           const target = reviewVerdict.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
           stateMachine.transition(target as FSMState);
+
+          // If reviewer classified fix as non-functional, set evidence
+          // This gates the NEEDS_CHANGES → REVIEWING path and implementor delegation
+          if (reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
+            stateMachine.setEvidence("non_functional_classified");
+          }
+
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
-            : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. `+
-              `Advance to TDD_RED_WRITE (functional fix) or REVIEWING (non-functional fix).`;
+            : reviewVerdict.fixType === "non-functional"
+              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING for re-review.`
+              : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to TDD_RED_WRITE for a full RED/GREEN cycle.`;
 
           // Append to tool result content
           if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {

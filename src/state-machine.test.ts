@@ -53,6 +53,9 @@ function forceTransition(sm: StateMachine, to: FSMState): void {
   if (from === "TDD_GREEN_VALIDATE") {
     sm.setEvidence("test_run_this_state");
   }
+  if (from === "NEEDS_CHANGES" && to === "REVIEWING") {
+    sm.setEvidence("non_functional_classified");
+  }
   const result = sm.transition(to);
   if (result) {
     throw new Error(`Transition guard blocked ${from} → ${to}: ${result.message}`);
@@ -839,5 +842,43 @@ describe("RED tautology acknowledge", () => {
     assert.strictEqual(nudge.shouldNudge, true);
     assert.strictEqual(nudge.expectedTool, "subagent");
     assert.ok(nudge.expectedAction.includes("implementor"));
+  });
+
+  it("NEEDS_CHANGES → REVIEWING requires non_functional_classified evidence", () => {
+    const sm = new StateMachine(makeConfig());
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
+    forceTransition(sm, "NEEDS_CHANGES");
+    // Without evidence — guard should block
+    const result = sm.transition("REVIEWING");
+    assert.ok(result !== undefined, "Should return guard error");
+    assert.ok("missingEvidence" in result!);
+    assert.ok((result as any).missingEvidence.includes("non_functional_classified"));
+    assert.strictEqual(sm.currentState, "NEEDS_CHANGES", "State should not have changed");
+  });
+
+  it("NEEDS_CHANGES → REVIEWING succeeds with non_functional_classified evidence", () => {
+    const sm = new StateMachine(makeConfig());
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
+    forceTransition(sm, "NEEDS_CHANGES");
+    sm.setEvidence("non_functional_classified");
+    const result = sm.transition("REVIEWING");
+    assert.strictEqual(result, undefined, "Transition should succeed");
+    assert.strictEqual(sm.currentState, "REVIEWING");
   });
 });

@@ -179,6 +179,17 @@ const TRANSITION_GUARDS: TransitionGuard[] = [
       "Cannot advance to REVIEWING without running GREEN validation tests. " +
       "Use pi_coder_run_tests to validate the GREEN phase first.",
   },
+  {
+    from: "NEEDS_CHANGES",
+    to: "REVIEWING",
+    requiredEvidence: ["non_functional_classified"],
+    errorMessage:
+      "Cannot advance to REVIEWING for non-functional fix without reviewer classification. " +
+      "The reviewer must classify the fix type in its verdict. If the fix is non-functional " +
+      "(test cleanup, comments, naming, assertions), the reviewer should include " +
+      "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
+      "changes), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead.",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -252,7 +263,7 @@ const NUDE_EXPECTATIONS: Record<FSMState, NudgeExpectation> = {
 // ---------------------------------------------------------------------------
 
 /** Evidence flags that survive transitions (cleared only on IDLE reset). */
-const PERSISTENT_EVIDENCE: Set<EvidenceFlag> = new Set(["spec_saved", "spec_user_approved"]);
+const PERSISTENT_EVIDENCE: Set<EvidenceFlag> = new Set(["spec_saved", "spec_user_approved", "non_functional_classified"]);
 
 // ---------------------------------------------------------------------------
 // StateMachine Class

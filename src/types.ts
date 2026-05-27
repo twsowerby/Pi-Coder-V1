@@ -258,7 +258,8 @@ export interface KnowledgeEntry {
 export type EvidenceFlag =
   | "spec_saved"
   | "spec_user_approved"
-  | "test_run_this_state";
+  | "test_run_this_state"
+  | "non_functional_classified";
 
 /**
  * Per-spec state persisted to `.pi-coder/specs/{id}/state.json`.
