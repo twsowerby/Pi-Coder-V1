@@ -1282,8 +1282,32 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         if (specState) {
           // Restore FSM from per-spec state — instantiate the right class
-          // based on the current mode
-          if (piCoderMode === "tdd") {
+          // based on the current mode. Cross-mode restore is blocked: a TDD spec
+          // can't be resumed in Light mode and vice versa.
+          const savedState = specState.currentState as string;
+          const isTddState = savedState.startsWith("TDD_");
+          const isLightOnlyState = savedState === "IMPLEMENTING";
+          const modeMismatch =
+            (piCoderMode === "light" && isTddState) ||
+            (piCoderMode === "tdd" && isLightOnlyState);
+
+          if (modeMismatch) {
+            logEvent("state_restore", {
+              status: "mode_mismatch",
+              specId: savedGlobalState.activeSpecId,
+              savedState,
+              currentMode: piCoderMode,
+              message: `Spec was created in ${isTddState ? "TDD" : "Light"} mode but current mode is ${piCoderMode}. Switch modes to resume.`,
+            });
+            ctx.ui.notify(
+              `Active spec '${savedGlobalState.activeSpecId}' was created in ${isTddState ? "TDD" : "Light"} mode. Switch to ${isTddState ? "TDD" : "Light"} mode with /pi-coder to resume.`,
+              "warning",
+            );
+            // Don't restore — start with a fresh FSM
+            stateMachine = piCoderMode === "tdd"
+              ? new StateMachine(config)
+              : new LightStateMachine(config);
+          } else if (piCoderMode === "tdd") {
             stateMachine = StateMachine.fromJSON({
               currentState: specState.currentState as FSMState,
               loopCount: specState.loopCount,

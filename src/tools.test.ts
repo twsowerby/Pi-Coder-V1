@@ -669,8 +669,13 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     });
     assert.ok(result.isError, "Should be error for invalid state name");
     assert.strictEqual(sm.currentState, "IDLE", "State should not change on error");
+    // The state machine's transition() method validates — it returns
+    // "Illegal transition" for invalid targets, not "Invalid state"
     const content = (result.content as Array<{ text: string }>)[0].text;
-    assert.ok(content.includes("Invalid state"), `Should mention invalid state, got: ${content}`);
+    assert.ok(
+      content.includes("Illegal transition") || content.includes("Invalid state"),
+      `Should mention illegal/invalid transition, got: ${content}`,
+    );
   });
 
   it("allows abort from any state to IDLE", async () => {

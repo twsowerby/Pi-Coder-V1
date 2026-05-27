@@ -114,7 +114,10 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const { action, branch, message } = params;
 
-      // In light mode, pi_coder_git is always available — no FSM to enforce
+      // In TDD mode, validate FSM state before executing git operations.
+      // In Light mode, the extension's tool_call handler validates against
+      // LightStateMachine.ACTION_RULES instead — both enforce FSM state, but
+      // the tool-level check provides defense-in-depth for TDD only.
       if (deps.piCoderMode.current === "tdd") {
         // Validate FSM state
         if (!smRef.current.isActionAllowed("pi_coder_git")) {
@@ -577,23 +580,11 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       const { targetState, request, fixType } = params;
       const previousState = smRef.current.currentState;
 
-      // Validate targetState is a valid FSMState
-      const validStates: Set<string> = new Set<FSMState>([
-        "IDLE", "SPEC_WORK", "SPEC_APPROVED", "GIT_CHECKPOINT",
-        "TDD_RED_WRITE", "TDD_RED_VALIDATE", "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE",
-        "REVIEWING", "APPROVED", "NEEDS_CHANGES", "FINAL_APPROVAL", "MERGING",
-        "COMPLETE", "BLOCKED",
-      ]);
-      if (!validStates.has(targetState)) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Invalid state "${targetState}". Valid states: ${[...validStates].join(", ")}`,
-          }],
-          details: { success: false, error: `Invalid state: ${targetState}`, previousState, validTargets: smRef.current.getValidTransitions() },
-          isError: true,
-        };
-      }
+      // No static state validation — each state machine (StateMachine, LightStateMachine)
+      // validates transitions internally. The tool just calls transition() and handles
+      // the result. This allows mode-specific states like IMPLEMENTING (Light) to work.
+      // Per spec §7.2: "remove static enum validation from the parameter schema.
+      // The transition() method itself validates."
 
       // No ad-hoc guards here — the StateMachine.transition() method
       // checks TRANSITION_GUARDS (evidence requirements) internally.
