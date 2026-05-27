@@ -16,15 +16,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { FSMState, PiCoderConfig, PiCoderMode, SpecFile, TestRunResult } from "./types.ts";
-import { StateMachine } from "./state-machine.ts";
 import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 import { SpecManager, generateSpecId } from "./spec.ts";
+import type { IStateMachine } from "./types.ts";
 
 /** Dependencies injected from the extension main. */
 export interface StateMachineRef {
-  get current(): StateMachine;
+  get current(): IStateMachine;
 }
 
 export interface ToolDependencies {
@@ -168,12 +168,9 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             ? `wip: checkpoint-${activeSpecIdRef.current}`
             : `wip: checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}`)
           result = await gitOps.checkpoint(msg);
-          // Store the ref in the state machine (TDD mode only)
+          // Store the ref in the state machine
           if (result.success && result.ref && activeSpecIdRef.current) {
-            smRef.current.setActiveSpec(
-              activeSpecIdRef.current,
-              result.ref,
-            );
+            smRef.current.setGitRef(result.ref);
           }
           break;
         }

@@ -15,14 +15,15 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 
 import { StateMachine } from "../src/state-machine.ts";
+import { LightStateMachine } from "../src/light-state-machine.ts";
 import { GitOperations } from "../src/git.ts";
 import { TddRunner } from "../src/tdd-runner.ts";
 import { KnowledgeStore } from "../src/knowledge.ts";
 import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
-import { registerTools } from "../src/tools.ts";
-import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, TestCommands } from "../src/types.ts";
+import { registerTools, type StateMachineRef } from "../src/tools.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig, TestCommands } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { sendDesktopNotification } from "../src/desktop-notifier.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
@@ -50,7 +51,7 @@ export const ORCHESTRATOR_TOOLS = [
   "intercom",
 ];
 
-/** Tools available in Light mode — delegation + tests, no FSM or spec tools. */
+/** Tools available in Light mode — spec, implement, review, no TDD phases. */
 export const LIGHT_TOOLS = [
   "ls",
   "find",
@@ -58,6 +59,20 @@ export const LIGHT_TOOLS = [
   "subagent",
   "pi_coder_run_tests",
   "pi_coder_git",
+  "pi_coder_save_spec",
+  "pi_coder_read_spec",
+  "pi_coder_advance_fsm",
+  "upsert_knowledge",
+  "interview",
+  "intercom",
+];
+
+/** Tools available in Plan mode — investigation only, no spec/git/FSM tools. */
+export const PLAN_TOOLS = [
+  "ls",
+  "find",
+  "grep",
+  "subagent",
   "upsert_knowledge",
   "interview",
   "intercom",
@@ -74,12 +89,12 @@ export const NORMAL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "l
 
 export let piCoderMode: PiCoderMode = "tdd";
 export let subagentsAvailable = false;
-export let stateMachine: StateMachine;
+export let stateMachine: IStateMachine | null;
 export let config: PiCoderConfig;
 
 /** Nudge tracking state. */
 interface NudgeState {
-  fsmState: FSMState;
+  fsmState: string;
   turnsSinceEntry: number;
   actionAttempted: boolean;
   lastNudgeLevel: number;
@@ -173,10 +188,34 @@ function refreshUI(): void {
     return;
   }
 
+  if (piCoderMode === "plan") {
+    // Plan mode — investigation only, no FSM
+    const theme = ctx.ui.theme;
+    let widgetLine = theme.fg("accent", "🔍 Plan");
+    if (subagentRunning) {
+      widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
+    }
+    ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
+    ctx.ui.setStatus("pi-coder", theme.fg("accent", "🔍 plan mode"));
+
+    if (subagentRunning) {
+      ctx.ui.setWorkingIndicator({
+        frames: [theme.fg("accent", "⏣"), theme.fg("muted", "⏣")],
+        intervalMs: 500,
+      });
+    } else {
+      ctx.ui.setWorkingIndicator();
+    }
+    return;
+  }
+
   if (piCoderMode === "light") {
-    // Light mode — simplified UI
+    // Light mode — simplified FSM UI
     const theme = ctx.ui.theme;
     let widgetLine = theme.fg("accent", "⚡ Light");
+    if (stateMachine) {
+      widgetLine += theme.fg("dim", ` | `) + theme.fg("muted", stateMachine!.currentState);
+    }
     if (subagentRunning) {
       widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
     }
@@ -196,9 +235,9 @@ function refreshUI(): void {
 
   // TDD mode — full FSM UI
 
-  const state = stateMachine.currentState;
+  const state = stateMachine!.currentState;
   const specId = activeSpecId;
-  const loopCount = stateMachine.loopCount;
+  const loopCount = stateMachine!.loopCount;
   const style = STATE_STYLE[state] ?? { icon: "●", color: "accent" as const };
   const label = STATE_LABEL[state] ?? state;
   const theme = ctx.ui.theme;
@@ -368,18 +407,7 @@ let subagentStartTime: number | null = null;
 let lastSubagentAgent: string | null = null;
 
 /**
- * Light mode: tracks the turn count when the implementor was last blocked.
- * The implementor can only pass through after a user message arrives (a new
- * turn boundary). This prevents the agent from self-authorizing by retrying
- * in the same turn — the user must have actually responded.
- * Value: turn number when the block was applied, or -1 (no block active).
- */
-let lightModeImplementorBlockedAtTurn = -1;
-
-/**
  * Session turn counter — incremented at the start of every agent turn.
- * Used by the light mode implementor gate to detect turn boundaries
- * (i.e., the user has actually responded after a block).
  */
 let sessionTurnCount = 0;
 
@@ -421,8 +449,8 @@ export async function persistState(): Promise<void> {
     await globalStatePersistence.save(globalState);
 
     // 2. Save per-spec state (FSM + evidence) if a spec is active
-    if (activeSpecId) {
-      const fsmJson = stateMachine.toJSON();
+    if (activeSpecId && stateMachine) {
+      const fsmJson = stateMachine!.toJSON();
       const specState: SpecState = {
         version: 1,
         currentState: fsmJson.currentState as FSMState,
@@ -483,6 +511,71 @@ function buildFSMDiagram(): string {
     "  Any → IDLE (abort cycle)",
     "Auto-transitions: Happen on subagent/test results (deterministic).",
   ].join("\n");
+}
+
+function buildLightFSMDiagram(): string {
+  return [
+    "FSM States & Transitions (Light Mode — no TDD phases):",
+    "IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →",
+    "IMPLEMENTING → REVIEWING →",
+    "(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |",
+    "(NEEDS_CHANGES → IMPLEMENTING | REVIEWING) | BLOCKED",
+    "",
+    "Manual advances: Use pi_coder_advance_fsm to advance the FSM when your work in a state is complete.",
+    "  IDLE → SPEC_WORK (start a new cycle)",
+    "  SPEC_WORK → SPEC_APPROVED (spec ready for approval)",
+    "  SPEC_APPROVED → GIT_CHECKPOINT (spec approved, time to checkpoint)",
+    "  IMPLEMENTING → REVIEWING (implementation complete, time for review)",
+    "  APPROVED → FINAL_APPROVAL (review passed, present for final OK)",
+    "  FINAL_APPROVAL → MERGING (user gave final approval)",
+    "  Any → IDLE (abort cycle)",
+    "Auto-transitions: Happen on subagent/git results (deterministic).",
+  ].join("\n");
+}
+
+/** Plan mode prompt template — cached for the session. */
+let planModePromptTemplate: string | null = null;
+
+function buildPlanModePrompt(filteredSnippets: Record<string, string>): string {
+  if (!planModePromptTemplate) {
+    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-plan.md");
+    try {
+      if (existsSync(promptPath)) {
+        planModePromptTemplate = readFileSync(promptPath, "utf-8");
+        const stripped = planModePromptTemplate.replace(/^---\n[\s\S]*?---\n/, "");
+        planModePromptTemplate = stripped.replace(/^\n+/, "");
+      }
+    } catch {
+      // Fall through to built-in
+    }
+
+    if (!planModePromptTemplate) {
+      planModePromptTemplate = `You are the Pi Coder Plan Mode assistant — an investigation and discussion assistant.
+
+You do NOT edit files or implement anything. You investigate, discuss, and plan.
+Only delegate to pi-coder.researcher for investigation — no implementor or reviewer.
+
+Guidelines:
+- Explore the codebase by delegating to pi-coder.researcher
+- Discuss architectural approaches with the user
+- Use interview for structured requirements gathering (timeout: {{interviewTimeout}}s)
+- Save findings to knowledge files with upsert_knowledge for later Light/TDD sessions
+- When you find something worth implementing, suggest switching to Light or TDD mode with /pi-coder
+- No specs, no git, no FSM state machine
+
+Available tools:
+{{toolList}}`;
+    }
+  }
+
+  const toolList = Object.entries(filteredSnippets)
+    .map(([name, snippet]) => `- ${name}: ${snippet}`)
+    .join("\n");
+
+  return planModePromptTemplate!
+    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
+    .replace("{{toolList}}", toolList)
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
 }
 
 /**
@@ -550,7 +643,7 @@ export function resetOrchestratorPromptCache(): void {
  * This replaces the default "expert coding assistant" identity entirely.
  */
 function buildOrchestratorPrompt(
-  sm: StateMachine,
+  sm: IStateMachine,
   filteredSnippets: Record<string, string>,
 ): string {
   const template = loadOrchestratorPrompt();
@@ -577,7 +670,7 @@ function buildOrchestratorPrompt(
  */
 let lightModePromptTemplate: string | null = null;
 
-function buildLightModePrompt(filteredSnippets: Record<string, string>): string {
+function buildLightModePrompt(sm: IStateMachine, filteredSnippets: Record<string, string>): string {
   if (!lightModePromptTemplate) {
     // Try to load from file
     const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-light.md");
@@ -593,10 +686,16 @@ function buildLightModePrompt(filteredSnippets: Record<string, string>): string 
     }
 
     if (!lightModePromptTemplate) {
-      // Built-in fallback
-      lightModePromptTemplate = `You are the Pi Coder assistant — a coding assistant that delegates implementation to specialized subagents.
+      // Built-in fallback — updated for Light FSM
+      lightModePromptTemplate = `You are the Pi Coder assistant — a coding assistant that delegates implementation to specialized subagents. You are in LIGHT mode with a simplified FSM.
 
-You do NOT edit files directly — you delegate all implementation work to subagents. You decide which subagent to call and when.
+You do NOT edit files directly — you delegate all implementation work to subagents.
+
+Current FSM state: {{currentState}}
+Active spec: {{activeSpecId}}
+Loop count: {{loopCount}}/{{maxLoops}}
+
+Follow the FSM lifecycle: spec → implement → review → merge. There are no TDD RED/GREEN phases.
 
 Available subagents:
 - pi-coder.researcher — investigate the codebase, find information, understand patterns
@@ -604,12 +703,11 @@ Available subagents:
 - pi-coder.reviewer — review code, run tests, verify correctness
 
 Guidelines:
-- Run tests freely to check your progress (pi_coder_run_tests)
+- Run tests freely to check your progress (pi_coder_run_tests) — they're advisory, not gated
 - Use pi_coder_git for version control operations
-- Persist cross-cutting gotchas and conventions to knowledge (upsert_knowledge)
-- There is no FSM or spec workflow in light mode — use your judgment
-- For simple questions you can answer directly within your tool constraints
-- If a task grows complex enough to need a structured TDD lifecycle, suggest switching to TDD mode with /pi-coder
+- Persist cross-cutting gotchas to knowledge (upsert_knowledge)
+- Follow the FSM — don't skip spec approval or review
+- If a task needs TDD discipline, suggest switching to TDD mode with /pi-coder
 
 Available tools:
 {{toolList}}`;
@@ -621,8 +719,13 @@ Available tools:
     .join("\n");
 
   return lightModePromptTemplate
-    .replace("{{toolList}}", toolList)
+    .replace("{{fsmDiagram}}", buildLightFSMDiagram())
+    .replace("{{currentState}}", sm.currentState)
+    .replace("{{activeSpecId}}", activeSpecId ?? "none")
+    .replace("{{loopCount}}", String(sm.loopCount))
+    .replace("{{maxLoops}}", String(config.maxLoops))
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
+    .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
 }
 
@@ -639,10 +742,10 @@ export function resetLightModePromptCache(): void {
  * Get the nudge threshold for a given FSM state.
  * Returns undefined if nudging is disabled for the state.
  */
-function getNudgeThreshold(state: FSMState): number | undefined {
+function getNudgeThreshold(state: string): number | undefined {
   if (!config.nudge.enabled) return undefined;
 
-  const stateConfig = config.nudge.states[state];
+  const stateConfig = (config.nudge.states as Record<string, NudgeStateConfig | undefined>)[state];
   if (stateConfig?.enabled === false) return undefined;
 
   return stateConfig?.turnsBeforeNudge ?? config.nudge.defaults.turnsBeforeNudge;
@@ -651,8 +754,8 @@ function getNudgeThreshold(state: FSMState): number | undefined {
 /**
  * Build a nudge message for the given level.
  */
-function buildNudgeMessage(state: FSMState, level: number): string {
-  const expectation = stateMachine.canNudge();
+function buildNudgeMessage(state: string, level: number): string {
+  const expectation = stateMachine!.canNudge();
 
   if (level === 1) {
     return `\n\n[NUDGE] Reminder: You are in state ${state}. The expected next action is: ${expectation.expectedAction}.`;
@@ -669,7 +772,7 @@ function buildNudgeMessage(state: FSMState, level: number): string {
 /**
  * Reset nudge state — called on FSM transition or action attempted.
  */
-export function resetNudgeState(newState: FSMState): void {
+export function resetNudgeState(newState: string): void {
   nudgeState = {
     fsmState: newState,
     turnsSinceEntry: 0,
@@ -919,7 +1022,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     // Reset session state
     sessionTurnCount = 0;
-    lightModeImplementorBlockedAtTurn = -1;
 
     // Capture ctx for UI refresh
     sessionCtx = ctx;
@@ -938,8 +1040,15 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     resetOrchestratorPromptCache();
     loadOrchestratorPrompt(cwd);
 
-    // Initialize state machine
-    stateMachine = new StateMachine(config);
+    // Initialize state machine based on mode
+    // Plan and Off modes don't have a state machine
+    if (piCoderMode === "tdd") {
+      stateMachine = new StateMachine(config);
+    } else if (piCoderMode === "light") {
+      stateMachine = new LightStateMachine(config);
+    } else {
+      stateMachine = null;
+    }
 
     // Initialize module dependencies
     const knowledgeDir = join(cwd, ".pi-coder", "knowledge");
@@ -959,8 +1068,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Register tools
     // Wrap stateMachine in a ref object so tools.ts always reads the current
     // instance even after state restore replaces the module-level variable.
-    const smRef: { get current(): StateMachine } = {
-      get current() { return stateMachine; },
+    const smRef: StateMachineRef = {
+      get current() { return stateMachine!; },
     };
 
     registerTools(pi, {
@@ -1164,13 +1273,26 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         const specState = await SpecStatePersistence.load(specDir, savedGlobalState.activeSpecId);
 
         if (specState) {
-          // Restore FSM from per-spec state
-          stateMachine = StateMachine.fromJSON({
-            currentState: specState.currentState,
-            loopCount: specState.loopCount,
-            gitRef: specState.gitRef,
-            evidence: specState.evidence,
-          }, config);
+          // Restore FSM from per-spec state — instantiate the right class
+          // based on the current mode
+          if (piCoderMode === "tdd") {
+            stateMachine = StateMachine.fromJSON({
+              currentState: specState.currentState as FSMState,
+              loopCount: specState.loopCount,
+              gitRef: specState.gitRef,
+              evidence: specState.evidence,
+            }, config);
+          } else if (piCoderMode === "light") {
+            stateMachine = LightStateMachine.fromJSON({
+              currentState: specState.currentState as import("../src/types.ts").LightFSMState,
+              loopCount: specState.loopCount,
+              gitRef: specState.gitRef,
+              evidence: specState.evidence,
+            }, config);
+          } else {
+            // Plan or Off mode — no FSM to restore
+            stateMachine = null;
+          }
           specStateCreatedAt = specState.createdAt;
         } else {
           // Spec directory exists but no state.json — corrupted
@@ -1214,7 +1336,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     }
 
     // Initialize nudge state from current FSM state
-    resetNudgeState(stateMachine.currentState);
+    resetNudgeState(stateMachine!.currentState);
 
     // Activate mode if subagents are available
     if (subagentsAvailable) {
@@ -1256,7 +1378,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const { systemPromptOptions } = event;
 
     // Determine which tools and prompt to use based on mode
-    const modeTools = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
+    const toolSets: Record<PiCoderMode, string[]> = {
+      off: NORMAL_TOOLS,
+      plan: PLAN_TOOLS,
+      light: LIGHT_TOOLS,
+      tdd: ORCHESTRATOR_TOOLS,
+    };
+    const modeTools = toolSets[piCoderMode];
 
     // Filter to mode-appropriate tools only
     const filteredSnippets: Record<string, string> = {};
@@ -1270,11 +1398,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     let orchestratorPrompt: string;
     if (piCoderMode === "tdd") {
       orchestratorPrompt = buildOrchestratorPrompt(
-        stateMachine,
+        stateMachine!,
         filteredSnippets,
       );
-    } else {
-      orchestratorPrompt = buildLightModePrompt(filteredSnippets);
+    } else if (piCoderMode === "light") {
+      orchestratorPrompt = buildLightModePrompt(stateMachine!, filteredSnippets);
+    } else { // plan
+      orchestratorPrompt = buildPlanModePrompt(filteredSnippets);
     }
 
     // (Guidelines from tools are already embedded in orchestratorPrompt via filteredSnippets)
@@ -1286,11 +1416,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Prepend active mode indicator — this ensures the LLM always knows its current mode,
     // even after mid-conversation mode switches where the old prompt is still in context.
-    const modeIndicator: Record<"tdd" | "light", string> = {
+    const modeIndicator: Record<PiCoderMode, string> = {
+      plan: "[MODE: PLAN] Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
+      light: "[MODE: LIGHT] FSM is active. Follow the lifecycle: spec → implement → review → merge. No TDD phases.",
       tdd: "[MODE: TDD] FSM state machine is active. Follow the TDD lifecycle: spec → RED/GREEN → review → merge.",
-      light: "[MODE: LIGHT] No FSM. Delegate freely, run tests at any time. Use your judgment.",
+      off: "", // Never reached — off mode returns early
     };
-    fullPrompt = modeIndicator[piCoderMode as "tdd" | "light"] + "\n\n" + fullPrompt;
+    fullPrompt = modeIndicator[piCoderMode] + "\n\n" + fullPrompt;
 
     // Append any user-provided append system prompt
     if (systemPromptOptions.appendSystemPrompt) {
@@ -1322,16 +1454,15 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     fullPrompt += `\nCurrent working directory: ${systemPromptOptions.cwd?.replace(/\\/g, "/") ?? "."}`;
 
     // -------------------------------------------------------------------
-    // Phase 4: Nudge System (TDD mode only)
+    // Phase 4: Nudge System (TDD and Light modes — both have FSM states)
     // -------------------------------------------------------------------
 
-    // Only nudge in TDD mode — light mode has no FSM state to nudge about
-    if (piCoderMode === "tdd") {
+    if (piCoderMode === "tdd" || piCoderMode === "light") {
     // Increment turn counter
     nudgeState.turnsSinceEntry++;
 
     // Check if nudging should fire
-    const threshold = getNudgeThreshold(stateMachine.currentState);
+    const threshold = getNudgeThreshold(stateMachine!.currentState);
     const maxEscalation = config.nudge.defaults.escalationLevels;
 
     if (
@@ -1344,35 +1475,35 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Log nudge event
       logEvent("nudge_fired", {
-        fsmState: stateMachine.currentState,
+        fsmState: stateMachine!.currentState,
         level: nudgeState.lastNudgeLevel,
-        expectedAction: stateMachine.canNudge().expectedAction,
+        expectedAction: stateMachine!.canNudge().expectedAction,
       });
 
       if (nudgeState.lastNudgeLevel < maxEscalation) {
         // Levels 1-2: append to system prompt
         const nudgeMsg = buildNudgeMessage(
-          stateMachine.currentState,
+          stateMachine!.currentState,
           nudgeState.lastNudgeLevel,
         );
         fullPrompt += nudgeMsg;
       } else {
         // Level 3: user-visible notification
-        const expectation = stateMachine.canNudge();
+        const expectation = stateMachine!.canNudge();
 
         // Log nudge escalation
         logEvent("nudge_escalation", {
-          fsmState: stateMachine.currentState,
+          fsmState: stateMachine!.currentState,
           newLevel: nudgeState.lastNudgeLevel,
         });
 
         ctx.ui.notify(
-          `Pi Coder: Orchestrator has not progressed past state ${stateMachine.currentState} after ${nudgeState.turnsSinceEntry} turns. Expected: ${expectation.expectedAction}. Would you like to intervene?`,
+          `Pi Coder: Orchestrator has not progressed past state ${stateMachine!.currentState} after ${nudgeState.turnsSinceEntry} turns. Expected: ${expectation.expectedAction}. Would you like to intervene?`,
           "warning",
         );
       }
     }
-    } // end TDD-mode-only nudge
+    } // end TDD/Light-mode nudge
 
     // Return the replaced system prompt
     return { systemPrompt: fullPrompt };
@@ -1390,19 +1521,25 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const { toolName, input } = event;
 
     // Desktop notification on spec approval interview
-    if (toolName === "interview" && stateMachine.currentState === "SPEC_WORK") {
+    if (stateMachine && toolName === "interview" && stateMachine.currentState === "SPEC_WORK") {
       notify("spec_approval", "Pi Coder", "Spec ready for your approval");
     }
 
     // Determine which tools are allowed based on current mode
-    const allowedTools = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
+    const toolSets: Record<PiCoderMode, string[]> = {
+      off: NORMAL_TOOLS,
+      plan: PLAN_TOOLS,
+      light: LIGHT_TOOLS,
+      tdd: ORCHESTRATOR_TOOLS,
+    };
+    const allowedTools = toolSets[piCoderMode];
 
     // Default-deny: only mode-appropriate tools are allowed
     if (!allowedTools.includes(toolName)) {
       logEvent("tool_call_blocked", {
         toolName,
         mode: piCoderMode,
-        fsmState: stateMachine.currentState,
+        fsmState: stateMachine!.currentState,
         reason: "not_in_allowed_tools",
       });
       // Actionable feedback: tell the orchestrator what to do instead
@@ -1438,8 +1575,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Validate pi_coder_git against FSM state
       if (toolName === "pi_coder_git") {
-        if (!stateMachine.isActionAllowed("pi_coder_git")) {
-          const current = stateMachine.currentState;
+        if (!stateMachine!.isActionAllowed("pi_coder_git")) {
+          const current = stateMachine!.currentState;
           return {
             block: true,
             reason: `🛡️ pi_coder_git is not allowed in ${current}. Git operations are only allowed in: GIT_CHECKPOINT (create checkpoint), REVIEWING (checkpoint progress), MERGING (merge branch), BLOCKED/IDLE (rollback). ${current === "SPEC_WORK" ? "Save and approve the spec first, then the FSM will advance to SPEC_APPROVED → GIT_CHECKPOINT." : "Use pi_coder_advance_fsm to advance to the right state first."} Do not retry this exact call.`,
@@ -1462,7 +1599,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             toolName,
             targetAgent,
             mode: piCoderMode,
-            fsmState: stateMachine.currentState,
+            fsmState: stateMachine!.currentState,
             reason: "non_pi_coder_agent",
           });
           return {
@@ -1477,7 +1614,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             toolName,
             targetAgent,
             mode: piCoderMode,
-            fsmState: stateMachine.currentState,
+            fsmState: stateMachine!.currentState,
             reason: "self_delegation",
           });
           return {
@@ -1486,12 +1623,26 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           };
         }
 
-        // In TDD mode, validate subagent against FSM state
-        if (piCoderMode === "tdd") {
+        // Plan mode: only researcher is allowed — no implementor or reviewer
+        if (piCoderMode === "plan" && targetAgent !== "pi-coder.researcher") {
+          logEvent("tool_call_blocked", {
+            toolName,
+            targetAgent,
+            mode: "plan",
+            reason: "non_researcher_in_plan_mode",
+          });
+          return {
+            block: true,
+            reason: `Only pi-coder.researcher is available in Plan mode. "${targetAgent}" requires leaving plan mode — use /pi-coder to switch to Light or TDD mode. Do not retry this exact call.`,
+          };
+        }
+
+        // In TDD or Light mode, validate subagent against FSM state
+        if (piCoderMode === "tdd" || piCoderMode === "light") {
           if (
-            !stateMachine.isActionAllowed("subagent", targetAgent)
+            !stateMachine!.isActionAllowed("subagent", targetAgent)
           ) {
-            const current = stateMachine.currentState;
+            const current = stateMachine!.currentState;
             // Contextual guidance based on what they tried and where they are
             let guidance = `🛡️ Cannot delegate to ${targetAgent} in ${current}.`;
             if (targetAgent === "pi-coder.researcher" && current === "IDLE") {
@@ -1503,7 +1654,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             } else if (targetAgent === "pi-coder.reviewer" && current !== "REVIEWING") {
               guidance += ` The reviewer runs in REVIEWING state. Complete the current implementation cycle first, then pi_coder_advance_fsm with targetState "REVIEWING".`;
             } else {
-              const validTargets = stateMachine.getValidTransitions();
+              const validTargets = stateMachine!.getValidTransitions();
               guidance += ` Valid advance targets from ${current}: ${validTargets.join(", ")}. Use pi_coder_advance_fsm to advance, then delegate.`;
             }
             guidance += ` Do not retry this exact call.`;
@@ -1522,13 +1673,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // orchestrator from self-authorizing untested code changes.
           if (
             targetAgent === "pi-coder.implementor" &&
-            stateMachine.currentState === "NEEDS_CHANGES" &&
-            !stateMachine.hasEvidence("non_functional_classified")
+            stateMachine!.currentState === "NEEDS_CHANGES" &&
+            !stateMachine!.hasEvidence("non_functional_classified")
           ) {
             logEvent("tool_call_blocked", {
               toolName,
               targetAgent,
-              fsmState: stateMachine.currentState,
+              fsmState: stateMachine!.currentState,
               reason: "missing_non_functional_evidence",
             });
             return {
@@ -1542,53 +1693,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             };
           }
         }
-        // In light mode, soft-block implementor delegation to force
-        // the orchestrator to present findings before making changes.
-        // First attempt: block with guidance. Second attempt: allow through.
-        // This prevents "investigate X" from becoming "investigate and fix X"
-        // without the user seeing the investigation results first.
-        if (piCoderMode === "light" && targetAgent === "pi-coder.implementor") {
-          // Turn-boundary gate: block implementor until the user has sent
-          // a new message after the block was applied. This prevents the agent
-          // from self-authorizing by retrying in the same turn.
-          if (lightModeImplementorBlockedAtTurn === -1) {
-            // First attempt — block and record the turn
-            lightModeImplementorBlockedAtTurn = sessionTurnCount;
-            logEvent("tool_call_blocked", {
-              toolName,
-              targetAgent,
-              mode: piCoderMode,
-              reason: "light_mode_implementor_confirm",
-              turnBlocked: sessionTurnCount,
-            });
-            return {
-              block: true,
-              reason:
-                `🛡️ Present your investigation findings to the user FIRST. Do not retry this call until the user has responded and confirmed they want to proceed with implementation. ` +
-                `The user must review your findings before any code changes are made.`,
-            };
-          }
-          if (lightModeImplementorBlockedAtTurn >= sessionTurnCount) {
-            // Same turn — still blocked. The user hasn't spoken yet.
-            logEvent("tool_call_blocked", {
-              toolName,
-              targetAgent,
-              mode: piCoderMode,
-              reason: "light_mode_implementor_same_turn",
-              turnBlocked: lightModeImplementorBlockedAtTurn,
-              currentTurn: sessionTurnCount,
-            });
-            return {
-              block: true,
-              reason:
-                `🛡️ Still waiting for user response. You presented findings on turn ${lightModeImplementorBlockedAtTurn} and we're still on turn ${sessionTurnCount}. ` +
-                `Wait for the user to respond before implementing. Do not retry until they confirm.`,
-            };
-          }
-          // User has responded (new turn) — allow through, reset for next delegation
-          lightModeImplementorBlockedAtTurn = -1;
-        }
-
         // Track subagent timing
         subagentStartTime = Date.now();
         lastSubagentAgent = targetAgent;
@@ -1641,7 +1745,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           agent: targetAgent,
           taskSummary: taskStr,
           specId: activeSpecId,
-          fsmState: stateMachine.currentState,
+          fsmState: stateMachine!.currentState,
           mode: piCoderMode,
         });
 
@@ -1690,13 +1794,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     }
 
     if (piCoderMode === "off") return;
+    if (piCoderMode === "plan") return; // No FSM, no auto-transitions
 
     const { details } = event;
-    const currentState = stateMachine.currentState;
+    const currentState = stateMachine!.currentState;
 
-    // Evidence: interview tool completion in SPEC_WORK → spec_user_approved (TDD mode only)
-    if (piCoderMode === "tdd" && toolName === "interview" && currentState === "SPEC_WORK") {
-      stateMachine.setEvidence("spec_user_approved");
+    // Evidence: interview tool completion in SPEC_WORK → spec_user_approved
+    if ((piCoderMode === "tdd" || piCoderMode === "light") && toolName === "interview" && currentState === "SPEC_WORK") {
+      stateMachine!.setEvidence("spec_user_approved");
     }
 
     // Handle pi_coder_run_tests results
@@ -1717,7 +1822,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // We're in TDD mode, in a TDD validation state
       // Mark that tests were run in this state (evidence for transition guards)
-      stateMachine.setEvidence("test_run_this_state");
+      stateMachine!.setEvidence("test_run_this_state");
 
       const validation = details2.validation;
       const previousState = currentState;
@@ -1735,7 +1840,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         if (validation.valid) {
           // Tests failed as expected → advance to GREEN
-          stateMachine.transition("TDD_GREEN_WRITE");
+          stateMachine!.transition("TDD_GREEN_WRITE");
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           // Tests passed unexpectedly during RED phase
@@ -1768,7 +1873,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           transitionSteer = "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
         } else {
           // Tests still fail → loop back to GREEN
-          stateMachine.transition("TDD_GREEN_WRITE");
+          stateMachine!.transition("TDD_GREEN_WRITE");
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Tests still failing. You are now in TDD_GREEN_WRITE. Delegate to pi-coder.implementor again with clearer instructions. Do NOT call pi_coder_advance_fsm yet.";
         }
       }
@@ -1783,19 +1888,19 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       // Log FSM transition
-      if (stateMachine.currentState !== previousState) {
+      if (stateMachine!.currentState !== previousState) {
         logEvent("fsm_transition", {
           from: previousState,
-          to: stateMachine.currentState,
+          to: stateMachine!.currentState,
           event: validation.valid ? "validation_passed" : "validation_failed",
-          loopCount: stateMachine.loopCount,
+          loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
         });
 
         // Log circuit breaker
-        if (stateMachine.circuitBreakerTripped()) {
+        if (stateMachine!.circuitBreakerTripped()) {
           logEvent("circuit_breaker", {
-            loopCount: stateMachine.loopCount,
+            loopCount: stateMachine!.loopCount,
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
@@ -1804,8 +1909,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       // Reset nudge state on transition
-      if (stateMachine.currentState !== previousState) {
-        resetNudgeState(stateMachine.currentState);
+      if (stateMachine!.currentState !== previousState) {
+        resetNudgeState(stateMachine!.currentState);
       }
 
       // Persist state after transition
@@ -1817,15 +1922,15 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to TDD_RED_WRITE
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
       if (gitDetails?.success !== false) {
-        stateMachine.transition("TDD_RED_WRITE");
+        stateMachine!.transition("TDD_RED_WRITE");
         logEvent("fsm_transition", {
           from: "GIT_CHECKPOINT",
           to: "TDD_RED_WRITE",
           event: "checkpoint_complete",
-          loopCount: stateMachine.loopCount,
+          loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
         });
-        resetNudgeState(stateMachine.currentState);
+        resetNudgeState(stateMachine!.currentState);
         await persistState();
 
         // Append auto-transition info to tool result
@@ -1841,12 +1946,12 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // If git merge succeeded in MERGING, auto-advance to COMPLETE
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
       if (gitDetails?.success !== false) {
-        stateMachine.transition("COMPLETE");
+        stateMachine!.transition("COMPLETE");
         logEvent("fsm_transition", {
           from: "MERGING",
           to: "COMPLETE",
           event: "merge_complete",
-          loopCount: stateMachine.loopCount,
+          loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
         });
         logEvent("lifecycle_end", {
@@ -1858,7 +1963,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         notify("complete", "Pi Coder", `Spec complete: ${activeSpecId ?? "unknown"}`);
         lifecycleStartTime = null;
         lifecycleTokens = { input: 0, output: 0, total: 0 };
-        resetNudgeState(stateMachine.currentState);
+        resetNudgeState(stateMachine!.currentState);
         await persistState();
 
         // Append auto-transition info to tool result
@@ -1947,19 +2052,19 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             verdict: reviewVerdict.verdict,
             issueCount: reviewVerdict.issueCount,
             highSeverityCount: reviewVerdict.highSeverityCount,
-            loopCount: stateMachine.loopCount,
+            loopCount: stateMachine!.loopCount,
             specId: activeSpecId,
           });
 
           // AUTO-TRANSITION: review verdict drives next state
           // This replaces the need for manual pi_coder_advance_fsm REVIEWING → APPROVED/NEEDS_CHANGES
           const target = reviewVerdict.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
-          stateMachine.transition(target as FSMState);
+          stateMachine!.transition(target as FSMState);
 
           // If reviewer classified fix as non-functional, set evidence
           // This gates the NEEDS_CHANGES → REVIEWING path and implementor delegation
           if (reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
-            stateMachine.setEvidence("non_functional_classified");
+            stateMachine!.setEvidence("non_functional_classified");
           }
 
           const reviewSteer = reviewVerdict.verdict === "approved"
@@ -1992,17 +2097,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       // Log FSM transition
-      if (stateMachine.currentState !== previousState) {
+      if (stateMachine!.currentState !== previousState) {
         logEvent("fsm_transition", {
           from: previousState,
-          to: stateMachine.currentState,
+          to: stateMachine!.currentState,
           event: "subagent_completed",
-          loopCount: stateMachine.loopCount,
+          loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
         });
 
         // Log lifecycle events on terminal transitions
-        if (stateMachine.currentState === "COMPLETE") {
+        if (stateMachine!.currentState === "COMPLETE") {
           const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
           logEvent("lifecycle_end", {
             specId: activeSpecId,
@@ -2015,7 +2120,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           lifecycleTokens = { input: 0, output: 0, total: 0 };
         }
 
-        if (stateMachine.currentState === "BLOCKED" && previousState === "TDD_RED_VALIDATE") {
+        if (stateMachine!.currentState === "BLOCKED" && previousState === "TDD_RED_VALIDATE") {
           const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
           logEvent("lifecycle_end", {
             specId: activeSpecId,
@@ -2026,9 +2131,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         }
 
         // Log circuit breaker
-        if (stateMachine.circuitBreakerTripped()) {
+        if (stateMachine!.circuitBreakerTripped()) {
           logEvent("circuit_breaker", {
-            loopCount: stateMachine.loopCount,
+            loopCount: stateMachine!.loopCount,
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
@@ -2037,8 +2142,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       // Reset nudge state on transition
-      if (stateMachine.currentState !== previousState) {
-        resetNudgeState(stateMachine.currentState);
+      if (stateMachine!.currentState !== previousState) {
+        resetNudgeState(stateMachine!.currentState);
       }
 
       // Persist state after transition
@@ -2069,8 +2174,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       // Build the mode labels with current state indicators
       const current = piCoderMode;
       const modes = [
-        { value: "tdd", label: `TDD Mode (full lifecycle)${current === "tdd" ? "  ◀" : ""}` },
-        { value: "light", label: `Light Mode (delegation, no FSM)${current === "light" ? "  ◀" : ""}` },
+        { value: "plan", label: `Plan Mode (investigation & discussion)${current === "plan" ? "  ◀" : ""}` },
+        { value: "light", label: `Light Mode (spec → implement → review)${current === "light" ? "  ◀" : ""}` },
+        { value: "tdd", label: `TDD Mode (full RED/GREEN lifecycle)${current === "tdd" ? "  ◀" : ""}` },
         { value: "off", label: `Off (normal Pi)${current === "off" ? "  ◀" : ""}` },
       ];
 
@@ -2095,13 +2201,52 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         return;
       }
 
+      // Handle mode switch FSM logic
+      if (selectedMode !== current) {
+        // When leaving a mode with an active FSM, pause the spec
+        if (stateMachine && stateMachine!.currentState !== "IDLE") {
+          logEvent("mode_switch", {
+            from: current,
+            to: selectedMode,
+            fsmState: stateMachine!.currentState,
+            specId: activeSpecId,
+          });
+          // Per-spec state.json on disk is NOT deleted — user can switch back
+          // Send notification about paused spec
+          if (activeSpecId) {
+            ctx.ui.notify(`Active spec '${activeSpecId}' paused. Switch back to ${current} mode to resume.`, "info");
+          }
+        }
+
+        // When entering a mode with a FSM, create the appropriate instance
+        if (selectedMode === "tdd") {
+          if (!stateMachine || !(stateMachine instanceof StateMachine)) {
+            stateMachine = new StateMachine(config);
+          }
+        } else if (selectedMode === "light") {
+          if (!stateMachine || !(stateMachine instanceof LightStateMachine)) {
+            stateMachine = new LightStateMachine(config);
+          }
+        } else {
+          // Plan or Off — no FSM
+          stateMachine = null;
+        }
+      }
+
+      // Set mode first so downstream code uses the new value
       piCoderMode = selectedMode;
-      lightModeImplementorBlockedAtTurn = -1;
+
+      // Reset session state on mode switch
       sessionTurnCount = 0;
 
       // Update active tools based on mode
-      const toolSet = piCoderMode === "off" ? NORMAL_TOOLS : (piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS);
-      pi.setActiveTools(toolSet);
+      const toolSets: Record<PiCoderMode, string[]> = {
+        off: NORMAL_TOOLS,
+        plan: PLAN_TOOLS,
+        light: LIGHT_TOOLS,
+        tdd: ORCHESTRATOR_TOOLS,
+      };
+      pi.setActiveTools(toolSets[piCoderMode]);
       refreshUI();
 
       // Notify user of mode change
