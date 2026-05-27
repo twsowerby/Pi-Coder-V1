@@ -767,7 +767,8 @@ function buildNudgeMessage(state: string, level: number): string {
   }
 
   if (level === 2) {
-    return `\n\n[NUDGE - URGENT] You must now proceed with: ${expectation.expectedAction}. This is a required step in the TDD lifecycle. The FSM cannot advance until this action is taken.`;
+    const lifecycle = piCoderMode === "light" ? "implementation" : "TDD";
+    return `\n\n[NUDGE - URGENT] You must now proceed with: ${expectation.expectedAction}. This is a required step in the ${lifecycle} lifecycle. The FSM cannot advance until this action is taken.`;
   }
 
   // Level 3 is handled via ctx.ui.notify(), not appended to the prompt
