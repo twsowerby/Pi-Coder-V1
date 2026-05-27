@@ -247,6 +247,14 @@ export class GitOperations {
   async merge(branch: string, targetBranch?: string): Promise<GitCheckpointResult> {
     const target = targetBranch ?? await detectDefaultBranch(this.exec);
 
+    // Before switching branches or merging, discard any uncommitted .pi-coder/
+    // changes (state.json, logs). These are workspace-local metadata that
+    // can change between the last checkpoint and the merge (e.g., FSM state
+    // persistence, interaction logging). If they're tracked in git (e.g.,
+    // .pi-coder/.gitignore wasn't set up), they'll dirty the working tree
+    // and block the merge. If they're not tracked, this is a no-op.
+    await this.execGit(["checkout", "--", ".pi-coder/"]);
+
     // Checkout the target branch
     const checkoutResult = await this.execGit(["checkout", target]);
     if (!checkoutResult.success) {

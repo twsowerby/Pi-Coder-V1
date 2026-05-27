@@ -2300,6 +2300,22 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         skipped.push(".pi-coder/damage-control.json (already exists)");
       }
 
+      // 4e. Create .pi-coder/.gitignore — exclude workspace-local files
+      // from version control while keeping specs, knowledge, and config tracked.
+      // Without this, state.json changes between checkpoint and merge dirty
+      // the working tree and block git merge.
+      const piCoderGitignorePath = join(cwd, ".pi-coder", ".gitignore");
+      if (!existsSync(piCoderGitignorePath)) {
+        writeFileSync(piCoderGitignorePath, [
+          "# Workspace-local pi-coder files — not project artifacts",
+          "state.json",
+          "logs/",
+        ].join("\n") + "\n", "utf-8");
+        created.push(".pi-coder/.gitignore");
+      } else {
+        skipped.push(".pi-coder/.gitignore (already exists)");
+      }
+
       // 5. Warn if subagent tool is not detected
       if (!subagentsAvailable) {
         warnings.push(
