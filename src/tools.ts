@@ -650,24 +650,26 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         }
 
         // Provide contextual guidance so the orchestrator knows what to do next
-        const nextActionHints: Partial<Record<FSMState, string>> = {
+        // Includes hints for both TDD and Light mode states
+        const nextActionHints: Record<string, string> = {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",
           SPEC_WORK: "Spec ID generated. Delegate to pi-coder.researcher to research. Save with pi_coder_save_spec before presenting for approval.",
           SPEC_APPROVED: config.createBranch ? "Create a feature branch with pi_coder_git checkout_branch, then checkpoint with pi_coder_git checkpoint." : "Checkpoint with pi_coder_git checkpoint (branch creation is disabled — working on current branch).",
-          GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE when ready.",
+          GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE (TDD) or IMPLEMENTING (Light) when ready.",
           TDD_RED_WRITE: "Delegate to pi-coder.implementor to write RED (failing) tests.",
           TDD_RED_VALIDATE: "Run tests with pi_coder_run_tests. RED validation: expect tests to FAIL.",
           TDD_GREEN_WRITE: "Delegate to pi-coder.implementor to implement code (make tests pass).",
           TDD_GREEN_VALIDATE: "Run tests with pi_coder_run_tests. GREEN validation: expect tests to PASS.",
+          IMPLEMENTING: "Delegate to pi-coder.implementor to implement the spec. Run tests freely with pi_coder_run_tests to check progress.",
           REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
           APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
-          NEEDS_CHANGES: "Delegate to pi-coder.implementor for non-functional fixes (then advance to REVIEWING with fixType=\"non-functional\"), or advance to TDD_RED_WRITE for functional fixes.",
+          NEEDS_CHANGES: "Delegate to pi-coder.implementor for non-functional fixes (then advance to REVIEWING with fixType=\"non-functional\"), or advance to TDD_RED_WRITE (TDD) / IMPLEMENTING (Light) for functional fixes.",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
           MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",
           BLOCKED: "Present recovery options to the user.",
         };
-        const hint = nextActionHints[targetState as FSMState];
+        const hint = nextActionHints[targetState];
         let text = hint
           ? `FSM advanced: ${previousState} → ${targetState}\n\nNext: ${hint}`
           : `FSM advanced: ${previousState} → ${targetState}`;

@@ -1335,13 +1335,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
     }
 
-    // Initialize nudge state from current FSM state
-    resetNudgeState(stateMachine!.currentState);
+    // Initialize nudge state from current FSM state (null in Plan/Off modes)
+    resetNudgeState(stateMachine?.currentState ?? "IDLE");
 
     // Activate mode if subagents are available
     if (subagentsAvailable) {
       if (piCoderMode !== "off") {
-        const toolSet = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS;
+        const toolSet = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : (piCoderMode === "light" ? LIGHT_TOOLS : PLAN_TOOLS);
         pi.setActiveTools(toolSet);
         refreshUI();
       }
@@ -1475,7 +1475,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Log nudge event
       logEvent("nudge_fired", {
-        fsmState: stateMachine!.currentState,
+        fsmState: stateMachine?.currentState ?? "N/A",
         level: nudgeState.lastNudgeLevel,
         expectedAction: stateMachine!.canNudge().expectedAction,
       });
@@ -1493,7 +1493,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         // Log nudge escalation
         logEvent("nudge_escalation", {
-          fsmState: stateMachine!.currentState,
+          fsmState: stateMachine?.currentState ?? "N/A",
           newLevel: nudgeState.lastNudgeLevel,
         });
 
@@ -1539,7 +1539,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       logEvent("tool_call_blocked", {
         toolName,
         mode: piCoderMode,
-        fsmState: stateMachine!.currentState,
+        fsmState: stateMachine?.currentState ?? "N/A",
         reason: "not_in_allowed_tools",
       });
       // Actionable feedback: tell the orchestrator what to do instead
@@ -1566,11 +1566,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
     }
 
-    // --- TDD-mode-only FSM guards ---
-    // In light mode, pi_coder_run_tests and pi_coder_git are always available.
-    // Subagent delegation in light mode has no FSM state restrictions.
-    if (piCoderMode === "tdd") {
-      // pi_coder_run_tests is always allowed (removed FSM guard) — it's read-only
+    // --- FSM-based guards (TDD and Light modes) ---
+    // Plan mode has no FSM, so no FSM-based guards apply
+    if (piCoderMode === "tdd" || piCoderMode === "light") {
+      // pi_coder_run_tests is always allowed — it's read-only
       // Auto-transitions in tool_result only fire from TDD validation states
 
       // Validate pi_coder_git against FSM state
@@ -1599,7 +1598,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             toolName,
             targetAgent,
             mode: piCoderMode,
-            fsmState: stateMachine!.currentState,
+            fsmState: stateMachine?.currentState ?? "N/A",
             reason: "non_pi_coder_agent",
           });
           return {
@@ -1614,7 +1613,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             toolName,
             targetAgent,
             mode: piCoderMode,
-            fsmState: stateMachine!.currentState,
+            fsmState: stateMachine?.currentState ?? "N/A",
             reason: "self_delegation",
           });
           return {
@@ -1650,7 +1649,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             } else if (targetAgent === "pi-coder.implementor" && current === "SPEC_WORK") {
               guidance += ` The spec must be saved and approved first. Step 1: pi_coder_save_spec. Step 2: interview for approval. Step 3: pi_coder_advance_fsm with targetState "SPEC_APPROVED". Step 4: pi_coder_git checkpoint. Then you can delegate the implementor.`;
             } else if (targetAgent === "pi-coder.implementor" && current === "SPEC_APPROVED") {
-              guidance += ` Checkpoint first, then the FSM auto-advances to TDD_RED_WRITE. Step 1: pi_coder_git with action "checkpoint". Step 2: delegate to pi-coder.implementor.`;
+              const nextLabel = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
+              guidance += ` Checkpoint first, then the FSM auto-advances to ${nextLabel}. Step 1: pi_coder_git with action "checkpoint". Step 2: delegate to pi-coder.implementor.`;
             } else if (targetAgent === "pi-coder.reviewer" && current !== "REVIEWING") {
               guidance += ` The reviewer runs in REVIEWING state. Complete the current implementation cycle first, then pi_coder_advance_fsm with targetState "REVIEWING".`;
             } else {
@@ -1679,7 +1679,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             logEvent("tool_call_blocked", {
               toolName,
               targetAgent,
-              fsmState: stateMachine!.currentState,
+              fsmState: stateMachine?.currentState ?? "N/A",
               reason: "missing_non_functional_evidence",
             });
             return {
@@ -1688,7 +1688,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
                 `🛡️ Cannot delegate implementor in NEEDS_CHANGES without reviewer classification. ` +
                 `The reviewer must classify the fix as non-functional (include 'Fix-Type: non-functional' in its verdict) ` +
                 `before the implementor can be delegated here. ` +
-                `If the fix is functional (changes production behavior), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead. ` +
+                `If the fix is functional (changes production behavior), advance to ${piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE"} for a full implementation cycle instead. ` +
                 `Do not retry this exact call.`,
             };
           }
@@ -1745,7 +1745,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           agent: targetAgent,
           taskSummary: taskStr,
           specId: activeSpecId,
-          fsmState: stateMachine!.currentState,
+          fsmState: stateMachine?.currentState ?? "N/A",
           mode: piCoderMode,
         });
 
@@ -1919,13 +1919,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Handle pi_coder_git results (auto-transition for checkpoint & merge)"
     if (toolName === "pi_coder_git" && currentState === "GIT_CHECKPOINT") {
-      // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to TDD_RED_WRITE
+      // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to next state
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
       if (gitDetails?.success !== false) {
-        stateMachine!.transition("TDD_RED_WRITE");
+        const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
+        stateMachine!.transition(nextState);
         logEvent("fsm_transition", {
           from: "GIT_CHECKPOINT",
-          to: "TDD_RED_WRITE",
+          to: nextState,
           event: "checkpoint_complete",
           loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
@@ -1936,7 +1937,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         // Append auto-transition info to tool result
         if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
           const textBlock = rawContent[0] as { type: "text"; text: string };
-          const appendedText = textBlock.text + "\n\n⚠️ AUTO-TRANSITION: Checkpoint complete. You are now in TDD_RED_WRITE. Next step: delegate to pi-coder.implementor to write failing tests.";
+          const nextStep = piCoderMode === "light"
+            ? "delegate to pi-coder.implementor to implement the spec."
+            : "delegate to pi-coder.implementor to write failing tests.";
+          const appendedText = textBlock.text + `\n\n⚠️ AUTO-TRANSITION: Checkpoint complete. You are now in ${nextState}. Next step: ${nextStep}`;
           return { content: [{ type: "text" as const, text: appendedText }] };
         }
       }
@@ -2067,11 +2071,12 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             stateMachine!.setEvidence("non_functional_classified");
           }
 
+          const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
             : reviewVerdict.fixType === "non-functional"
               ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with fixType=\"non-functional\" for re-review.`
-              : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to TDD_RED_WRITE for a full RED/GREEN cycle.`;
+              : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
 
           // Append to tool result content
           if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
@@ -2208,7 +2213,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           logEvent("mode_switch", {
             from: current,
             to: selectedMode,
-            fsmState: stateMachine!.currentState,
+            fsmState: stateMachine?.currentState ?? "N/A",
             specId: activeSpecId,
           });
           // Per-spec state.json on disk is NOT deleted — user can switch back
