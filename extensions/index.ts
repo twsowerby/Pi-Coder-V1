@@ -188,6 +188,14 @@ function refreshUI(): void {
     return;
   }
 
+  // Always keep the subagent widget in sync — clear it when not running,
+  // delegate to refreshSubagentWidget() when active
+  if (!subagentRunning) {
+    ctx.ui.setWidget("pi-coder-subagent", undefined);
+  } else {
+    refreshSubagentWidget();
+  }
+
   if (piCoderMode === "plan") {
     // Plan mode — investigation only, no FSM
     const theme = ctx.ui.theme;
@@ -2096,7 +2104,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         clearInterval(subagentWidgetTimer);
         subagentWidgetTimer = null;
       }
-      // Note: refreshUI() is called at the end of tool_result handler
+      // Immediately clear the subagent widget — old content persists otherwise
+      refreshSubagentWidget();
 
       // Show completion summary notification for subagent results
       // Extract duration and task brief from the full details
