@@ -536,6 +536,11 @@ function buildLightFSMDiagram(): string {
 /** Plan mode prompt template — cached for the session. */
 let planModePromptTemplate: string | null = null;
 
+/** Reset the cached plan mode prompt template. Called by reset-agents. */
+export function resetPlanModePromptCache(): void {
+  planModePromptTemplate = null;
+}
+
 function buildPlanModePrompt(filteredSnippets: Record<string, string>): string {
   if (!planModePromptTemplate) {
     const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-plan.md");
@@ -1036,8 +1041,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const logDir = join(cwd, ".pi-coder", "logs");
     logger = new Logger(logDir, config.logging);
 
-    // Load orchestrator prompt template (checks for project customization)
+    // Load prompt templates (checks for project customization via cache reset)
     resetOrchestratorPromptCache();
+    resetLightModePromptCache();
+    resetPlanModePromptCache();
     loadOrchestratorPrompt(cwd);
 
     // Initialize state machine based on mode
@@ -2656,9 +2663,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         reset.push("pi-coder-orchestrator.md");
       }
 
-      // 3. Invalidate the orchestrator prompt cache if it was reset
-      if (reset.includes("pi-coder-orchestrator.md")) {
+      // 3. Invalidate all prompt caches if any agent files were reset
+      if (reset.length > 0) {
         resetOrchestratorPromptCache();
+        resetLightModePromptCache();
+        resetPlanModePromptCache();
       }
 
       // 4. Report which files were reset
