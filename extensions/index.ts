@@ -367,6 +367,14 @@ let subagentStartTime: number | null = null;
 /** Track the last subagent agent name for pairing start/end events. */
 let lastSubagentAgent: string | null = null;
 
+/**
+ * Light mode: tracks whether the implementor delegation has been confirmed
+ * by the orchestrator after presenting findings. First attempt is blocked;
+ * second attempt (after user confirmation) is allowed. Reset after each
+ * successful pass-through so the next delegation also requires confirmation.
+ */
+let lightModeImplementorConfirmed = false;
+
 /** Track lifecycle start time for wall clock duration. */
 let lifecycleStartTime: number | null = null;
 
@@ -1500,7 +1508,31 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             };
           }
         }
-        // In light mode, any pi-coder subagent can be called at any time
+        // In light mode, soft-block implementor delegation to force
+        // the orchestrator to present findings before making changes.
+        // First attempt: block with guidance. Second attempt: allow through.
+        // This prevents "investigate X" from becoming "investigate and fix X"
+        // without the user seeing the investigation results first.
+        if (piCoderMode === "light" && targetAgent === "pi-coder.implementor" && !lightModeImplementorConfirmed) {
+          lightModeImplementorConfirmed = true;
+          logEvent("tool_call_blocked", {
+            toolName,
+            targetAgent,
+            mode: piCoderMode,
+            reason: "light_mode_implementor_confirm",
+          });
+          return {
+            block: true,
+            reason:
+              `🛡️ Present your investigation findings to the user first, then ask if they want to proceed with implementation. ` +
+              `If the user confirms, delegate to pi-coder.implementor again — this confirmation block will not repeat. ` +
+              `Do NOT implement changes without the user reviewing your findings first.`,
+          };
+        }
+        if (piCoderMode === "light" && targetAgent === "pi-coder.implementor") {
+          // Reset after successful pass-through so next delegation also requires confirmation
+          lightModeImplementorConfirmed = false;
+        }
 
         // Track subagent timing
         subagentStartTime = Date.now();
@@ -2009,6 +2041,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       piCoderMode = selectedMode;
+      lightModeImplementorConfirmed = false;
 
       // Update active tools based on mode
       const toolSet = piCoderMode === "off" ? NORMAL_TOOLS : (piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS);
