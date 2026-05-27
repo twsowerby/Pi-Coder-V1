@@ -368,12 +368,20 @@ let subagentStartTime: number | null = null;
 let lastSubagentAgent: string | null = null;
 
 /**
- * Light mode: tracks whether the implementor delegation has been confirmed
- * by the orchestrator after presenting findings. First attempt is blocked;
- * second attempt (after user confirmation) is allowed. Reset after each
- * successful pass-through so the next delegation also requires confirmation.
+ * Light mode: tracks the turn count when the implementor was last blocked.
+ * The implementor can only pass through after a user message arrives (a new
+ * turn boundary). This prevents the agent from self-authorizing by retrying
+ * in the same turn — the user must have actually responded.
+ * Value: turn number when the block was applied, or -1 (no block active).
  */
-let lightModeImplementorConfirmed = false;
+let lightModeImplementorBlockedAtTurn = -1;
+
+/**
+ * Session turn counter — incremented at the start of every agent turn.
+ * Used by the light mode implementor gate to detect turn boundaries
+ * (i.e., the user has actually responded after a block).
+ */
+let sessionTurnCount = 0;
 
 /** Track lifecycle start time for wall clock duration. */
 let lifecycleStartTime: number | null = null;
@@ -909,6 +917,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("session_start", async (_event, ctx) => {
+    // Reset session state
+    sessionTurnCount = 0;
+    lightModeImplementorBlockedAtTurn = -1;
+
     // Capture ctx for UI refresh
     sessionCtx = ctx;
     const cwd = ctx.cwd;
@@ -984,6 +996,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         // Only surface events that match our config thresholds
         if (ctrl.type === "needs_attention") {
+          // Suppress if pi-coder already knows the subagent completed
+          if (!subagentRunning) return;
           logEvent("subagent_control", {
             type: ctrl.type,
             agent: ctrl.agent,
@@ -1000,6 +1014,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             { deliverAs: "steer", triggerTurn: true },
           );
         } else if (ctrl.type === "active_long_running") {
+          // If pi-coder already knows the subagent completed (tool_result processed),
+          // suppress this notification. pi-subagents' event bus can lag behind,
+          // causing stale notifications that stack up and burn LLM turns.
+          if (!subagentRunning) return;
           const elapsed = ctrl.elapsedMs ? Math.floor(ctrl.elapsedMs / 1000) : "?";
           logEvent("subagent_control", {
             type: ctrl.type,
@@ -1216,6 +1234,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("before_agent_start", async (event, ctx) => {
+    // Increment session turn counter — every agent turn counts
+    sessionTurnCount++;
+
     // When off or subagents not available, let pi run normally
     if (piCoderMode === "off" || !subagentsAvailable) return;
 
@@ -1513,25 +1534,46 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         // First attempt: block with guidance. Second attempt: allow through.
         // This prevents "investigate X" from becoming "investigate and fix X"
         // without the user seeing the investigation results first.
-        if (piCoderMode === "light" && targetAgent === "pi-coder.implementor" && !lightModeImplementorConfirmed) {
-          lightModeImplementorConfirmed = true;
-          logEvent("tool_call_blocked", {
-            toolName,
-            targetAgent,
-            mode: piCoderMode,
-            reason: "light_mode_implementor_confirm",
-          });
-          return {
-            block: true,
-            reason:
-              `🛡️ Present your investigation findings to the user first, then ask if they want to proceed with implementation. ` +
-              `If the user confirms, delegate to pi-coder.implementor again — this confirmation block will not repeat. ` +
-              `Do NOT implement changes without the user reviewing your findings first.`,
-          };
-        }
         if (piCoderMode === "light" && targetAgent === "pi-coder.implementor") {
-          // Reset after successful pass-through so next delegation also requires confirmation
-          lightModeImplementorConfirmed = false;
+          // Turn-boundary gate: block implementor until the user has sent
+          // a new message after the block was applied. This prevents the agent
+          // from self-authorizing by retrying in the same turn.
+          if (lightModeImplementorBlockedAtTurn === -1) {
+            // First attempt — block and record the turn
+            lightModeImplementorBlockedAtTurn = sessionTurnCount;
+            logEvent("tool_call_blocked", {
+              toolName,
+              targetAgent,
+              mode: piCoderMode,
+              reason: "light_mode_implementor_confirm",
+              turnBlocked: sessionTurnCount,
+            });
+            return {
+              block: true,
+              reason:
+                `🛡️ Present your investigation findings to the user FIRST. Do not retry this call until the user has responded and confirmed they want to proceed with implementation. ` +
+                `The user must review your findings before any code changes are made.`,
+            };
+          }
+          if (lightModeImplementorBlockedAtTurn >= sessionTurnCount) {
+            // Same turn — still blocked. The user hasn't spoken yet.
+            logEvent("tool_call_blocked", {
+              toolName,
+              targetAgent,
+              mode: piCoderMode,
+              reason: "light_mode_implementor_same_turn",
+              turnBlocked: lightModeImplementorBlockedAtTurn,
+              currentTurn: sessionTurnCount,
+            });
+            return {
+              block: true,
+              reason:
+                `🛡️ Still waiting for user response. You presented findings on turn ${lightModeImplementorBlockedAtTurn} and we're still on turn ${sessionTurnCount}. ` +
+                `Wait for the user to respond before implementing. Do not retry until they confirm.`,
+            };
+          }
+          // User has responded (new turn) — allow through, reset for next delegation
+          lightModeImplementorBlockedAtTurn = -1;
         }
 
         // Track subagent timing
@@ -2041,7 +2083,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       }
 
       piCoderMode = selectedMode;
-      lightModeImplementorConfirmed = false;
+      lightModeImplementorBlockedAtTurn = -1;
+      sessionTurnCount = 0;
 
       // Update active tools based on mode
       const toolSet = piCoderMode === "off" ? NORMAL_TOOLS : (piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : LIGHT_TOOLS);
