@@ -863,6 +863,39 @@ const DEFAULT_CONFIG: PiCoderConfig = {
   },
 };
 
+/** Validate critical config values, applying fixes and emitting warnings. */
+function validateConfig(cfg: PiCoderConfig): PiCoderConfig {
+  if (typeof cfg.maxLoops !== "number" || cfg.maxLoops < 1) {
+    console.warn(`⚠️ pi-coder: maxLoops must be a positive integer, got ${cfg.maxLoops} — defaulting to 3`);
+    cfg = { ...cfg, maxLoops: 3 };
+  }
+  if (typeof cfg.testCommand !== "string" || cfg.testCommand.trim() === "") {
+    console.warn(`⚠️ pi-coder: testCommand must be a non-empty string, got ${JSON.stringify(cfg.testCommand)} — defaulting to "npm test"`);
+    cfg = { ...cfg, testCommand: "npm test" };
+  }
+  if (cfg.testCommands) {
+    const tc = cfg.testCommands;
+    if (typeof tc.unit !== "string" || tc.unit.trim() === "") {
+      console.warn(`⚠️ pi-coder: testCommands.unit must be a non-empty string, got ${JSON.stringify(tc.unit)} — falling back to testCommand`);
+      cfg = { ...cfg, testCommands: { ...tc, unit: cfg.testCommand } };
+    }
+    if (tc.e2e !== undefined && (typeof tc.e2e !== "string" || tc.e2e.trim() === "")) {
+      console.warn(`⚠️ pi-coder: testCommands.e2e must be a non-empty string if provided, got ${JSON.stringify(tc.e2e)} — removing`);
+      const { e2e: _, ...rest } = tc;
+      cfg = { ...cfg, testCommands: rest };
+    }
+  }
+  if (typeof cfg.interviewTimeout !== "number" || cfg.interviewTimeout < 0) {
+    console.warn(`⚠️ pi-coder: interviewTimeout must be ≥ 0, got ${cfg.interviewTimeout} — defaulting to 0`);
+    cfg = { ...cfg, interviewTimeout: 0 };
+  }
+  if (typeof cfg.branchPrefix !== "string" || cfg.branchPrefix.trim() === "") {
+    console.warn(`⚠️ pi-coder: branchPrefix must be a non-empty string, got ${JSON.stringify(cfg.branchPrefix)} — defaulting to "pi-coder/"`);
+    cfg = { ...cfg, branchPrefix: "pi-coder/" };
+  }
+  return cfg;
+}
+
 function loadConfig(cwd: string): PiCoderConfig {
   const configPath = join(cwd, ".pi-coder", "config.json");
   try {
@@ -904,12 +937,14 @@ function loadConfig(cwd: string): PiCoderConfig {
         parsed.referenceProjects = Object.keys(resolved).length > 0 ? resolved : undefined;
       }
 
-      return { ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) } };
+      return validateConfig({ ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) } });
     }
-  } catch {
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn(`⚠️ pi-coder: failed to load config.json: ${message} — using defaults`);
     // Fall through to default
   }
-  return { ...DEFAULT_CONFIG };
+  return validateConfig({ ...DEFAULT_CONFIG });
 }
 
 // ---------------------------------------------------------------------------
@@ -951,7 +986,7 @@ function extractTokenUsage(result: unknown): { input: number; output: number; to
  * Extract review verdict from a subagent output (reviewer agent).
  * Looks for common verdict patterns in the text output.
  */
-function extractReviewVerdict(result: unknown): {
+export function extractReviewVerdict(result: unknown): {
   verdict: "approved" | "needs_changes" | "request_changes";
   fixType: "functional" | "non-functional" | null;
   issueCount: number;
@@ -1394,6 +1429,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   pi.on("agent_end", async () => {
     if (piCoderMode === "off") return;
     notify("agent_end", "Pi Coder", "Ready for input");
+  });
+
+  // -----------------------------------------------------------------------
+  // Session Shutdown — cleanup timers and references
+  // -----------------------------------------------------------------------
+
+  pi.on("session_shutdown", async () => {
+    if (subagentWidgetTimer) {
+      clearInterval(subagentWidgetTimer);
+      subagentWidgetTimer = null;
+    }
+    subagentRunning = false;
+    subagentActivity = null;
+    sessionTurnCount = 0;
+    // Persist final state so it survives session restarts
+    if (stateMachine) {
+      await persistState();
+    }
   });
 
   // -----------------------------------------------------------------------
