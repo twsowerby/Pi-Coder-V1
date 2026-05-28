@@ -236,6 +236,23 @@ export class GitOperations {
     return (result.message?.trim().length ?? 0) > 0;
   }
 
+  /**
+   * Get the list of files with uncommitted changes.
+   * Returns the file paths from `git status --porcelain`, stripping the
+   * status prefix (first 3 characters: XY + space).
+   */
+  async getUncommittedFiles(): Promise<string[]> {
+    const result = await this.execGit(["status", "--porcelain"]);
+    if (!result.success) {
+      // If we can't check status, assume no changes (safer default)
+      return [];
+    }
+    const lines = result.message?.trim().split("\n") ?? [];
+    return lines
+      .filter((line) => line.length > 0)
+      .map((line) => line.slice(3)); // Strip "XY " prefix
+  }
+
   // ---------------------------------------------------------------------------
   // Merge & Strategy
   // ---------------------------------------------------------------------------
@@ -243,9 +260,31 @@ export class GitOperations {
   /**
    * Merge the feature branch back to the target branch.
    * Supports normal merge and squash merge based on config.
+   *
+   * Dirty-tree detection: Before discarding .pi-coder/ changes, checks
+   * for non-.pi-coder/ uncommitted changes. If found, returns a result
+   * with dirtyTree=true and uncommittedFiles listing the offending files.
+   * The caller (tools.ts) is responsible for prompting the user or
+   * auto-committing.
    */
   async merge(branch: string, targetBranch?: string): Promise<GitCheckpointResult> {
     const target = targetBranch ?? await detectDefaultBranch(this.exec);
+
+    // Dirty-tree check BEFORE discarding .pi-coder/ changes.
+    // This detects non-.pi-coder/ uncommitted changes that would silently
+    // ride along to the target branch.
+    const allDirtyFiles = await this.getUncommittedFiles();
+    const nonPiCoderDirtyFiles = allDirtyFiles.filter(
+      (f) => !f.startsWith(".pi-coder/"),
+    );
+    if (nonPiCoderDirtyFiles.length > 0) {
+      return {
+        success: false,
+        error: `Uncommitted changes detected in ${nonPiCoderDirtyFiles.length} file(s). Commit or stash them before merging, or approve auto-commit.`,
+        dirtyTree: true,
+        uncommittedFiles: nonPiCoderDirtyFiles,
+      };
+    }
 
     // Before switching branches or merging, discard any uncommitted .pi-coder/
     // changes (state.json, logs). These are workspace-local metadata that
@@ -268,6 +307,9 @@ export class GitOperations {
     const mergeArgs = ["merge", branch];
     if (this.config.mergeBranch === "squash") {
       mergeArgs.push("--squash");
+    } else {
+      // Normal merge: use --no-ff to ensure a merge commit always exists
+      mergeArgs.push("--no-ff");
     }
 
     const mergeResult = await this.execGit(mergeArgs);

@@ -78,6 +78,9 @@ function createMockGitOps() {
   let mergeResult: GitCheckpointResult = { success: true, ref: "ghi9012", branch: "main", message: "Merged" };
   let currentBranchResult: GitCheckpointResult = { success: true, branch: "pi-coder/test-branch" };
 
+  // Queue for per-call merge results. When exhausted, falls back to mergeResult.
+  const mergeResultQueue: GitCheckpointResult[] = [];
+
   return {
     calls,
     setCheckoutBranchResult(r: GitCheckpointResult) { checkoutBranchResult = r; },
@@ -85,6 +88,8 @@ function createMockGitOps() {
     setRollbackResult(r: GitCheckpointResult) { rollbackResult = r; },
     setMergeResult(r: GitCheckpointResult) { mergeResult = r; },
     setCurrentBranchResult(r: GitCheckpointResult) { currentBranchResult = r; },
+    /** Push merge results that will be consumed in FIFO order on successive merge() calls. */
+    pushMergeResult(r: GitCheckpointResult) { mergeResultQueue.push(r); },
     gitOps: {
       checkoutBranch(branch: string, baseBranch?: string) {
         calls.push({ method: "checkoutBranch", args: [branch, baseBranch] });
@@ -100,7 +105,9 @@ function createMockGitOps() {
       },
       merge(branch: string, targetBranch?: string) {
         calls.push({ method: "merge", args: [branch, targetBranch] });
-        return Promise.resolve(mergeResult);
+        // Use queued results first; fall back to the static mergeResult when empty.
+        const result = mergeResultQueue.length > 0 ? mergeResultQueue.shift()! : mergeResult;
+        return Promise.resolve(result);
       },
       getCurrentBranch() {
         calls.push({ method: "getCurrentBranch", args: [] });
@@ -280,6 +287,18 @@ async function executeTool(tools: Map<string, RegisteredTool>, name: string, par
   return (await tool.execute("test-call-id", params, undefined, undefined, undefined)) as Record<string, unknown>;
 }
 
+/** Call a tool's execute method with a custom ctx (e.g. with ui.confirm). */
+async function executeToolWithCtx(
+  tools: Map<string, RegisteredTool>,
+  name: string,
+  params: Record<string, unknown>,
+  ctx: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const tool = tools.get(name);
+  assert.ok(tool, `Tool ${name} not registered`);
+  return (await tool.execute("test-call-id", params, undefined, undefined, ctx)) as Record<string, unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: Tool Registration Framework
 // ---------------------------------------------------------------------------
@@ -450,6 +469,142 @@ describe("Phase 2: pi_coder_git", () => {
     const details = result.details as GitCheckpointResult;
     assert.strictEqual(details.success, true);
     assert.ok(details.ref, "Should include ref");
+  });
+
+  // -----------------------------------------------------------------------
+  // Dirty-tree confirmation flow (AC3, AC4, AC5)
+  // -----------------------------------------------------------------------
+
+  it("dirty tree + user confirms → auto-commit + retry merge", async () => {
+    const { tools, sm, mockGit, setActiveSpec } = setupMocks();
+    advanceToState(sm, "MERGING");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // First merge returns dirty-tree, second merge (after auto-commit) succeeds
+    mockGit.pushMergeResult({
+      success: false,
+      dirtyTree: true,
+      uncommittedFiles: ["src/auth.ts", "src/utils.ts"],
+      error: "uncommitted_changes",
+    });
+    mockGit.pushMergeResult({
+      success: true,
+      ref: "merged123",
+      branch: "main",
+      message: "Merged",
+    });
+
+    const ctx = {
+      ui: {
+        confirm: async () => true,
+      },
+    };
+
+    const result = await executeToolWithCtx(tools, "pi_coder_git", { action: "merge" }, ctx);
+
+    // Should NOT be an error — the retry after auto-commit succeeded
+    assert.ok(!result.isError, `Should succeed after auto-commit retry, got error: ${JSON.stringify(result.details)}`);
+
+    // Verify the call sequence: getCurrentBranch → merge (dirty) → confirm → checkpoint (auto-commit) → merge (clean)
+    const methods = mockGit.calls.map(c => c.method);
+    assert.deepStrictEqual(methods, [
+      "getCurrentBranch",
+      "merge",           // first attempt — dirty tree
+      "checkpoint",       // auto-commit before retry
+      "merge",           // second attempt — clean tree
+    ]);
+
+    // Verify the auto-commit message includes the spec id
+    const checkpointCall = mockGit.calls.find(c => c.method === "checkpoint");
+    assert.ok(checkpointCall, "Should have called checkpoint for auto-commit");
+    const commitMessage = checkpointCall!.args[0] as string;
+    assert.ok(commitMessage.includes("auto: commit before merge"), `Auto-commit message should mention auto-commit, got: ${commitMessage}`);
+    assert.ok(commitMessage.includes("test-spec"), `Auto-commit message should include spec id, got: ${commitMessage}`);
+
+    // Verify the final merge result is returned
+    const details = result.details as GitCheckpointResult;
+    assert.strictEqual(details.success, true);
+    assert.strictEqual(details.ref, "merged123");
+  });
+
+  it("dirty tree + user rejects → error with actionable message", async () => {
+    const { tools, sm, mockGit, setActiveSpec } = setupMocks();
+    advanceToState(sm, "MERGING");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    mockGit.pushMergeResult({
+      success: false,
+      dirtyTree: true,
+      uncommittedFiles: ["src/auth.ts"],
+      error: "uncommitted_changes",
+    });
+
+    const ctx = {
+      ui: {
+        confirm: async () => false,
+      },
+    };
+
+    const result = await executeToolWithCtx(tools, "pi_coder_git", { action: "merge" }, ctx);
+
+    assert.ok(result.isError, "Should be error when user rejects auto-commit");
+
+    const details = result.details as Record<string, unknown>;
+    assert.strictEqual(details.success, false);
+    assert.strictEqual(details.error, "uncommitted_changes_rejected");
+
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("Merge cancelled"), `Should mention cancellation, got: ${content}`);
+    assert.ok(content.includes("uncommitted changes"), `Should mention uncommitted changes, got: ${content}`);
+    assert.ok(content.includes("commit") || content.includes("stash"), `Should provide actionable guidance (commit/stash), got: ${content}`);
+
+    // Should NOT have called checkpoint (auto-commit) or retried merge
+    const methods = mockGit.calls.map(c => c.method);
+    assert.ok(!methods.includes("checkpoint"), "Should not auto-commit when user rejects");
+    // Only one merge call (the initial dirty one)
+    assert.strictEqual(methods.filter(m => m === "merge").length, 1, "Should only have one merge call (no retry)");
+  });
+
+  it("dirty tree + auto-commit fails → error", async () => {
+    const { tools, sm, mockGit, setActiveSpec } = setupMocks();
+    advanceToState(sm, "MERGING");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // Merge returns dirty-tree
+    mockGit.pushMergeResult({
+      success: false,
+      dirtyTree: true,
+      uncommittedFiles: ["src/auth.ts"],
+      error: "uncommitted_changes",
+    });
+
+    // Auto-commit (checkpoint) will fail
+    mockGit.setCheckpointResult({
+      success: false,
+      error: "Permission denied — cannot write to .git/index",
+    });
+
+    const ctx = {
+      ui: {
+        confirm: async () => true,
+      },
+    };
+
+    const result = await executeToolWithCtx(tools, "pi_coder_git", { action: "merge" }, ctx);
+
+    assert.ok(result.isError, "Should be error when auto-commit fails");
+
+    const details = result.details as Record<string, unknown>;
+    assert.strictEqual(details.success, false);
+    assert.strictEqual(details.error, "auto_commit_failed");
+
+    const content = (result.content as Array<{ text: string }>)[0].text;
+    assert.ok(content.includes("Auto-commit failed"), `Should mention auto-commit failure, got: ${content}`);
+    assert.ok(content.includes("Permission denied"), `Should include original error, got: ${content}`);
+
+    // Should not have retried merge after failed auto-commit
+    const methods = mockGit.calls.map(c => c.method);
+    assert.strictEqual(methods.filter(m => m === "merge").length, 1, "Should only have one merge call (no retry after failed auto-commit)");
   });
 });
 

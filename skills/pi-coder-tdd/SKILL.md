@@ -22,6 +22,8 @@ When your FSM is in TDD_RED_WRITE for a unit:
    - Include only the key files for this unit
    - See the **Delegation Templates** section in pi-coder-core for the exact format
 
+   You can also delegate to `pi-coder.researcher` in TDD_RED_WRITE if you need to investigate something during the RED phase (e.g., clarify a pattern, find a dependency).
+
 2. After the implementor completes, advance the FSM to TDD_RED_VALIDATE:
    - Use `pi_coder_advance_fsm` with targetState `TDD_RED_VALIDATE`
 
@@ -42,6 +44,8 @@ When your FSM is in TDD_GREEN_WRITE for a unit:
    - Specify **GREEN phase** and the **unit name**
    - Include only the ACs and key files for this unit
    - Include the pre-implementation git ref so the implementor can see what tests were written
+
+   You can also delegate to `pi-coder.researcher` in TDD_GREEN_WRITE if you need to investigate something during the GREEN phase.
 
 2. After the implementor completes, advance the FSM to TDD_GREEN_VALIDATE:
    - Use `pi_coder_advance_fsm` with targetState `TDD_GREEN_VALIDATE`

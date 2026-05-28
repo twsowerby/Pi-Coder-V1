@@ -1733,7 +1733,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       if (toolName === "bash" || toolName === "edit" || toolName === "write" || toolName === "read") {
         guidance += ` You don't ${toolName === "bash" ? "run commands" : toolName === "read" ? "read file contents" : "edit files"} directly — you delegate. Use the "subagent" tool to delegate to pi-coder.implementor for code changes, or pi-coder.researcher to investigate the codebase.`;
       } else if (toolName === "pi_coder_advance_fsm" || toolName === "pi_coder_save_spec" || toolName === "pi_coder_read_spec") {
-        guidance += ` These are TDD-mode tools for FSM state management. In light mode, there's no FSM to manage — just delegate directly to the right subagent.`;
+        guidance += ` These tools require the FSM lifecycle (Light or TDD mode). Plan mode is for investigation only — switch modes with /pi-coder to use them.`;
       } else {
         guidance += ` Available tools: ${allowedTools.join(", ")}`;
       }
@@ -2138,7 +2138,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     if (toolName === "pi_coder_git" && currentState === "GIT_CHECKPOINT") {
       // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to next state
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
-      if (gitDetails?.success !== false) {
+      if (gitDetails?.success === true) {
         const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
         stateMachine!.transition(nextState);
         logEvent("fsm_transition", {
@@ -2166,7 +2166,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     if (toolName === "pi_coder_git" && currentState === "MERGING") {
       // If git merge succeeded in MERGING, auto-advance to COMPLETE
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
-      if (gitDetails?.success !== false) {
+      if (gitDetails?.success === true) {
         stateMachine!.transition("COMPLETE");
         logEvent("fsm_transition", {
           from: "MERGING",
@@ -2300,7 +2300,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
             : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
-              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with fixType=\"non-functional\" for re-review.`
+              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
               : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
 
           // Append to tool result content

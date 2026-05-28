@@ -269,6 +269,10 @@ export interface GitCheckpointResult {
   message?: string;
   /** Error description when success is false */
   error?: string;
+  /** True when the working tree has non-.pi-coder/ uncommitted changes that would block a merge */
+  dirtyTree?: boolean;
+  /** List of files with uncommitted changes (populated when dirtyTree is true) */
+  uncommittedFiles?: string[];
 }
 
 /**

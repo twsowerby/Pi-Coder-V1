@@ -28,7 +28,11 @@ Available tools:
 State advancement:
 • Manual advances: Use pi_coder_advance_fsm when YOU decide to transition (e.g., IDLE→SPEC_WORK, SPEC_WORK→SPEC_APPROVED after user approval, IMPLEMENTING→REVIEWING after implementation complete).
 • Auto-transitions: Happen on subagent/test results — you will see ⚠️ AUTO-TRANSITION in the tool result. Do NOT call pi_coder_advance_fsm after an auto-transition.
-• Evidence guards: Some transitions require evidence flags (e.g., spec_saved, spec_user_approved). The transition() method enforces these — you will get a clear error if missing.
+• Evidence guards: Some transitions require evidence flags. These are normally set automatically by auto-transitions — you don't need to manage them manually. If you see a transition guard error, it means the auto-transition didn't fire (e.g., verdict extraction failed). In that case, just call `pi_coder_advance_fsm` with the target state — it will set the required evidence as a manual override. The guards are:
+  - `SPEC_WORK → SPEC_APPROVED`: `spec_saved` (set by pi_coder_save_spec) + `spec_user_approved` (set when you use interview for approval)
+  - `NEEDS_CHANGES → REVIEWING`: `non_functional_classified` (set automatically when reviewer classifies fix as non-functional)
+  - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves)
+• Key auto-transitions: GIT_CHECKPOINT → IMPLEMENTING (after pi_coder_git checkpoint succeeds), REVIEWING → APPROVED/NEEDS_CHANGES (after reviewer returns verdict). Do NOT call pi_coder_advance_fsm after these — the FSM has already moved.
 
 ## Available Subagents
 

@@ -209,6 +209,36 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           const currentBranchResult = await gitOps.getCurrentBranch();
           const featureBranch = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
           result = await gitOps.merge(featureBranch);
+
+          // Handle dirty-tree detection — ask user to approve auto-commit
+          if (result.dirtyTree && result.uncommittedFiles && result.uncommittedFiles.length > 0) {
+            const confirmed = await _ctx.ui.confirm(
+              "Pi Coder: Uncommitted Changes",
+              `Uncommitted changes detected in ${result.uncommittedFiles.length} file(s):\n${result.uncommittedFiles.slice(0, 10).join("\n")}${result.uncommittedFiles.length > 10 ? `\n... and ${result.uncommittedFiles.length - 10} more` : ""}\n\nAuto-commit before merge?`,
+            );
+
+            if (confirmed) {
+              // Auto-commit with generated message then retry merge
+              const autoCommitMessage = `auto: commit before merge — ${activeSpecIdRef.current ?? "unknown"}`;
+              const commitResult = await gitOps.checkpoint(autoCommitMessage);
+              if (!commitResult.success) {
+                return {
+                  content: [{ type: "text" as const, text: `Auto-commit failed: ${commitResult.error}` }],
+                  details: { success: false, error: "auto_commit_failed" },
+                  isError: true,
+                };
+              }
+              // Retry merge — tree should now be clean
+              result = await gitOps.merge(featureBranch);
+            } else {
+              // User rejected auto-commit — return error with actionable guidance
+              return {
+                content: [{ type: "text" as const, text: "Merge cancelled — uncommitted changes detected and auto-commit was not approved. Commit or stash your changes manually, then retry the merge." }],
+                details: { success: false, error: "uncommitted_changes_rejected" },
+                isError: true,
+              };
+            }
+          }
           break;
         }
         default: {
@@ -571,7 +601,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
       "Any state → IDLE: Abort the current cycle. Use this to restart or unwind.",
       "NEEDS_CHANGES → TDD_RED_WRITE: Review requires functional fixes. Start a new RED/GREEN cycle.",
-      "NEEDS_CHANGES → REVIEWING: Review requires non-functional fixes only (test fixes, comments, refactoring). Skip the RED/GREEN cycle and go directly back to review. Set fixType=\"non-functional\" to satisfy the evidence gate.",
+      "NEEDS_CHANGES → REVIEWING: Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
+      "REVIEWING → APPROVED: Normally auto-transitioned when reviewer approves. If the auto-transition didn't fire, you can advance manually — the evidence gate is satisfied automatically.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 
@@ -596,6 +627,15 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // rather than inline, so extractReviewVerdict couldn't parse it).
       if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING") {
         smRef.current.setEvidence("non_functional_classified");
+      }
+
+      // Manual escape hatch for review_approved evidence gate.
+      // Auto-transition handler normally sets this when the reviewer returns ✅ Approved.
+      // If verdict extraction failed (no AUTO-TRANSITION notice), the orchestrator
+      // can manually advance — the fact they're calling advance_fsm to APPROVED
+      // means they've seen the review and it was approved.
+      if (targetState === "APPROVED" && smRef.current.currentState === "REVIEWING") {
+        smRef.current.setEvidence("review_approved");
       }
 
       try {
@@ -653,7 +693,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           IMPLEMENTING: "Delegate to pi-coder.implementor to implement the spec. Run tests freely with pi_coder_run_tests to check progress.",
           REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
           APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
-          NEEDS_CHANGES: "Delegate to pi-coder.implementor for non-functional fixes (then advance to REVIEWING with fixType=\"non-functional\"), or advance to TDD_RED_WRITE (TDD) / IMPLEMENTING (Light) for functional fixes.",
+          NEEDS_CHANGES: "For non-functional fixes: delegate implementor, then pi_coder_advance_fsm REVIEWING (evidence gate already satisfied if auto-transition fired; otherwise pass fixType=\"non-functional\"). For functional fixes: pi_coder_advance_fsm to TDD_RED_WRITE (TDD) or IMPLEMENTING (Light).",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
           MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",

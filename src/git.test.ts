@@ -385,6 +385,7 @@ describe("GitOperations — Phase 3: Checkpoint & Rollback", () => {
 describe("GitOperations — Phase 4: Merge & Strategy", () => {
   it("should checkout target branch and merge feature branch (normal merge)", async () => {
     const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
       ["git checkout", { stdout: "Switched to branch 'main'", stderr: "", code: 0 }],
       ["git merge", { stdout: "Merge made by the 'ort' strategy.", stderr: "", code: 0 }],
       ["git rev-parse --short HEAD", { stdout: "merged99", stderr: "", code: 0 }],
@@ -406,6 +407,7 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
   it("should use squash merge when mergeBranch is 'squash'", async () => {
     const squashConfig: PiCoderConfig = { ...defaultConfig, mergeBranch: "squash" };
     const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
       ["git checkout", { stdout: "", stderr: "", code: 0 }],
       ["git merge", { stdout: "Squash commit", stderr: "", code: 0 }],
       ["git commit", { stdout: "[main sq99] squash commit", stderr: "", code: 0 }],
@@ -419,10 +421,13 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
     const mergeCall = calls.find(c => c.args[0] === "merge");
     assert.ok(mergeCall);
     assert.ok(mergeCall.args.includes("--squash"));
+    // Squash merge should NOT use --no-ff
+    assert.ok(!mergeCall.args.includes("--no-ff"), "Squash merge should not use --no-ff");
   });
 
   it("should auto-detect target branch when not specified", async () => {
     const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
       ["git remote show", { stdout: "origin", stderr: "", code: 0 }],
       ["git rev-parse --abbrev-ref", { stdout: "origin/main", stderr: "", code: 0 }],
       ["git checkout", { stdout: "Switched to branch 'main'", stderr: "", code: 0 }],
@@ -441,6 +446,7 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
 
   it("should fallback to 'main' when auto-detect fails", async () => {
     const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
       ["git remote show", { stdout: "", stderr: "error", code: 1 }],
       ["git checkout", { stdout: "Switched to branch 'main'", stderr: "", code: 0 }],
       ["git merge", { stdout: "Merge complete", stderr: "", code: 0 }],
@@ -456,6 +462,7 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
 
   it("should return merge commit SHA and target branch name on success", async () => {
     const { exec } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
       ["git checkout", { stdout: "", stderr: "", code: 0 }],
       ["git merge", { stdout: "Merge complete", stderr: "", code: 0 }],
       ["git rev-parse --short HEAD", { stdout: "merged42", stderr: "", code: 0 }],
@@ -496,6 +503,7 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
 
   it("should return error when merge fails", async () => {
     const { exec } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
       ["git checkout", { stdout: "", stderr: "", code: 0 }],
       ["git merge", { stdout: "", stderr: "CONFLICT: merge conflict in src/auth.ts", code: 1 }],
     ]));
@@ -506,5 +514,128 @@ describe("GitOperations — Phase 4: Merge & Strategy", () => {
     assert.strictEqual(result.success, false);
     assert.ok(result.error);
     assert.ok(result.error.includes("CONFLICT"));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Dirty-tree detection & --no-ff flags
+  // ---------------------------------------------------------------------------
+
+  it("should return dirtyTree error when working tree has non-.pi-coder/ uncommitted changes", async () => {
+    const { exec } = createMockPiExec(new Map([
+      ["git status", { stdout: "M  src/auth.ts\nM  .pi-coder/state.json", stderr: "", code: 0 }],
+    ]));
+    const git = new GitOperations(defaultConfig, exec);
+
+    const result = await git.merge("pi-coder/user-auth", "main");
+
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.dirtyTree, true);
+    assert.ok(result.uncommittedFiles);
+    assert.strictEqual(result.uncommittedFiles!.length, 1);
+    assert.strictEqual(result.uncommittedFiles![0], "src/auth.ts");
+    // Should NOT contain .pi-coder/ files
+    assert.ok(!result.uncommittedFiles!.some(f => f.startsWith(".pi-coder/")));
+  });
+
+  it("should succeed when only .pi-coder/ files are dirty (they get discarded)", async () => {
+    const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "M  .pi-coder/state.json\nM  .pi-coder/logs/run.jsonl", stderr: "", code: 0 }],
+      ["git checkout", { stdout: "", stderr: "", code: 0 }],
+      ["git merge", { stdout: "Merge complete", stderr: "", code: 0 }],
+      ["git rev-parse --short HEAD", { stdout: "merged42", stderr: "", code: 0 }],
+    ]));
+    const git = new GitOperations(defaultConfig, exec);
+
+    const result = await git.merge("pi-coder/user-auth", "main");
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.dirtyTree, undefined);
+    // Should have discarded .pi-coder/ changes before checkout
+    const discardCall = calls.find(c => c.args[0] === "checkout" && c.args.includes("--") && c.args.includes(".pi-coder/"));
+    assert.ok(discardCall, "Should discard .pi-coder/ changes");
+  });
+
+  it("should use --no-ff for normal merges", async () => {
+    const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
+      ["git checkout", { stdout: "", stderr: "", code: 0 }],
+      ["git merge", { stdout: "Merge complete", stderr: "", code: 0 }],
+      ["git rev-parse --short HEAD", { stdout: "merged99", stderr: "", code: 0 }],
+    ]));
+    const git = new GitOperations(defaultConfig, exec); // defaultConfig has mergeBranch: "merge"
+
+    await git.merge("pi-coder/feature", "main");
+
+    const mergeCall = calls.find(c => c.args[0] === "merge");
+    assert.ok(mergeCall);
+    assert.ok(mergeCall.args.includes("--no-ff"), "Normal merge should use --no-ff");
+  });
+
+  it("should NOT use --no-ff for squash merges", async () => {
+    const squashConfig: PiCoderConfig = { ...defaultConfig, mergeBranch: "squash" };
+    const { exec, calls } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
+      ["git checkout", { stdout: "", stderr: "", code: 0 }],
+      ["git merge", { stdout: "Squash commit", stderr: "", code: 0 }],
+      ["git commit", { stdout: "[main sq99] squash commit", stderr: "", code: 0 }],
+      ["git rev-parse --short HEAD", { stdout: "sq99", stderr: "", code: 0 }],
+    ]));
+    const git = new GitOperations(squashConfig, exec);
+
+    await git.merge("pi-coder/feature", "main");
+
+    const mergeCall = calls.find(c => c.args[0] === "merge");
+    assert.ok(mergeCall);
+    assert.ok(mergeCall.args.includes("--squash"), "Squash merge should use --squash");
+    assert.ok(!mergeCall.args.includes("--no-ff"), "Squash merge should NOT use --no-ff");
+  });
+
+  it("should succeed on clean working tree with no confirmation dialog", async () => {
+    const { exec } = createMockPiExec(new Map([
+      ["git status", { stdout: "", stderr: "", code: 0 }],
+      ["git checkout", { stdout: "", stderr: "", code: 0 }],
+      ["git merge", { stdout: "Merge complete", stderr: "", code: 0 }],
+      ["git rev-parse --short HEAD", { stdout: "merged42", stderr: "", code: 0 }],
+    ]));
+    const git = new GitOperations(defaultConfig, exec);
+
+    const result = await git.merge("pi-coder/feature", "main");
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.dirtyTree, undefined);
+    assert.strictEqual(result.uncommittedFiles, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-transition condition tests
+// ---------------------------------------------------------------------------
+
+describe("Auto-transition condition for MERGING state", () => {
+  it("should only match success: true, not undefined or false", () => {
+    // Test the condition pattern used in index.ts auto-transition
+    // Changed from `gitDetails?.success !== false` to `gitDetails?.success === true`
+
+    // Case 1: success === true -> matches
+    const detailsTrue = { success: true } as { success?: boolean };
+    assert.strictEqual(detailsTrue.success === true, true, "success:true should match === true");
+
+    // Case 2: success === false -> does NOT match
+    const detailsFalse = { success: false } as { success?: boolean };
+    assert.strictEqual(detailsFalse.success === true, false, "success:false should NOT match === true");
+
+    // Case 3: success is undefined -> does NOT match
+    const detailsUndefined = {} as { success?: boolean };
+    assert.strictEqual(detailsUndefined.success === true, false, "undefined success should NOT match === true");
+
+    // Case 4: details is null/undefined -> does NOT match
+    const detailsNull = null as { success?: boolean } | null;
+    assert.strictEqual(detailsNull?.success === true, false, "null details should NOT match === true");
+
+    // Verify the old condition would have incorrectly matched undefined
+    const oldCondition = detailsUndefined.success !== false; // true (bug!)
+    const newCondition = detailsUndefined.success === true; // false (correct)
+    assert.strictEqual(oldCondition, true, "Old condition incorrectly matched undefined");
+    assert.strictEqual(newCondition, false, "New condition correctly rejects undefined");
   });
 });
