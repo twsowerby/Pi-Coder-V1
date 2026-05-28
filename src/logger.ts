@@ -44,6 +44,7 @@ export type LogEventType =
   | "subagent_control"
   | "mode_switch"
   | "prompt_size"
+  | "spec_approval"
   | "skill_read"
   | "tool_call";
 
@@ -74,6 +75,7 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   prompt_size: "standard",
   skill_read: "standard",
   tool_call: "standard",
+  spec_approval: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

@@ -2016,8 +2016,52 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     }
 
     // Evidence: interview tool completion in SPEC_WORK → spec_user_approved
+    // Only set when the user actually approved the spec:
+    // 1. Interview status must be "completed" (not cancelled/timeout/aborted)
+    // 2. ALL single-choice responses must have an option containing "Approve" (case-insensitive)
+    // If any response indicates rejection, spec_user_approved is NOT set and a steer
+    // message tells the orchestrator to review feedback and revise.
     if ((piCoderMode === "tdd" || piCoderMode === "light") && toolName === "interview" && currentState === "SPEC_WORK") {
-      stateMachine!.setEvidence("spec_user_approved");
+      const interviewDetails = details as { status?: string; responses?: Array<{ id?: string; value?: unknown }> } | undefined;
+
+      if (interviewDetails?.status === "completed") {
+        // Check all single-choice responses for approval
+        // Single-choice responses have value: { option: string; note?: string }
+        const responses = interviewDetails.responses ?? [];
+        const singleChoiceResponses = responses.filter((r) => {
+          if (!r.value || typeof r.value !== "object") return false;
+          const val = r.value as Record<string, unknown>;
+          return "option" in val && typeof val.option === "string";
+        });
+
+        const allApproved = singleChoiceResponses.length > 0 && singleChoiceResponses.every((r) => {
+          const choice = r.value as { option: string; note?: string };
+          return choice.option.toLowerCase().includes("approve");
+        });
+
+        if (allApproved) {
+          stateMachine!.setEvidence("spec_user_approved");
+          logEvent("spec_approval", { status: "approved", responseCount: responses.length });
+        } else {
+          // User rejected or requested changes for at least one question
+          logEvent("spec_approval", { status: "rejected", responseCount: responses.length });
+          // Append steer message telling orchestrator to revise
+          const rejectionSteer = "\n\n⚠️ Spec not approved — the user requested changes. Review the interview feedback and revise the spec. Re-run the interview after making changes.";
+          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+            const textBlock = rawContent[0] as { type: "text"; text: string };
+            textBlock.text += rejectionSteer;
+          }
+        }
+      } else {
+        // Interview was cancelled, timed out, or aborted
+        const status = interviewDetails?.status ?? "unknown";
+        logEvent("spec_approval", { status: "not_completed", interviewStatus: status });
+        const notCompletedSteer = `\n\n⚠️ Spec approval interview was not completed (status: ${status}). Re-run the interview when ready.`;
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          textBlock.text += notCompletedSteer;
+        }
+      }
     }
 
     // Handle pi_coder_run_tests results
