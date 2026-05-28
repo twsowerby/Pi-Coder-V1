@@ -104,14 +104,16 @@ This persists the spec to `.pi-coder/specs/{id}.md`. **Always save before presen
 
 Then present the spec for approval using `interview` with **multiple focused questions** — not one big dump:
 
-1. **Scope question**: "We're building [title]. Scope: [2-sentence summary]. Does this match your intent?"
-2. **Acceptance criteria question**: "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?"
-3. **Constraints question**: "Constraints: [bulleted list]. Anything missing or wrong?"
-4. **Implementation plan question**: "Implementation plan: [unit names with AC references]. Does this decomposition look right?"
+**Each question MUST be a `single`-choice type with options "Approve" and "Needs changes".** This is required — the extension inspects your interview responses and only sets `spec_user_approved` when ALL questions have "Approve" selected.
 
-If the user rejects or requests changes, refine the spec and resubmit.
+1. **Scope question**: `type: "single"`, options: ["Approve", "Needs changes"]. "We're building [title]. Scope: [2-sentence summary]. Does this match your intent?"
+2. **Acceptance criteria question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?"
+3. **Constraints question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Constraints: [bulleted list]. Anything missing or wrong?"
+4. **Implementation plan question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Implementation plan: [unit names with AC references]. Does this decomposition look right?"
 
-When approved, use `pi_coder_advance_fsm` with targetState `SPEC_APPROVED`.
+If the user selects "Needs changes" for any question, `spec_user_approved` will NOT be set — review the feedback and revise the spec, then re-present for approval.
+
+When all questions are approved, use `pi_coder_advance_fsm` with targetState `SPEC_APPROVED`.
 
 ---
 

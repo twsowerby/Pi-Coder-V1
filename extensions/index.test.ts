@@ -712,3 +712,177 @@ describe("Phase 6: pi_coder_submit_review auto-transition steer", () => {
     assert.strictEqual(shouldAppendSteer, false, "Should NOT append steer when success is false");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 7: Interview Handler — Spec Approval
+// ---------------------------------------------------------------------------
+
+describe("Phase 7: Interview Handler — Spec Approval", () => {
+  // Helper: simulate the interview handler's behavior from tool_result.
+  // Mirrors the logic in extensions/index.ts under:
+  //   toolName === "interview" && currentState === "SPEC_WORK"
+  function simulateInterviewHandler(
+    interviewDetails: { status?: string; responses?: Array<{ id?: string; value?: unknown }> },
+    rawContent: Array<{ type: "text"; text: string }>,
+  ): { evidenceSet: boolean; steerAppended: string | undefined } {
+    let evidenceSet = false;
+    let steerAppended: string | undefined;
+
+    if (interviewDetails.status === "completed") {
+      const responses = interviewDetails.responses ?? [];
+      const singleChoiceResponses = responses.filter(
+        (r) => r.value && typeof r.value === "object" && "option" in (r.value as Record<string, unknown>),
+      );
+
+      const allApproved = singleChoiceResponses.length > 0 && singleChoiceResponses.every((r) => {
+        const choice = r.value as { option: string; note?: string };
+        return choice.option.toLowerCase().includes("approve");
+      });
+
+      if (allApproved) {
+        evidenceSet = true;
+      } else {
+        const rejectionSteer = "\n\n⚠️ Spec not approved — the user requested changes. Review the interview feedback and revise the spec. Re-run the interview after making changes.";
+        steerAppended = rejectionSteer;
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          rawContent[0].text += rejectionSteer;
+        }
+      }
+    } else {
+      const status = interviewDetails.status ?? "unknown";
+      const notCompletedSteer = `\n\n⚠️ Spec approval interview was not completed (status: ${status}). Re-run the interview when ready.`;
+      steerAppended = notCompletedSteer;
+      if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+        rawContent[0].text += notCompletedSteer;
+      }
+    }
+
+    return { evidenceSet, steerAppended };
+  }
+
+  it("all questions approved — sets spec_user_approved, no rejection steer", () => {
+    const rawContent: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: "Interview completed." },
+    ];
+
+    const result = simulateInterviewHandler(
+      {
+        status: "completed",
+        responses: [
+          { id: "q1", value: { option: "Approve spec" } },
+          { id: "q2", value: { option: "Approve spec" } },
+          { id: "q3", value: { option: "Approve spec" } },
+        ],
+      },
+      rawContent,
+    );
+
+    assert.strictEqual(result.evidenceSet, true, "Should set spec_user_approved");
+    assert.strictEqual(result.steerAppended, undefined, "Should NOT append rejection steer");
+    assert.ok(!rawContent[0].text.includes("⚠️"), "rawContent should not contain steer markers");
+  });
+
+  it("one question rejected — does NOT set spec_user_approved, rejection steer appended", () => {
+    const rawContent: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: "Interview completed." },
+    ];
+
+    const result = simulateInterviewHandler(
+      {
+        status: "completed",
+        responses: [
+          { id: "q1", value: { option: "Approve" } },
+          { id: "q2", value: { option: "Needs changes" } },
+          { id: "q3", value: { option: "Approve" } },
+        ],
+      },
+      rawContent,
+    );
+
+    assert.strictEqual(result.evidenceSet, false, "Should NOT set spec_user_approved");
+    assert.ok(result.steerAppended?.includes("Spec not approved"), "Should append rejection steer");
+    assert.ok(rawContent[0].text.includes("⚠️"), "rawContent should contain steer marker");
+    assert.ok(rawContent[0].text.includes("requested changes"), "Steer should mention requested changes");
+  });
+
+  it("cancelled interview — does NOT set spec_user_approved, not-completed steer appended", () => {
+    const rawContent: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: "Interview cancelled." },
+    ];
+
+    const result = simulateInterviewHandler(
+      {
+        status: "cancelled",
+        responses: [],
+      },
+      rawContent,
+    );
+
+    assert.strictEqual(result.evidenceSet, false, "Should NOT set spec_user_approved");
+    assert.ok(result.steerAppended?.includes("not completed"), "Should append not-completed steer");
+    assert.ok(rawContent[0].text.includes("cancelled"), "Steer should mention cancelled status");
+  });
+
+  it("timeout interview — does NOT set spec_user_approved, not-completed steer appended", () => {
+    const rawContent: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: "Interview timed out." },
+    ];
+
+    const result = simulateInterviewHandler(
+      {
+        status: "timeout",
+        responses: [],
+      },
+      rawContent,
+    );
+
+    assert.strictEqual(result.evidenceSet, false, "Should NOT set spec_user_approved");
+    assert.ok(result.steerAppended?.includes("not completed"), "Should append not-completed steer");
+    assert.ok(rawContent[0].text.includes("timeout"), "Steer should mention timeout status");
+  });
+
+  it("mixed question types — only single-choice responses checked, spec_user_approved set if all single-choice approved", () => {
+    const rawContent: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: "Interview completed." },
+    ];
+
+    const result = simulateInterviewHandler(
+      {
+        status: "completed",
+        responses: [
+          // Single-choice with "Approve" — should be checked
+          { id: "q1", value: { option: "Approve spec" } },
+          // Text response — should be ignored (not single-choice)
+          { id: "q2", value: "I like the approach overall but have minor concerns" },
+          // Single-choice with "Approve" — should be checked
+          { id: "q3", value: { option: "Approve spec" } },
+        ],
+      },
+      rawContent,
+    );
+
+    assert.strictEqual(result.evidenceSet, true, "Should set spec_user_approved when all single-choice approved");
+    assert.strictEqual(result.steerAppended, undefined, "Should NOT append rejection steer");
+  });
+
+  it("mixed question types with one single-choice rejected — does NOT set spec_user_approved", () => {
+    const rawContent: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: "Interview completed." },
+    ];
+
+    const result = simulateInterviewHandler(
+      {
+        status: "completed",
+        responses: [
+          { id: "q1", value: { option: "Approve" } },
+          { id: "q2", value: "Some text feedback" },
+          { id: "q3", value: { option: "Needs changes" } },
+        ],
+      },
+      rawContent,
+    );
+
+    assert.strictEqual(result.evidenceSet, false, "Should NOT set spec_user_approved when a single-choice is rejected");
+    assert.ok(result.steerAppended?.includes("Spec not approved"), "Should append rejection steer");
+  });
+});
