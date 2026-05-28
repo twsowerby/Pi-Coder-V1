@@ -128,9 +128,9 @@ When your FSM is in REVIEWING (all implementation units complete):
 
    - **✅ Approved** → The auto-transition handler advances to APPROVED. Proceed to Final Approval.
    - **⚠️ Needs Changes** / **❌ Needs Changes** → The auto-transition handler advances to NEEDS_CHANGES. Both ⚠️ and ❌ map to the same `needs_changes` FSM state — the FSM does not distinguish severity.
-     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): The `non_functional_classified` evidence flag was already set by the auto-transition. Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING` — the evidence gate is already satisfied. Loop count increments.
+     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING`. In TDD mode, the `non_functional_classified` evidence flag was already set by the auto-transition — the evidence gate is already satisfied. In Light mode, there is no evidence gate. Loop count increments.
      - **Functional fix** (production code changes): Advance to the implementation state (TDD_RED_WRITE or IMPLEMENTING) via `pi_coder_advance_fsm`. A full implementation cycle is needed. Loop count increments.
-     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes, the evidence flags may not be set. For non-functional fixes, pass `fixType="non-functional"` to `pi_coder_advance_fsm` — this manually sets the `non_functional_classified` evidence flag before transitioning. For approved reviews, just call `pi_coder_advance_fsm APPROVED` — the `review_approved` evidence gate is satisfied automatically. For functional fixes, no evidence is required for the transition to IMPLEMENTING/TDD_RED_WRITE.
+     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes (and instead see "⚠️ AUTO-TRANSITION FAILED"), read the review output yourself and manually advance with `pi_coder_advance_fsm` to APPROVED or NEEDS_CHANGES based on your reading. For approved reviews, just call `pi_coder_advance_fsm APPROVED` — the `review_approved` evidence gate is satisfied automatically. In TDD mode, for non-functional fixes, pass `fixType="non-functional"` to `pi_coder_advance_fsm` — this manually sets the `non_functional_classified` evidence flag before transitioning. For functional fixes, no evidence is required for the transition to IMPLEMENTING/TDD_RED_WRITE.
 
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec.
 
@@ -148,7 +148,7 @@ When your FSM is in APPROVED:
    - Review verdict
    - Any deferred items
    - Knowledge learnings discovered during the cycle
-2. If the user approves, use `pi_coder_advance_fsm` to advance through FINAL_APPROVAL → MERGING → COMPLETE
+2. If the user approves, use `pi_coder_advance_fsm` to advance to MERGING (direct path — the interview IS the multi-point approval) or through FINAL_APPROVAL → MERGING → COMPLETE
 3. If the user rejects, offer a rollback — call `pi_coder_git` with action `rollback` using the stored pre-implementation ref
 
 When in MERGING:
