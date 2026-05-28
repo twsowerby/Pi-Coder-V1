@@ -21,9 +21,6 @@ function forceTransition(sm: LightStateMachine, to: LightFSMState): void {
     sm.setEvidence("spec_saved");
     sm.setEvidence("spec_user_approved");
   }
-  if (from === "NEEDS_CHANGES" && to === "REVIEWING") {
-    sm.setEvidence("non_functional_classified");
-  }
   if (from === "REVIEWING" && to === "APPROVED") {
     sm.setEvidence("review_approved");
   }
@@ -50,6 +47,7 @@ describe("LightStateMachine: State & Transition Table", () => {
       { from: "NEEDS_CHANGES", to: "IMPLEMENTING", event: "reimplement" },
       { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
       { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
+      { from: "APPROVED", to: "MERGING", event: "merge_approved" },
       { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
       { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
     ];
@@ -111,6 +109,15 @@ describe("LightStateMachine: State & Transition Table", () => {
       walkToState(sm, "IMPLEMENTING");
       const valid = sm.getValidTransitions();
       assert.ok(valid.includes("REVIEWING"), "Should include REVIEWING");
+      assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
+    });
+
+    it("should list MERGING from APPROVED (direct approval path)", () => {
+      const sm = new LightStateMachine(makeConfig());
+      walkToState(sm, "APPROVED");
+      const valid = sm.getValidTransitions();
+      assert.ok(valid.includes("MERGING"), "Should include MERGING (direct approval path)");
+      assert.ok(valid.includes("FINAL_APPROVAL"), "Should include FINAL_APPROVAL (step-by-step path)");
       assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
     });
   });
@@ -634,24 +641,12 @@ describe("LightStateMachine: Evidence & Transition Guards", () => {
     assert.strictEqual(sm.currentState, "SPEC_APPROVED");
   });
 
-  it("NEEDS_CHANGES → REVIEWING requires non_functional_classified evidence", () => {
+  it("NEEDS_CHANGES → REVIEWING requires no evidence in Light mode (no RED/GREEN cycle to bypass)", () => {
     const sm = new LightStateMachine(makeConfig());
     walkToState(sm, "NEEDS_CHANGES");
-
-    // Without evidence — guard should block
+    // No evidence needed — Light mode has no TDD cycle being skipped
     const result = sm.transition("REVIEWING");
-    assert.ok(result !== undefined, "Should return guard error");
-    assert.ok("missingEvidence" in result!);
-    assert.ok((result as any).missingEvidence.includes("non_functional_classified"));
-    assert.strictEqual(sm.currentState, "NEEDS_CHANGES", "State should not have changed");
-  });
-
-  it("NEEDS_CHANGES → REVIEWING succeeds with non_functional_classified evidence", () => {
-    const sm = new LightStateMachine(makeConfig());
-    walkToState(sm, "NEEDS_CHANGES");
-    sm.setEvidence("non_functional_classified");
-    const result = sm.transition("REVIEWING");
-    assert.strictEqual(result, undefined, "Transition should succeed");
+    assert.strictEqual(result, undefined, "Should succeed without evidence in Light mode");
     assert.strictEqual(sm.currentState, "REVIEWING");
   });
 

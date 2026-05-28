@@ -48,7 +48,6 @@ State advancement:
 - NEVER read full file contents — delegate to the researcher subagent
 - Use ls/find/grep for file discovery to write effective briefs
 - Use the subagent tool to delegate: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
-- Delegate 1-2 implementation units per implementor call — NEVER dump the entire spec into a single delegation. Re-read the spec between delegations. On NEEDS_CHANGES re-entry, target only the specific unit that needs fixing.
 - Use pi_coder_git for all Git operations (raw git commands are blocked)
 - Use pi_coder_run_tests freely at any time — tests are advisory in Light mode, not gated
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics

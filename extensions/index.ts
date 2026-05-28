@@ -1857,7 +1857,12 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // The reviewer must have classified the fix as non-functional before the
           // orchestrator can take the shortcut (skip RED/GREEN). This prevents the
           // orchestrator from self-authorizing untested code changes.
+          //
+          // TDD mode ONLY: In Light mode, there is no RED/GREEN cycle being bypassed,
+          // so the non_functional_classified evidence gate doesn't apply. The implementor
+          // can be freely delegated in NEEDS_CHANGES regardless of fix classification.
           if (
+            piCoderMode === "tdd" &&
             targetAgent === "pi-coder.implementor" &&
             stateMachine!.currentState === "NEEDS_CHANGES" &&
             !stateMachine!.hasEvidence("non_functional_classified")
@@ -1874,7 +1879,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
                 `🛡️ Cannot delegate implementor in NEEDS_CHANGES without reviewer classification. ` +
                 `The reviewer must classify the fix as non-functional (include 'Fix-Type: non-functional' in its verdict) ` +
                 `before the implementor can be delegated here. ` +
-                `If the fix is functional (changes production behavior), advance to ${piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE"} for a full implementation cycle instead. ` +
+                `If the fix is functional (changes production behavior), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead. ` +
                 `Do not retry this exact call.`,
             };
           }
@@ -2136,9 +2141,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Handle pi_coder_git results (auto-transition for checkpoint & merge)"
     if (toolName === "pi_coder_git" && currentState === "GIT_CHECKPOINT") {
-      // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to next state
+      // If git checkpoint succeeded in GIT_CHECKPOINT, auto-advance to next state.
+      // Only fire on operation === "checkpoint" — checkout_branch in GIT_CHECKPOINT
+      // should NOT trigger the checkpoint-complete auto-transition.
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
-      if (gitDetails?.success === true) {
+      if (gitDetails?.success === true && gitDetails?.operation === "checkpoint") {
         const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
         stateMachine!.transition(nextState);
         logEvent("fsm_transition", {
@@ -2292,16 +2299,20 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
           // If reviewer classified fix as non-functional, set evidence
           // This gates the NEEDS_CHANGES → REVIEWING path and implementor delegation
-          if (reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
+          // TDD mode ONLY: Light mode has no RED/GREEN cycle to bypass, so the
+          // non_functional_classified evidence is not needed.
+          if (piCoderMode === "tdd" && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
             stateMachine!.setEvidence("non_functional_classified");
           }
 
           const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
           const reviewSteer = reviewVerdict.verdict === "approved"
-            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
-            : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
-              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
-              : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
+            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off)."
+            : piCoderMode === "light" && reviewVerdict.verdict === "needs_changes"
+              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}. You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
+              : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
+                ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
+                : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
 
           // Append to tool result content
           if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
@@ -2311,13 +2322,23 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             (rawContent[0] as { type: "text"; text: string }).text = appendedText;
           }
         } else {
-          // Verdict extraction returned null — log for debugging
+          // Verdict extraction returned null — log for debugging AND notify orchestrator
           logEvent("verdict_extraction_failed", {
             fsmState: stateMachine?.currentState ?? "N/A",
             mode: piCoderMode,
             textLength: typeof details === "string" ? details.length : 0,
             firstHundredChars: (typeof details === "string" ? details : "").slice(0, 100).replace(/\n/g, "\\n"),
           });
+
+          // Append fallback steer message so the orchestrator knows auto-transition
+          // didn't fire and must manually advance based on its reading of the review
+          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+            const textBlock = rawContent[0] as { type: "text"; text: string };
+            const appendedText = textBlock.text +
+              "\n\n⚠️ AUTO-TRANSITION FAILED: Could not extract review verdict from subagent output. " +
+              "Read the review above and manually advance with pi_coder_advance_fsm to APPROVED or NEEDS_CHANGES based on your reading.";
+            (rawContent[0] as { type: "text"; text: string }).text = appendedText;
+          }
         }
       }
 

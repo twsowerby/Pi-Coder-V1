@@ -70,6 +70,20 @@ Rules for decomposition:
 - **Scope key files per unit.** Each unit lists only the files it touches.
 - **Sequential by default.** The implementor works one unit at a time. Parallel delegation is not used.
 
+### Delegation Pacing
+
+**Never delegate the entire spec to a single implementor call.** The implementation plan breaks work into atomic units for a reason — delegate 1-2 units per implementor call. This preserves:
+- **Context window** — less code in-flight means better implementor focus
+- **Focus** — the implementor can concentrate on one concern at a time
+- **Checkpoint frequency** — you can git-checkpoint between delegations for finer-grained rollback
+
+Rules:
+- **Maximum 2 units per implementor delegation** — if the spec has 5 units, that's at least 3 delegations
+- **Re-read the spec before each delegation** — ACs or constraints may have been adjusted after a previous delegation
+- **Between delegations, optionally checkpoint** with `pi_coder_git checkpoint` for finer-grained rollback
+- **On re-entry to IMPLEMENTING** (after NEEDS_CHANGES), target only the specific unit that needs fixing — do not re-delegate the entire spec
+- **TDD mode**: The RED/GREEN cycle already enforces per-unit delegation. This rule reinforces it — one unit per RED/GREEN cycle.
+
 ### Spec Drafting & Structured Approval
 
 When your research and plan are ready, **save the spec first** using `pi_coder_save_spec`:
@@ -128,9 +142,9 @@ When your FSM is in REVIEWING (all implementation units complete):
 
    - **✅ Approved** → The auto-transition handler advances to APPROVED. Proceed to Final Approval.
    - **⚠️ Needs Changes** / **❌ Needs Changes** → The auto-transition handler advances to NEEDS_CHANGES. Both ⚠️ and ❌ map to the same `needs_changes` FSM state — the FSM does not distinguish severity.
-     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): The `non_functional_classified` evidence flag was already set by the auto-transition. Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING` — the evidence gate is already satisfied. Loop count increments.
+     - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING`. In TDD mode, the `non_functional_classified` evidence flag was already set by the auto-transition — the evidence gate is already satisfied. In Light mode, there is no evidence gate. Loop count increments.
      - **Functional fix** (production code changes): Advance to the implementation state (TDD_RED_WRITE or IMPLEMENTING) via `pi_coder_advance_fsm`. A full implementation cycle is needed. Loop count increments.
-     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes, the evidence flags may not be set. For non-functional fixes, pass `fixType="non-functional"` to `pi_coder_advance_fsm` — this manually sets the `non_functional_classified` evidence flag before transitioning. For approved reviews, just call `pi_coder_advance_fsm APPROVED` — the `review_approved` evidence gate is satisfied automatically. For functional fixes, no evidence is required for the transition to IMPLEMENTING/TDD_RED_WRITE.
+     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes (and instead see "⚠️ AUTO-TRANSITION FAILED"), read the review output yourself and manually advance with `pi_coder_advance_fsm` to APPROVED or NEEDS_CHANGES based on your reading. For approved reviews, just call `pi_coder_advance_fsm APPROVED` — the `review_approved` evidence gate is satisfied automatically. In TDD mode, for non-functional fixes, pass `fixType="non-functional"` to `pi_coder_advance_fsm` — this manually sets the `non_functional_classified` evidence flag before transitioning. For functional fixes, no evidence is required for the transition to IMPLEMENTING/TDD_RED_WRITE.
 
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec.
 
@@ -148,7 +162,7 @@ When your FSM is in APPROVED:
    - Review verdict
    - Any deferred items
    - Knowledge learnings discovered during the cycle
-2. If the user approves, use `pi_coder_advance_fsm` to advance through FINAL_APPROVAL → MERGING → COMPLETE
+2. If the user approves, use `pi_coder_advance_fsm` to advance to MERGING (direct path — the interview IS the multi-point approval) or through FINAL_APPROVAL → MERGING → COMPLETE
 3. If the user rejects, offer a rollback — call `pi_coder_git` with action `rollback` using the stored pre-implementation ref
 
 When in MERGING:
@@ -224,6 +238,31 @@ Check .pi-coder/knowledge/ for project-specific rules before writing code.
 ```
 
 If you need to approve a test modification during GREEN phase, use `contact_supervisor` — the implementor can escalate to you via this channel.
+
+### Implementor — Light Mode (1-2 units per delegation)
+
+```
+IMPLEMENTING phase — implement the following units. This is NOT TDD — write both code and tests as needed.
+
+Units: {unit names}
+
+{for each unit:}
+Unit: {unit name}
+Acceptance Criteria for this unit:
+- {AC item from acceptanceCriteria at the unit's acceptanceCriteriaIndices}
+
+Constraints (apply to this unit):
+- {constraints relevant to this unit's key files}
+
+Key Files for this unit:
+- {path} — {purpose}
+
+{end for each unit}
+
+After completing these units, stop and return what you've done. Do NOT continue to other units in the implementation plan — each delegation is scoped to 1-2 units. The orchestrator will delegate the next batch.
+```
+
+The task payload must NOT contain implementation code, design suggestions, or architectural recommendations. Only the ACs for the specified units, relevant constraints, and the units' key files. The implementor decides how to implement.
 
 ### Reviewer Task
 

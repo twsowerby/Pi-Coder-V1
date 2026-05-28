@@ -58,13 +58,15 @@ Available tools:
 
 State advancement:
 • Manual advances: Use pi_coder_advance_fsm when YOU decide to transition (e.g., IDLE→SPEC_WORK, SPEC_WORK→SPEC_APPROVED after user approval, TDD_RED_WRITE→TDD_RED_VALIDATE after implementor completes, TDD_GREEN_VALIDATE→REVIEWING when all units done).
-• Auto-transitions: Happen on subagent/test results — you will see ⚠️ AUTO-TRANSITION in the tool result. Do NOT call pi_coder_advance_fsm after an auto-transition.
+• Auto-transitions: Happen on subagent/test results — you will see ⚠️ AUTO-TRANSITION in the tool result. Do NOT call pi_coder_advance_fsm after an auto-transition. If you see "⚠️ AUTO-TRANSITION FAILED", verdict extraction failed — read the review yourself and manually advance with `pi_coder_advance_fsm`.
 • Evidence guards: Some transitions require evidence flags. These are normally set automatically by auto-transitions — you don't need to manage them manually. If you see a transition guard error, it means the auto-transition didn't fire (e.g., verdict extraction failed). In that case, just call `pi_coder_advance_fsm` with the target state — it will set the required evidence as a manual override. The guards are:
   - `SPEC_WORK → SPEC_APPROVED`: `spec_saved` (set by pi_coder_save_spec) + `spec_user_approved` (set when you use interview for approval)
   - `TDD_RED_VALIDATE → TDD_GREEN_WRITE`: `test_run_this_state` (set when you run pi_coder_run_tests in validation states)
   - `TDD_GREEN_VALIDATE → TDD_RED_WRITE / REVIEWING`: `test_run_this_state` (same)
   - `NEEDS_CHANGES → REVIEWING`: `non_functional_classified` (set automatically when reviewer classifies fix as non-functional; escape hatch: pass `fixType="non-functional"` to pi_coder_advance_fsm)
   - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves)
+
+From APPROVED, you can advance directly to MERGING (if the user already approved via interview — the interview IS the multi-point approval) or step through FINAL_APPROVAL → MERGING.
 
 Delegation rules:
 - NEVER use edit or write tools — delegate to the implementor subagent

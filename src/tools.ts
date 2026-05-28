@@ -73,7 +73,7 @@ const UPSERT_KNOWLEDGE_PARAMS = Type.Object({
 const ADVANCE_FSM_PARAMS = Type.Object({
   targetState: Type.String({ description: "The FSM state to advance to (e.g., SPEC_WORK, SPEC_APPROVED, GIT_CHECKPOINT, IDLE)" }),
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
-  fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. Required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path). The reviewer classifies each fix as functional or non-functional in its output." })),
+  fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
 });
 
 // ---------------------------------------------------------------------------
@@ -144,14 +144,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           if (!config.createBranch) {
             return {
               content: [{ type: "text" as const, text: "Branch creation is disabled in this project's config (createBranch: false). Work will happen on the current branch. Use pi_coder_git checkpoint to save progress instead." }],
-              details: { success: false, error: "Branch creation disabled (createBranch: false)" },
+              details: { success: false, error: "Branch creation disabled (createBranch: false)", operation: action },
               isError: true,
             };
           }
           if (!branch) {
             return {
               content: [{ type: "text" as const, text: "Error: branch parameter is required for checkout_branch action." }],
-              details: { success: false, error: "branch parameter is required for checkout_branch" },
+              details: { success: false, error: "branch parameter is required for checkout_branch", operation: action },
               isError: true,
             };
           }
@@ -162,7 +162,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           if (!activeSpecIdRef.current && deps.piCoderMode.current === "tdd") {
             return {
               content: [{ type: "text" as const, text: "Error: Cannot checkpoint without an active spec. Save the spec with pi_coder_save_spec first." }],
-              details: { success: false, error: "No active spec ID — save spec before checkpointing" },
+              details: { success: false, error: "No active spec ID — save spec before checkpointing", operation: action },
               isError: true,
             };
           }
@@ -181,7 +181,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           if (!ref) {
             return {
               content: [{ type: "text" as const, text: "Error: No git ref stored for rollback. Was a checkpoint created?" }],
-              details: { success: false, error: "No git ref stored for rollback" },
+              details: { success: false, error: "No git ref stored for rollback", operation: action },
               isError: true,
             };
           }
@@ -203,7 +203,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             const branchName = currentBranchResult.branch ?? `${config.branchPrefix}${activeSpecIdRef.current ?? "unknown"}`;
             return {
               content: [{ type: "text" as const, text: `Merge is disabled in this project's config (mergeBranch: false). The work is on branch "${branchName}". Merge or create a PR manually when ready.` }],
-              details: { success: true, operation: "merge-skipped", branch: branchName },
+              details: { success: true, operation: action, branch: branchName },
             };
           }
           const currentBranchResult = await gitOps.getCurrentBranch();
@@ -224,7 +224,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
               if (!commitResult.success) {
                 return {
                   content: [{ type: "text" as const, text: `Auto-commit failed: ${commitResult.error}` }],
-                  details: { success: false, error: "auto_commit_failed" },
+                  details: { success: false, error: "auto_commit_failed", operation: action },
                   isError: true,
                 };
               }
@@ -234,7 +234,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
               // User rejected auto-commit — return error with actionable guidance
               return {
                 content: [{ type: "text" as const, text: "Merge cancelled — uncommitted changes detected and auto-commit was not approved. Commit or stash your changes manually, then retry the merge." }],
-                details: { success: false, error: "uncommitted_changes_rejected" },
+                details: { success: false, error: "uncommitted_changes_rejected", operation: action },
                 isError: true,
               };
             }
@@ -244,7 +244,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         default: {
           return {
             content: [{ type: "text" as const, text: `Error: Unknown action: ${action}` }],
-            details: { success: false, error: `Unknown action: ${action}` },
+            details: { success: false, error: `Unknown action: ${action}`, operation: action },
             isError: true,
           };
         }
@@ -257,7 +257,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
       return {
         content: [{ type: "text" as const, text }],
-        details: result,
+        details: { ...result, operation: action },
         isError,
       };
     },
@@ -600,8 +600,10 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed. Advance to the next implementation unit's RED phase.",
       "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
       "Any state → IDLE: Abort the current cycle. Use this to restart or unwind.",
-      "NEEDS_CHANGES → TDD_RED_WRITE: Review requires functional fixes. Start a new RED/GREEN cycle.",
-      "NEEDS_CHANGES → REVIEWING: Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
+      "NEEDS_CHANGES → TDD_RED_WRITE (TDD mode): Review requires functional fixes. Start a new RED/GREEN cycle.",
+      "NEEDS_CHANGES → REVIEWING (TDD mode): Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
+      "NEEDS_CHANGES → IMPLEMENTING (Light mode): Review requires functional fixes.",
+      "NEEDS_CHANGES → REVIEWING (Light mode): Review requires fixes. No evidence gate in Light mode — advance directly after delegating implementor.",
       "REVIEWING → APPROVED: Normally auto-transitioned when reviewer approves. If the auto-transition didn't fire, you can advance manually — the evidence gate is satisfied automatically.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
@@ -621,11 +623,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // If a guard fails, it returns a TransitionGuardError.
       //
       // Exception: fixType parameter can set the non_functional_classified
-      // evidence flag for the NEEDS_CHANGES → REVIEWING transition.
+      // evidence flag for the TDD-mode NEEDS_CHANGES → REVIEWING transition.
       // This serves as a manual escape hatch when the auto-transition
       // handler didn't fire (e.g., review output saved to artifact file
       // rather than inline, so extractReviewVerdict couldn't parse it).
-      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING") {
+      // Light mode does not have this gate — fixType is ignored in Light mode.
+      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && deps.piCoderMode.current === "tdd") {
         smRef.current.setEvidence("non_functional_classified");
       }
 
@@ -692,8 +695,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           TDD_GREEN_VALIDATE: "Run tests with pi_coder_run_tests. GREEN validation: expect tests to PASS.",
           IMPLEMENTING: "Delegate to pi-coder.implementor to implement the spec. Run tests freely with pi_coder_run_tests to check progress.",
           REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
-          APPROVED: "Advance to FINAL_APPROVAL for user sign-off.",
-          NEEDS_CHANGES: "For non-functional fixes: delegate implementor, then pi_coder_advance_fsm REVIEWING (evidence gate already satisfied if auto-transition fired; otherwise pass fixType=\"non-functional\"). For functional fixes: pi_coder_advance_fsm to TDD_RED_WRITE (TDD) or IMPLEMENTING (Light).",
+          APPROVED: "Advance to MERGING (if user already approved via interview) or FINAL_APPROVAL (for separate sign-off).",
+          NEEDS_CHANGES: "Delegate implementor for fix, then pi_coder_advance_fsm REVIEWING. Or pi_coder_advance_fsm to TDD_RED_WRITE (TDD) or IMPLEMENTING (Light) for full reimplementation. In TDD mode, if advancing to REVIEWING without evidence, pass fixType=\"non-functional\".",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
           MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",

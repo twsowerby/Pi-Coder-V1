@@ -340,7 +340,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       lines.push("FSM States & Transitions (Light Mode — no TDD phases):");
       lines.push("IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →");
       lines.push("IMPLEMENTING → REVIEWING →");
-      lines.push("(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |");
+      lines.push("(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) | (APPROVED → MERGING → COMPLETE) |");
       lines.push("(NEEDS_CHANGES → IMPLEMENTING | REVIEWING)");
       lines.push("");
       lines.push("Manual advances: Use pi_coder_advance_fsm to advance states.");
@@ -358,7 +358,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       lines.push("  (tests pass) REVIEWING | (tests still fail) TDD_GREEN_WRITE | (next unit) TDD_RED_WRITE →");
       lines.push("  (RED tautology: tests pass unexpectedly)");
       lines.push("    → TDD_GREEN_WRITE (acknowledge tautology) | → BLOCKED (genuinely problematic)");
-      lines.push("(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |");
+      lines.push("(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) | (APPROVED → MERGING → COMPLETE) |");
       lines.push("(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING)");
       lines.push("");
       lines.push("Manual advances: Use pi_coder_advance_fsm to advance states.");
