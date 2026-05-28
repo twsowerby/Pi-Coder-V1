@@ -49,6 +49,7 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
     { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },
     { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
     { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
+    { from: "APPROVED", to: "MERGING", event: "merge_approved" },
     { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
     { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
   ],

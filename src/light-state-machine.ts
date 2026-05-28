@@ -46,6 +46,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
     // Merge — identical to TDD
     { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
+    { from: "APPROVED", to: "MERGING", event: "merge_approved" },
     { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
     { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
   ],
@@ -63,17 +64,8 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
         "  - spec_user_approved: Get user approval via interview\n" +
         "Both are non-negotiable. Save the spec, then present it for approval.",
     },
-    {
-      from: "NEEDS_CHANGES",
-      to: "REVIEWING",
-      requiredEvidence: ["non_functional_classified"],
-      errorMessage:
-        "Cannot advance to REVIEWING for non-functional fix without reviewer classification. " +
-        "The reviewer must classify the fix type in its verdict. If the fix is non-functional " +
-        "(test cleanup, comments, naming, assertions), the reviewer should include " +
-        "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
-        "changes), advance to IMPLEMENTING for a full implementation cycle instead.",
-    },
+    // IMPLEMENTING → REVIEWING has no evidence gate — no RED/GREEN cycle to bypass in Light mode.
+    // NEEDS_CHANGES → REVIEWING requires no evidence — Light mode has no TDD cycle being skipped.
     {
       from: "REVIEWING",
       to: "APPROVED",
@@ -119,7 +111,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     "intercom", "ls", "find", "grep", "pi_coder_advance_fsm",
   ],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified", "review_approved"],
+  persistentEvidence: ["spec_saved", "spec_user_approved", "review_approved"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
@@ -129,7 +121,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     IMPLEMENTING: { shouldNudge: true, expectedAction: "Delegate to pi-coder.implementor", expectedTool: "subagent" },
     REVIEWING: { shouldNudge: true, expectedAction: "Delegate to pi-coder.reviewer", expectedTool: "subagent" },
     APPROVED: { shouldNudge: false, expectedAction: "", expectedTool: "" },
-    NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Delegate implementor for non-functional fix, then advance to REVIEWING; or advance to IMPLEMENTING for functional fix", expectedTool: "subagent" },
+    NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Delegate implementor for fix, then advance to REVIEWING; or advance to IMPLEMENTING for full reimplementation", expectedTool: "subagent" },
     FINAL_APPROVAL: { shouldNudge: false, expectedAction: "", expectedTool: "" },
     MERGING: { shouldNudge: true, expectedAction: "Merge feature branch", expectedTool: "pi_coder_git" },
     COMPLETE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
