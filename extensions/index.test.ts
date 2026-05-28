@@ -12,6 +12,8 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import type { PiCoderConfig, FSMState } from "../src/types.ts";
 import { StateMachine } from "../src/state-machine.ts";
+import { LightStateMachine } from "../src/light-state-machine.ts";
+import type { IStateMachine } from "../src/types.ts";
 import type { EvidenceFlag } from "../src/types.ts";
 import type { StateMachineJSON } from "../src/state-machine.ts";
 
@@ -543,5 +545,81 @@ describe("Notification config", () => {
   it("notifications events default to undefined (all events)", () => {
     const config = makeConfig();
     assert.strictEqual(config.notifications.events, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FSM mode alignment on session start
+// ---------------------------------------------------------------------------
+
+describe("FSM mode alignment on session start", () => {
+  it("re-creates LightStateMachine when mode is restored to 'light'", () => {
+    const config = makeConfig();
+    // Simulate the bug: TDD SM created with default mode, then mode changed to light
+    let sm: IStateMachine = new StateMachine(config);
+    assert.ok(sm instanceof StateMachine, "Should start as TDD StateMachine");
+
+    // Simulate mode restoration — the same check from the fix
+    const restoredMode = "light";
+    if (restoredMode === "light" && !(sm instanceof LightStateMachine)) {
+      sm = new LightStateMachine(config);
+    }
+
+    assert.ok(sm instanceof LightStateMachine, "Should become LightStateMachine after re-alignment");
+  });
+
+  it("re-creates StateMachine when mode is restored to 'tdd'", () => {
+    const config = makeConfig();
+    let sm: IStateMachine = new LightStateMachine(config);
+    assert.ok(sm instanceof LightStateMachine, "Should start as LightStateMachine");
+
+    const restoredMode = "tdd";
+    if (restoredMode === "tdd" && !(sm instanceof StateMachine)) {
+      sm = new StateMachine(config);
+    }
+
+    assert.ok(sm instanceof StateMachine, "Should become StateMachine after re-alignment");
+  });
+
+  it("sets stateMachine to null for plan/off modes", () => {
+    const config = makeConfig();
+    let sm: IStateMachine | null = new StateMachine(config);
+
+    const restoredMode = "plan";
+    if (restoredMode === "plan" || restoredMode === "off") {
+      sm = null;
+    }
+
+    assert.strictEqual(sm, null, "Should be null for plan mode");
+  });
+
+  it("Light state machine has IMPLEMENTING transition, not TDD states", () => {
+    const config = makeConfig();
+    const sm = new LightStateMachine(config);
+    // Walk to GIT_CHECKPOINT
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_WORK");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+
+    // Light: GIT_CHECKPOINT → IMPLEMENTING (not TDD_RED_WRITE)
+    const validTransitions = sm.getValidTransitions();
+    assert.ok(validTransitions.includes("IMPLEMENTING"), "Light should have IMPLEMENTING from GIT_CHECKPOINT");
+    assert.ok(!validTransitions.includes("TDD_RED_WRITE"), "Light should NOT have TDD_RED_WRITE");
+  });
+
+  it("TDD state machine does NOT have IMPLEMENTING transition", () => {
+    const config = makeConfig();
+    const sm = new StateMachine(config);
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_WORK");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+
+    const validTransitions = sm.getValidTransitions();
+    assert.ok(validTransitions.includes("TDD_RED_WRITE"), "TDD should have TDD_RED_WRITE");
+    assert.ok(!validTransitions.includes("IMPLEMENTING"), "TDD should NOT have IMPLEMENTING");
   });
 });

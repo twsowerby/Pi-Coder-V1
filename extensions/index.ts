@@ -1373,6 +1373,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         piCoderMode = savedGlobalState.piCoderActive ? "tdd" : "off";
       }
 
+      // Re-align stateMachine instance with restored mode.
+      // Fix: stateMachine is created at line ~1138 using the default piCoderMode="tdd",
+      // but piCoderMode isn't restored from persistence until above.
+      // Without this re-alignment, a Light mode session gets a TDD StateMachine.
+      if (piCoderMode === "light" && !(stateMachine instanceof LightStateMachine)) {
+        stateMachine = new LightStateMachine(config);
+      } else if (piCoderMode === "tdd" && !(stateMachine instanceof StateMachine)) {
+        stateMachine = new StateMachine(config);
+      } else if (piCoderMode === "plan" || piCoderMode === "off") {
+        stateMachine = null;
+      }
+
       // Restore active spec pointer
       activeSpecId = savedGlobalState.activeSpecId;
 
