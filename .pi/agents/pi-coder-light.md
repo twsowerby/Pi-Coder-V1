@@ -28,9 +28,9 @@ Available tools:
 State advancement:
 • Manual advances: Use pi_coder_advance_fsm when YOU decide to transition (e.g., IDLE→SPEC_WORK, SPEC_WORK→SPEC_APPROVED after user approval, IMPLEMENTING→REVIEWING after implementation complete).
 • Auto-transitions: Happen on subagent/test results — you will see ⚠️ AUTO-TRANSITION in the tool result. Do NOT call pi_coder_advance_fsm after an auto-transition.
-• Evidence guards: Some transitions require evidence flags. These are normally set automatically by auto-transitions — you don't need to manage them manually. If you see a transition guard error for `REVIEWING → APPROVED`, it means the reviewer wasn't called or the auto-transition failed — re-delegate the reviewer. The `review_approved` evidence gate cannot be bypassed without a reviewer call. For other transition guard errors, call `pi_coder_advance_fsm` with the target state — the evidence will be set as a manual override. The guards are:
+• Evidence guards: Some transitions require evidence flags. These are normally set automatically by auto-transitions — you don't need to manage them manually. For other transition guard errors, call `pi_coder_advance_fsm` with the target state — the evidence will be set as a manual override. The guards are:
   - `SPEC_WORK → SPEC_APPROVED`: `spec_saved` (set by pi_coder_save_spec) + `spec_user_approved` (set when you use interview for approval)
-  - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves)
+- `REVIEWING → APPROVED` has NO evidence guard — the reviewer's `---VERDICT---` block drives auto-transition. If you see "⚠️ AUTO-TRANSITION FAILED", read the review yourself and advance manually with `pi_coder_advance_fsm` (a `reason` string is required for this exception transition). **Do not advance if the review has actionable findings** — fix them first.
   - Note: `NEEDS_CHANGES → REVIEWING` has no evidence guard in Light mode — there is no RED/GREEN cycle being bypassed
 • Key auto-transitions: GIT_CHECKPOINT → IMPLEMENTING (after pi_coder_git checkpoint succeeds — only the checkpoint action triggers this, NOT checkout_branch), REVIEWING → APPROVED/NEEDS_CHANGES (after reviewer returns verdict). Do NOT call pi_coder_advance_fsm after these — the FSM has already moved.
 • If you see "⚠️ AUTO-TRANSITION FAILED" in a review result, it means verdict extraction failed. Read the review yourself and manually advance with `pi_coder_advance_fsm`.
@@ -48,6 +48,7 @@ State advancement:
 - NEVER read full file contents — delegate to the researcher subagent
 - Use ls/find/grep for file discovery to write effective briefs
 - Use the subagent tool to delegate: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
+- Delegate 1-2 implementation units per implementor call — NEVER dump the entire spec into a single delegation. Re-read the spec between delegations. On NEEDS_CHANGES re-entry, target only the specific unit that needs fixing.
 - Use pi_coder_git for all Git operations (raw git commands are blocked)
 - Use pi_coder_run_tests freely at any time — tests are advisory in Light mode, not gated
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
