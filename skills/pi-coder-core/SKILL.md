@@ -70,6 +70,20 @@ Rules for decomposition:
 - **Scope key files per unit.** Each unit lists only the files it touches.
 - **Sequential by default.** The implementor works one unit at a time. Parallel delegation is not used.
 
+### Delegation Pacing
+
+**Never delegate the entire spec to a single implementor call.** The implementation plan breaks work into atomic units for a reason — delegate 1-2 units per implementor call. This preserves:
+- **Context window** — less code in-flight means better implementor focus
+- **Focus** — the implementor can concentrate on one concern at a time
+- **Checkpoint frequency** — you can git-checkpoint between delegations for finer-grained rollback
+
+Rules:
+- **Maximum 2 units per implementor delegation** — if the spec has 5 units, that's at least 3 delegations
+- **Re-read the spec before each delegation** — ACs or constraints may have been adjusted after a previous delegation
+- **Between delegations, optionally checkpoint** with `pi_coder_git checkpoint` for finer-grained rollback
+- **On re-entry to IMPLEMENTING** (after NEEDS_CHANGES), target only the specific unit that needs fixing — do not re-delegate the entire spec
+- **TDD mode**: The RED/GREEN cycle already enforces per-unit delegation. This rule reinforces it — one unit per RED/GREEN cycle.
+
 ### Spec Drafting & Structured Approval
 
 When your research and plan are ready, **save the spec first** using `pi_coder_save_spec`:
@@ -224,6 +238,31 @@ Check .pi-coder/knowledge/ for project-specific rules before writing code.
 ```
 
 If you need to approve a test modification during GREEN phase, use `contact_supervisor` — the implementor can escalate to you via this channel.
+
+### Implementor — Light Mode (1-2 units per delegation)
+
+```
+IMPLEMENTING phase — implement the following units. This is NOT TDD — write both code and tests as needed.
+
+Units: {unit names}
+
+{for each unit:}
+Unit: {unit name}
+Acceptance Criteria for this unit:
+- {AC item from acceptanceCriteria at the unit's acceptanceCriteriaIndices}
+
+Constraints (apply to this unit):
+- {constraints relevant to this unit's key files}
+
+Key Files for this unit:
+- {path} — {purpose}
+
+{end for each unit}
+
+After completing these units, stop and return what you've done. Do NOT continue to other units in the implementation plan — each delegation is scoped to 1-2 units. The orchestrator will delegate the next batch.
+```
+
+The task payload must NOT contain implementation code, design suggestions, or architectural recommendations. Only the ACs for the specified units, relevant constraints, and the units' key files. The implementor decides how to implement.
 
 ### Reviewer Task
 

@@ -14,6 +14,8 @@ In Plan mode, you investigate, discuss, and plan — but do NOT implement. There
 **How to work in Plan mode:**
 
 1. **Investigate** — Delegate to `pi-coder.researcher` to explore the codebase, understand patterns, and answer questions
+
+   `ls`, `find`, and `grep` are for **file discovery only** — finding which files exist and where patterns live, so you can point the researcher at the right files. **NEVER use grep/ls/find to actually answer the research question.** If you've identified the relevant files, write the brief and delegate to `pi-coder.researcher`.
 2. **Discuss** — Present findings to the user and discuss tradeoffs and approaches
 3. **Gather requirements** — Use `interview` for structured requirements gathering
 4. **Persist findings** — Use `upsert_knowledge` to save cross-cutting gotchas for later Light/TDD sessions

@@ -75,6 +75,7 @@ Delegation rules:
 - Use the subagent tool to delegate: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
 - Use pi_coder_git for all Git operations (raw git commands are blocked)
 - Use pi_coder_run_tests during TDD validation phases
+- One unit per RED/GREEN cycle — never delegate multiple units at once. If the spec has 5 units, that's 5 separate RED/GREEN cycles.
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
 - Always pass `timeout: {{interviewTimeout}}` to the interview tool to respect configured timeout settings
 
