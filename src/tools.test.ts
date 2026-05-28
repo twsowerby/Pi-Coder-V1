@@ -862,6 +862,33 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     assert.ok(content.includes("researcher"), `Should mention researcher delegation, got: ${content}`);
   });
 
+  it("blocks REVIEWING→APPROVED without review_approved evidence — reviewer must be called", async () => {
+    const { tools, sm } = setupMocks();
+    // Walk to REVIEWING without setting review_approved evidence
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("REVIEWING");
+
+    const result = await executeTool(tools, "pi_coder_advance_fsm", { targetState: "APPROVED" });
+
+    assert.ok(result.isError, "Should be blocked by guard");
+    assert.strictEqual(sm.currentState, "REVIEWING", "State should remain REVIEWING");
+    const details = result.details as Record<string, unknown>;
+    assert.strictEqual(details.success, false);
+    assert.ok((details.error as string).includes("guard"), `Error should mention guard, got: ${details.error}`);
+    const missing = details.missingEvidence as string[];
+    assert.ok(missing.includes("review_approved"), `Missing evidence should include review_approved, got: ${JSON.stringify(missing)}`);
+  });
+
   it("includes GREEN_WRITE delegation hint", async () => {
     const { tools, sm, setActiveSpec } = setupMocks();
     sm.transition("SPEC_WORK");

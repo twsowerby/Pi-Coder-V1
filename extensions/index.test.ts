@@ -84,7 +84,7 @@ describe("Phase 1: Extension Foundation", () => {
     const tools = mod.ORCHESTRATOR_TOOLS;
     assert.deepStrictEqual(tools, [
       "ls", "find", "grep", "subagent",
-      "pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "pi_coder_advance_fsm", "pi_coder_submit_review", "interview", "intercom",
+      "pi_coder_git", "pi_coder_run_tests", "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "pi_coder_advance_fsm", "interview", "intercom",
     ]);
   });
 

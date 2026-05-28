@@ -621,7 +621,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "NEEDS_CHANGES → REVIEWING (TDD mode): Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
       "NEEDS_CHANGES → IMPLEMENTING (Light mode): Review requires functional fixes.",
       "NEEDS_CHANGES → REVIEWING (Light mode): Review requires fixes. No evidence gate in Light mode — advance directly after delegating implementor.",
-      "REVIEWING → APPROVED: Normally auto-transitioned when reviewer approves. If the auto-transition didn't fire, you can advance manually — the evidence gate is satisfied automatically.",
+"REVIEWING → APPROVED: Requires review_approved evidence — only set by the reviewer subagent. If auto-transition failed, re-delegate the reviewer.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 
@@ -647,15 +647,6 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Light mode does not have this gate — fixType is ignored in Light mode.
       if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && deps.piCoderMode.current === "tdd") {
         smRef.current.setEvidence("non_functional_classified");
-      }
-
-      // Manual escape hatch for review_approved evidence gate.
-      // Auto-transition handler normally sets this when the reviewer returns ✅ Approved.
-      // If verdict extraction failed (no AUTO-TRANSITION notice), the orchestrator
-      // can manually advance — the fact they're calling advance_fsm to APPROVED
-      // means they've seen the review and it was approved.
-      if (targetState === "APPROVED" && smRef.current.currentState === "REVIEWING") {
-        smRef.current.setEvidence("review_approved");
       }
 
       try {
