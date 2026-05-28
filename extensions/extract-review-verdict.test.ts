@@ -1,11 +1,14 @@
 /**
  * Tests for extractReviewVerdict — parses reviewer subagent output
  * to determine verdict, fix type, and issue counts.
+ *
+ * Updated for VerdictResult discriminated union type and hardened
+ * emoji extraction (last-occurrence-wins, no 500-char limit).
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { extractReviewVerdict } from "./index.ts";
+import { extractReviewVerdict, type VerdictResult } from "./index.ts";
 
 // ---------------------------------------------------------------------------
 // pi-subagents Details format
@@ -17,12 +20,7 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
       mode: "single",
       results: [{ finalOutput: "## Verdict\n\n✅ Approved — code looks good" }],
     });
-    assert.deepEqual(result, {
-      verdict: "approved",
-      fixType: null,
-      issueCount: 0,
-      highSeverityCount: 0,
-    });
+    assert.deepEqual(result, { verdict: "approved" });
   });
 
   it("extracts needs_changes verdict from finalOutput with ⚠️", () => {
@@ -30,25 +28,19 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
       mode: "single",
       results: [{ finalOutput: "## Verdict\n\n⚠️ Needs Changes — missing error handling" }],
     });
-    assert.deepEqual(result, {
-      verdict: "needs_changes",
-      fixType: null,
-      issueCount: 0,
-      highSeverityCount: 0,
-    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional"); // defaults to functional when missing
+      assert.deepEqual(result.issueCount, { high: 0, medium: 0, low: 0 });
+    }
   });
 
-  it("extracts request_changes verdict from finalOutput with ❌", () => {
+  it("extracts needs_changes verdict from finalOutput with ❌", () => {
     const result = extractReviewVerdict({
       mode: "single",
-      results: [{ finalOutput: "## Verdict\n\n❌ Request Changes — fundamental design flaw" }],
+      results: [{ finalOutput: "## Verdict\n\n❌ Needs Changes — fundamental design flaw" }],
     });
-    assert.deepEqual(result, {
-      verdict: "request_changes",
-      fixType: null,
-      issueCount: 0,
-      highSeverityCount: 0,
-    });
+    assert.equal(result?.verdict, "needs_changes");
   });
 
   it("extracts fixType from finalOutput", () => {
@@ -57,8 +49,10 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
       results: [{ finalOutput: "## Verdict\n\n⚠️ Needs Changes\nFix type: non-functional\n🟡 Minor naming issue" }],
     });
     assert.equal(result?.verdict, "needs_changes");
-    assert.equal(result?.fixType, "non-functional");
-    assert.equal(result?.issueCount, 1);
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "non-functional");
+      assert.deepEqual(result.issueCount, { high: 0, medium: 0, low: 1 });
+    }
   });
 
   it("extracts functional fixType", () => {
@@ -67,8 +61,10 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
       results: [{ finalOutput: "## Verdict\n\n⚠️ Needs Changes\nFix type: functional\n🔴 Auth bypass found" }],
     });
     assert.equal(result?.verdict, "needs_changes");
-    assert.equal(result?.fixType, "functional");
-    assert.equal(result?.highSeverityCount, 1);
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+      assert.deepEqual(result.issueCount, { high: 1, medium: 0, low: 0 });
+    }
   });
 
   it("handles underscore variant of non_functional in fixType", () => {
@@ -76,7 +72,10 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
       mode: "single",
       results: [{ finalOutput: "⚠️ Needs Changes\nFix type: non_functional" }],
     });
-    assert.equal(result?.fixType, "non-functional");
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "non-functional");
+    }
   });
 
   it("counts severity markers correctly", () => {
@@ -84,8 +83,10 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
       mode: "single",
       results: [{ finalOutput: "⚠️ Issues:\n🔴 Critical bug\n🔴 Another critical\n🟠 Medium issue\n🟡 Low issue" }],
     });
-    assert.equal(result?.issueCount, 4);
-    assert.equal(result?.highSeverityCount, 2);
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.deepEqual(result.issueCount, { high: 2, medium: 1, low: 1 });
+    }
   });
 
   it("returns null when finalOutput is not a string", () => {
@@ -133,10 +134,10 @@ describe("extractReviewVerdict — content array format", () => {
   it("extracts verdict from array of content blocks", () => {
     const result = extractReviewVerdict({
       content: [
-        { type: "text", text: "## Verdict\n\n❌ Request Changes — rewrite needed" },
+        { type: "text", text: "## Verdict\n\n❌ Needs Changes — rewrite needed" },
       ],
     });
-    assert.equal(result?.verdict, "request_changes");
+    assert.equal(result?.verdict, "needs_changes");
   });
 
   it("joins multiple text blocks", () => {
@@ -147,7 +148,9 @@ describe("extractReviewVerdict — content array format", () => {
       ],
     });
     assert.equal(result?.verdict, "needs_changes");
-    assert.equal(result?.fixType, "functional");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+    }
   });
 
   it("ignores non-text content blocks", () => {
@@ -166,31 +169,198 @@ describe("extractReviewVerdict — content array format", () => {
 // ---------------------------------------------------------------------------
 
 describe("extractReviewVerdict — text pattern fallbacks", () => {
-  it("matches 'approved' in first 500 chars (case-insensitive)", () => {
+  it("matches 'approved' in text (case-insensitive)", () => {
     const result = extractReviewVerdict({
       content: "Verdict: Approved — implementation meets all criteria",
     });
     assert.equal(result?.verdict, "approved");
   });
 
-  it("matches 'needs changes' in first 500 chars", () => {
+  it("matches 'needs changes' in text", () => {
     const result = extractReviewVerdict({
       content: "Verdict: Needs Changes — missing input validation",
     });
     assert.equal(result?.verdict, "needs_changes");
   });
 
-  it("matches 'request changes' in first 500 chars", () => {
+  it("matches '**Verdict:** Approved' structured format", () => {
     const result = extractReviewVerdict({
-      content: "Verdict: Request Changes — architecture not aligned with spec",
+      content: "Some review text\n\n**Verdict:** Approved",
     });
-    assert.equal(result?.verdict, "request_changes");
+    assert.equal(result?.verdict, "approved");
   });
 
-  it("does NOT match 'approved' after first 500 chars", () => {
+  it("matches '**Verdict:** Needs Changes' structured format", () => {
+    const result = extractReviewVerdict({
+      content: "Some review text\n\n**Verdict:** Needs Changes\nFix-Type: functional",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+    }
+  });
+
+  it("NOW matches 'approved' AFTER first 500 chars (500-char limit removed)", () => {
     const padding = "x".repeat(501);
     const result = extractReviewVerdict({
       content: padding + "approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Verdict after 500 chars
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — verdict after 500 chars", () => {
+  it("finds ✅ verdict at the end of a long review (>500 chars of prose)", () => {
+    const prose = "This is a detailed review paragraph. ".repeat(25); // ~900 chars
+    const result = extractReviewVerdict({
+      content: prose + "\n\n**Verdict:** ✅ Approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("finds ⚠️ Needs Changes verdict at the end of a long review", () => {
+    const prose = "This is a detailed review paragraph. ".repeat(25); // ~900 chars
+    const result = extractReviewVerdict({
+      content: prose + "\n\n**Verdict:** ⚠️ Needs Changes\nFix-Type: functional",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+    }
+  });
+
+  it("finds text-only verdict after 500 chars", () => {
+    const padding = "x".repeat(600);
+    const result = extractReviewVerdict({
+      content: padding + " approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Emoji false positive — last occurrence wins
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — emoji false positive handling", () => {
+  it("✅ in prose but ⚠️ verdict at end → returns needs_changes", () => {
+    const result = extractReviewVerdict({
+      content: "I did ✅ verify the tests pass, but there are some issues.\n\n**Verdict:** ⚠️ Needs Changes\nFix-Type: functional",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+  });
+
+  it("✅ in prose but ❌ verdict at end → returns needs_changes", () => {
+    const result = extractReviewVerdict({
+      content: "Tests ✅ pass and lint ✅ clean.\n\n**Verdict:** ❌ Needs Changes\nFix-Type: non-functional",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "non-functional");
+    }
+  });
+
+  it("⚠️ in prose but ✅ verdict at end → returns approved", () => {
+    const result = extractReviewVerdict({
+      content: "Note: ⚠️ this is a complex module. Overall the implementation is solid.\n\n**Verdict:** ✅ Approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("multiple ✅ emojis — last one is the verdict", () => {
+    // Both emojis are ✅ — it's approved regardless of position
+    const result = extractReviewVerdict({
+      content: "✅ Tests pass\n\n**Verdict:** ✅ Approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Verdict without emoji prefix (text-only)
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — verdict without emoji prefix", () => {
+  it("matches '**Verdict:** Approved' with no emoji", () => {
+    const result = extractReviewVerdict({
+      content: "This is a thorough review.\n\n**Verdict:** Approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("matches '**Verdict:** Needs Changes' with no emoji", () => {
+    const result = extractReviewVerdict({
+      content: "This is a thorough review.\n\n**Verdict:** Needs Changes\nFix-Type: functional",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: Missing fixType on needs_changes defaults to functional
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — missing fixType defaults to functional", () => {
+  it("needs_changes without Fix-Type line defaults to functional", () => {
+    const result = extractReviewVerdict({
+      content: "⚠️ Needs Changes — some issues found",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional"); // safe default
+    }
+  });
+
+  it("❌ Needs Changes without Fix-Type defaults to functional", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "❌ Needs Changes - critical issues" }],
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: VerdictResult type shape
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — VerdictResult type shape", () => {
+  it("approved result has only verdict field", () => {
+    const result = extractReviewVerdict({
+      content: "✅ Approved",
+    });
+    assert.equal(result?.verdict, "approved");
+    // Approved variant should NOT have fixType or issueCount
+    assert.deepEqual(Object.keys(result!), ["verdict"]);
+  });
+
+  it("needs_changes result has verdict, fixType, issueCount fields", () => {
+    const result = extractReviewVerdict({
+      content: "⚠️ Needs Changes\nFix-Type: functional",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(typeof result.fixType, "string");
+      assert.equal(typeof result.issueCount, "object");
+      assert.equal("high" in result.issueCount, true);
+      assert.equal("medium" in result.issueCount, true);
+      assert.equal("low" in result.issueCount, true);
+    }
+  });
+
+  it("null return for unrecognised input", () => {
+    const result = extractReviewVerdict({
+      content: "The code looks fine to me, no issues found.",
     });
     assert.equal(result, null);
   });
@@ -223,12 +393,13 @@ describe("extractReviewVerdict — edge cases", () => {
     }), null);
   });
 
-  it("fixType is null for approved verdict even if present in text", () => {
+  it("approved verdict has no fixType (even if Fix-Type appears in text)", () => {
     const result = extractReviewVerdict({
       content: "✅ Approved\nFix type: functional",
     });
     assert.equal(result?.verdict, "approved");
-    assert.equal(result?.fixType, null);
+    // Approved variant should NOT have fixType
+    assert.deepEqual(Object.keys(result!), ["verdict"]);
   });
 
   it("returns null when text is empty", () => {
