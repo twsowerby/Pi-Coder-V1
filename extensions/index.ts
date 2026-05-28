@@ -2136,17 +2136,19 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           // Tests passed unexpectedly during RED phase
-          // Don't auto-transition to BLOCKED — this is common for:
-          //   - Adding assertions to existing passing tests (verification, not TDD)
-          //   - Implementor applied code+test simultaneously
-          //   - Small fixes where separate RED/GREEN is overkill
-          // Instead, append guidance with two options.
+          // This means either:
+          //   - No new tests were written (the implementor wrote only production code)
+          //   - New tests were written but they pass immediately (code+test simultaneously)
+          //   - The test is genuinely tautological (asserts nothing meaningful)
+          //
+          // Don't auto-transition to BLOCKED — present guidance with three options.
           const reason = validation.reason ?? "RED_TAUTOLOGY";
           transitionSteer =
-            `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have two options:` +
-            `\n1. Acknowledge and proceed: Use pi_coder_advance_fsm with targetState "TDD_GREEN_WRITE" (event: red_tautology_acknowledge) — this skips GREEN since the code already works.` +
-            `\n2. If this is a genuine problem (tests are wrong, coverage is incomplete): use pi_coder_advance_fsm with targetState "BLOCKED" to pause and present recovery options to the user.` +
-            `\nMost of the time, option 1 is correct — the test suite now has new coverage whether or not it failed first.`;
+            `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
+            `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: \"Write ONLY failing test files for this unit. Do NOT modify production code.\" This is the correct TDD path when the implementor skipped the test-first step.` +
+            `\n2. **Classify as approach: direct**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with approach: \"direct\" on this unit, then acknowledge the tautology with pi_coder_advance_fsm TDD_GREEN_WRITE. This records the decision explicitly.` +
+            `\n3. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState \"TDD_GREEN_WRITE\" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
+            `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units. Option 3 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`; 
         }
       }
 

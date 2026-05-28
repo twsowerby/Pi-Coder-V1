@@ -339,22 +339,17 @@ Do not include the diff itself in the task payload. The reviewer discovers the d
 
 ### RED_TAUTOLOGY — Tests Passed When They Should Fail
 
-When RED tests pass unexpectedly, the extension presents guidance with two options (instead of automatically blocking):
+When RED tests pass unexpectedly, the extension presents guidance with three options:
 
-1. **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — The test coverage is valid even though tests passed immediately. This is common when:
-   - Adding assertions to existing passing tests (verification, not TDD)
-   - The implementor applied code+test simultaneously but coverage is valid
-   - The feature already partially exists and you're extending coverage
+1. **Re-delegate to write tests first** — Stay in TDD_RED_WRITE and re-delegate to the implementor with explicit instructions to write ONLY failing test files. This is the correct TDD response when the implementor wrote production code without tests. Do NOT advance the FSM.
 
-2. **Block and recover** (`pi_coder_advance_fsm BLOCKED`) — The tests passing is genuinely problematic. This means either:
-   - The tests are tautological (they assert nothing meaningful)
-   - The test suite is fundamentally wrong
+2. **Classify as approach: direct** — If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with `approach: "direct"` on this unit, then acknowledge the tautology. This records the decision explicitly and the human must approve it via interview.
 
-   In BLOCKED state, present the user with options using `interview`:
-   - **Rewrite tests** — Loop back to the implementation state. In your next delegation, explicitly state what NEW behavior does not already exist in the tests.
-   - **Abort spec** — Rollback to the pre-implementation checkpoint and return to IDLE. No code changes are preserved.
+3. **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — Only valid when new tests WERE written that test real new behavior, but they pass because the feature was already partially implemented. The test coverage is valid even though tests passed immediately.
 
-**Most RED tautologies are benign.** If you added a test assertion for behavior that already exists, the test is valid — acknowledge and proceed. Only block if the test is wrong, not if the code is right.
+**Most RED tautologies indicate the implementor did not write tests first.** Option 1 (re-delegate) is the default correct response. Option 2 is for genuinely non-behavioral units. Option 3 is ONLY for legitimately pre-existing behavior being newly tested — not for untested new code.
+
+Do NOT acknowledge a tautology just because the existing test suite happens to pass. If no new tests exist for the new code, the tautology means there is no test coverage — re-delegate the implementor.
 
 ### CIRCUIT_BREAKER — Max Review Loops Reached
 
