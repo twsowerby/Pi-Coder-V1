@@ -34,9 +34,6 @@ function forceTransition(sm: StateMachine, to: FSMState): void {
   if (from === "NEEDS_CHANGES" && to === "REVIEWING") {
     sm.setEvidence("non_functional_classified");
   }
-  if (from === "REVIEWING" && to === "APPROVED") {
-    sm.setEvidence("review_approved");
-  }
   const result = sm.transition(to);
   if (result) {
     throw new Error(`Transition guard blocked ${from} → ${to}: ${result.message}`);
@@ -855,35 +852,14 @@ describe("RED tautology acknowledge", () => {
     assert.strictEqual(sm.currentState, "REVIEWING");
   });
 
-  it("REVIEWING → APPROVED requires review_approved evidence", () => {
+  it("REVIEWING → APPROVED succeeds without review_approved evidence (guard removed)", () => {
     const sm = new StateMachine(makeConfig());
     walkToState(sm, "REVIEWING");
-    // Without evidence — guard should block
-    const guardResult = sm.transition("APPROVED");
-    assert.ok(guardResult !== undefined, "Should return guard error");
-    assert.ok("missingEvidence" in guardResult!);
-    assert.ok((guardResult as any).missingEvidence.includes("review_approved"));
-    assert.strictEqual(sm.currentState, "REVIEWING", "State should not have changed");
-  });
-
-  it("REVIEWING → APPROVED succeeds with review_approved evidence", () => {
-    const sm = new StateMachine(makeConfig());
-    walkToState(sm, "REVIEWING");
-    sm.setEvidence("review_approved");
+    // The review_approved evidence guard has been removed —
+    // the ---VERDICT--- block and auto-transition handle review integrity
     const transitionResult = sm.transition("APPROVED");
     assert.strictEqual(transitionResult, undefined, "Transition should succeed");
     assert.strictEqual(sm.currentState, "APPROVED");
-  });
-
-  it("review_approved evidence persists through APPROVED → FINAL_APPROVAL → MERGING → COMPLETE", () => {
-    const sm = new StateMachine(makeConfig());
-    walkToState(sm, "REVIEWING");
-    sm.setEvidence("review_approved");
-    forceTransition(sm, "APPROVED");
-    forceTransition(sm, "FINAL_APPROVAL");
-    forceTransition(sm, "MERGING");
-    forceTransition(sm, "COMPLETE");
-    assert.ok(sm.getEvidence().includes("review_approved"), "Evidence should persist through to COMPLETE");
   });
 });
 

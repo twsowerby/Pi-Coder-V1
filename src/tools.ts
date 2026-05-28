@@ -74,24 +74,18 @@ const ADVANCE_FSM_PARAMS = Type.Object({
   targetState: Type.String({ description: "The FSM state to advance to (e.g., SPEC_WORK, SPEC_APPROVED, GIT_CHECKPOINT, IDLE)" }),
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
   fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
+  reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a state (e.g., REVIEWING→APPROVED without review, or skipping a TDD phase). Explains why the exception is justified." })),
 });
 
-const PI_CODER_SUBMIT_REVIEW_PARAMS = Type.Object({
-  verdict: StringEnum(["approved", "needs_changes"] as const, {
-    description: "Review verdict. 'approved' means the implementation meets the Acceptance Criteria. 'needs_changes' means there are issues that must be fixed."
-  }),
-  fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], {
-    description: "Required when verdict is 'needs_changes'. Classify the fix as 'functional' (changes production behavior — requires full implementation cycle) or 'non-functional' (no behavior change — can be applied directly). Ignored when verdict is 'approved'."
-  })),
-  issues: Type.Optional(Type.Array(Type.Object({
-    title: Type.String({ description: "Short description of the issue" }),
-    severity: StringEnum(["high", "medium", "low"] as const, { description: "Issue severity: high=critical, medium=should fix, low=nice-to-have" }),
-    file: Type.Optional(Type.String({ description: "File path where the issue was found" })),
-    problem: Type.String({ description: "Description of the problem" }),
-    suggestedFix: Type.Optional(Type.String({ description: "Suggested fix" })),
-  }), { description: "Structured list of issues found during review" })),
-  summary: Type.Optional(Type.String({ description: "Brief review summary for the orchestrator log" })),
-});
+// ---------------------------------------------------------------------------
+// Exception Transitions — transitions that skip a state and require a reason
+// ---------------------------------------------------------------------------
+
+const EXCEPTION_TRANSITIONS: Set<string> = new Set([
+  "REVIEWING:APPROVED",              // skip review
+  "TDD_RED_WRITE:TDD_GREEN_WRITE",   // skip RED phase
+  "TDD_GREEN_VALIDATE:APPROVED",     // skip review after GREEN
+]);
 
 // ---------------------------------------------------------------------------
 // Tool Registration
@@ -621,12 +615,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "NEEDS_CHANGES → REVIEWING (TDD mode): Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
       "NEEDS_CHANGES → IMPLEMENTING (Light mode): Review requires functional fixes.",
       "NEEDS_CHANGES → REVIEWING (Light mode): Review requires fixes. No evidence gate in Light mode — advance directly after delegating implementor.",
-"REVIEWING → APPROVED: Requires review_approved evidence — only set by the reviewer subagent. If auto-transition failed, re-delegate the reviewer.",
+"REVIEWING → APPROVED: Normally triggered by auto-transition after the reviewer includes a ---VERDICT--- block. If auto-transition failed, re-delegate the reviewer or advance manually.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { targetState, request, fixType } = params;
+      const { targetState, request, fixType, reason } = params;
       const previousState = smRef.current.currentState;
 
       // No static state validation — each state machine (StateMachine, LightStateMachine)
@@ -647,6 +641,24 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Light mode does not have this gate — fixType is ignored in Light mode.
       if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && deps.piCoderMode.current === "tdd") {
         smRef.current.setEvidence("non_functional_classified");
+      }
+
+      // Check for exception transitions BEFORE attempting the transition.
+      // Exception transitions skip a state and require a reason string.
+      const transitionKey = `${smRef.current.currentState}:${targetState}`;
+      if (EXCEPTION_TRANSITIONS.has(transitionKey) && !reason) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Exception transition ${transitionKey} requires a 'reason' parameter explaining why this state is being skipped. Add reason: "<explanation>" to your pi_coder_advance_fsm call.`,
+          }],
+          details: {
+            success: false,
+            error: "exception_transition_requires_reason",
+            transitionKey,
+          },
+          isError: true,
+        };
       }
 
       try {
@@ -730,6 +742,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             previousState,
             newState: targetState,
             ...(targetState === "SPEC_WORK" ? { specId: activeSpecIdRef.current } : {}),
+            ...(EXCEPTION_TRANSITIONS.has(transitionKey) && reason ? { exceptionTransition: transitionKey, reason } : {}),
           },
         };
       } catch (err) {
@@ -752,97 +765,4 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     },
   });
 
-  // -------------------------------------------------------------------------
-  // pi_coder_submit_review
-  // -------------------------------------------------------------------------
-  pi.registerTool({
-    name: "pi_coder_submit_review",
-    label: "Submit Review",
-    description:
-      "Submit a structured review verdict after completing your review. " +
-      "Call this AFTER writing your full review analysis — the tool handles the structured verdict, " +
-      "your prose handles the detailed findings. " +
-      "The verdict drives FSM auto-transition: 'approved' advances to APPROVED, " +
-      "'needs_changes' advances to NEEDS_CHANGES.",
-    promptSnippet: "Submit review verdict — approved or needs changes",
-    promptGuidelines: [
-      "Call this at the END of your review, after writing all findings in prose.",
-      "verdict is REQUIRED. fixType is REQUIRED when verdict is needs_changes.",
-      "Issues array is optional but recommended — it provides structured data for the orchestrator.",
-      "Do NOT use this tool to replace your written review — use it to commit your verdict.",
-    ],
-    parameters: PI_CODER_SUBMIT_REVIEW_PARAMS,
-
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const sm = smRef.current;
-
-      // Validate FSM state — submit_review only allowed in REVIEWING
-      if (!sm.isActionAllowed("pi_coder_submit_review")) {
-        return {
-          content: [{ type: "text" as const, text: `Error: pi_coder_submit_review is not allowed in state ${sm.currentState}. Only allowed in REVIEWING state.` }],
-          details: { success: false, error: `Not allowed in state ${sm.currentState}`, currentState: sm.currentState },
-          isError: true,
-        };
-      }
-
-      // Validate: fixType required when needs_changes
-      if (params.verdict === "needs_changes" && !params.fixType) {
-        return {
-          content: [{ type: "text" as const, text: "Error: fixType is required when verdict is 'needs_changes'. Classify the fix as 'functional' or 'non-functional'." }],
-          details: { success: false, error: "fixType_required" },
-          isError: true,
-        };
-      }
-
-      // Set evidence flags
-      if (params.verdict === "approved") {
-        sm.setEvidence("review_approved");
-      }
-      if (params.verdict === "needs_changes" && params.fixType === "non-functional" && deps.piCoderMode.current === "tdd") {
-        sm.setEvidence("non_functional_classified");
-      }
-
-      // Transition FSM
-      const target = params.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
-      const transitionResult = sm.transition(target);
-
-      // Check for transition guard errors (e.g., missing evidence)
-      if (transitionResult && typeof transitionResult === "object" && "missingEvidence" in transitionResult) {
-        return {
-          content: [{ type: "text" as const, text: `FSM transition failed: ${transitionResult.message}` }],
-          details: {
-            success: false,
-            error: "transition_failed",
-            missingEvidence: transitionResult.missingEvidence,
-            from: transitionResult.from,
-            to: transitionResult.to,
-          },
-          isError: true,
-        };
-      }
-
-      // Build response
-      const issueCount = params.issues
-        ? { high: params.issues.filter(i => i.severity === "high").length,
-            medium: params.issues.filter(i => i.severity === "medium").length,
-            low: params.issues.filter(i => i.severity === "low").length }
-        : undefined;
-
-      const text = params.verdict === "approved"
-        ? "Review submitted: ✅ Approved. FSM advanced to APPROVED."
-        : `Review submitted: ⚠️ Needs Changes (${params.fixType} fix). FSM advanced to NEEDS_CHANGES.${issueCount ? ` Issues: ${issueCount.high} high, ${issueCount.medium} medium, ${issueCount.low} low.` : ""}`;
-
-      return {
-        content: [{ type: "text" as const, text }],
-        details: {
-          success: true,
-          verdict: params.verdict,
-          fixType: params.fixType,
-          issues: params.issues,
-          issueCount,
-          summary: params.summary,
-        },
-      };
-    },
-  });
 }

@@ -146,7 +146,7 @@ When your FSM is in REVIEWING (all implementation units complete):
    - **⚠️ Needs Changes** / **❌ Needs Changes** → The auto-transition handler advances to NEEDS_CHANGES. Both ⚠️ and ❌ map to the same `needs_changes` FSM state — the FSM does not distinguish severity.
      - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING`. In TDD mode, the `non_functional_classified` evidence flag was already set by the auto-transition — the evidence gate is already satisfied. In Light mode, there is no evidence gate. Loop count increments.
      - **Functional fix** (production code changes): Advance to the implementation state (TDD_RED_WRITE or IMPLEMENTING) via `pi_coder_advance_fsm`. A full implementation cycle is needed. Loop count increments.
-     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes (and instead see "⚠️ AUTO-TRANSITION FAILED"), read the review output yourself and manually advance with `pi_coder_advance_fsm` to APPROVED or NEEDS_CHANGES based on your reading. For approved reviews, re-delegate the reviewer — the `review_approved` evidence gate cannot be bypassed without a reviewer call. In TDD mode, for non-functional fixes, pass `fixType="non-functional"` to `pi_coder_advance_fsm` — this manually sets the `non_functional_classified` evidence flag before transitioning. For functional fixes, no evidence is required for the transition to IMPLEMENTING/TDD_RED_WRITE.
+     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes (and instead see "⚠️ AUTO-TRANSITION FAILED"), read the review output yourself and manually advance with `pi_coder_advance_fsm` to APPROVED or NEEDS_CHANGES based on your reading. REVIEWING→APPROVED is an exception transition — you must provide a `reason` string explaining why you're advancing without auto-transition. In TDD mode, for non-functional fixes, pass `fixType="non-functional"` to `pi_coder_advance_fsm` — this manually sets the `non_functional_classified` evidence flag before transitioning. For functional fixes, no evidence is required for the transition to IMPLEMENTING/TDD_RED_WRITE.
 
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec.
 
@@ -300,7 +300,7 @@ MUST DO before giving verdict:
 - If the project requires infrastructure (databases, dev servers) to run tests, start it first
 - Record the test results in your review output
 - Do NOT approve if tests cannot be executed or are failing
-- Submit your verdict using `pi_coder_submit_review` tool — call it after writing your full review in prose
+- End your review with a ---VERDICT--- block (see reviewer agent definition for format)
 ```
 
 Do not include the diff itself in the task payload. The reviewer discovers the diff independently.

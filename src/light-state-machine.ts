@@ -39,7 +39,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     { from: "GIT_CHECKPOINT", to: "IMPLEMENTING", event: "checkpoint_complete" },
     // Review — same structure as TDD
     { from: "IMPLEMENTING", to: "REVIEWING", event: "implementation_complete" },
-    { from: "REVIEWING", to: "APPROVED", event: "review_approved" },
+    { from: "REVIEWING", to: "APPROVED", event: "review_passed" },
     { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
     // Fix paths — same structure as TDD but targeting IMPLEMENTING
     { from: "NEEDS_CHANGES", to: "IMPLEMENTING", event: "reimplement" },
@@ -66,13 +66,6 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     },
     // IMPLEMENTING → REVIEWING has no evidence gate — no RED/GREEN cycle to bypass in Light mode.
     // NEEDS_CHANGES → REVIEWING requires no evidence — Light mode has no TDD cycle being skipped.
-    {
-      from: "REVIEWING",
-      to: "APPROVED",
-      requiredEvidence: ["review_approved"],
-      errorMessage:
-        "Cannot advance to APPROVED without review approval. The reviewer must approve the implementation before advancing.",
-    },
   ],
 
   actionRules: [
@@ -104,10 +97,6 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
       toolPattern: "pi_coder_git",
       allowedStates: new Set(["GIT_CHECKPOINT", "REVIEWING", "MERGING", "BLOCKED", "IDLE"]),
     },
-    {
-      toolPattern: "pi_coder_submit_review",
-      allowedStates: new Set(["REVIEWING"]),
-    },
   ],
 
   alwaysAllowed: [
@@ -115,7 +104,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     "intercom", "ls", "find", "grep", "pi_coder_advance_fsm",
   ],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "review_approved"],
+  persistentEvidence: ["spec_saved", "spec_user_approved"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },

@@ -44,7 +44,7 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
     { from: "TDD_GREEN_VALIDATE", to: "REVIEWING", event: "tests_pass" },
     { from: "TDD_GREEN_VALIDATE", to: "TDD_GREEN_WRITE", event: "tests_still_fail" },
     { from: "TDD_GREEN_VALIDATE", to: "TDD_RED_WRITE", event: "next_unit" },
-    { from: "REVIEWING", to: "APPROVED", event: "review_approved" },
+    { from: "REVIEWING", to: "APPROVED", event: "review_passed" },
     { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
     { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },
     { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
@@ -102,13 +102,6 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
         "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
         "changes), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead.",
     },
-    {
-      from: "REVIEWING",
-      to: "APPROVED",
-      requiredEvidence: ["review_approved"],
-      errorMessage:
-        "Cannot advance to APPROVED without review approval. The reviewer must approve the implementation before advancing.",
-    },
   ],
 
   actionRules: [
@@ -135,15 +128,11 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
       toolPattern: "pi_coder_git",
       allowedStates: new Set(["GIT_CHECKPOINT", "REVIEWING", "MERGING", "BLOCKED", "IDLE"]),
     },
-    {
-      toolPattern: "pi_coder_submit_review",
-      allowedStates: new Set(["REVIEWING"]),
-    },
   ],
 
   alwaysAllowed: ["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm"],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified", "review_approved"],
+  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },

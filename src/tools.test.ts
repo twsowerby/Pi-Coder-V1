@@ -271,7 +271,7 @@ function advanceToState(sm: StateMachine, target: FSMState): void {
       sm.setEvidence("test_run_this_state");
     }
     if (from === "REVIEWING" && to === "APPROVED") {
-      sm.setEvidence("review_approved");
+      // review_approved guard removed — transition succeeds without evidence
     }
     const result = sm.transition(to);
     if (result) {
@@ -312,8 +312,7 @@ describe("Phase 1: Tool Registration Framework", () => {
     assert.ok(tools.has("pi_coder_advance_fsm"), "pi_coder_advance_fsm not registered");
     assert.ok(tools.has("pi_coder_save_spec"), "pi_coder_save_spec not registered");
     assert.ok(tools.has("pi_coder_read_spec"), "pi_coder_read_spec not registered");
-    assert.ok(tools.has("pi_coder_submit_review"), "pi_coder_submit_review not registered");
-    assert.strictEqual(tools.size, 7, "Expected exactly 7 tools");
+    assert.strictEqual(tools.size, 6, "Expected exactly 6 tools");
   });
 
   it("each tool has a promptSnippet", () => {
@@ -862,9 +861,9 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     assert.ok(content.includes("researcher"), `Should mention researcher delegation, got: ${content}`);
   });
 
-  it("blocks REVIEWING→APPROVED without review_approved evidence — reviewer must be called", async () => {
+  it("REVIEWING→APPROVED requires reason (exception transition — skipping normal review flow)", async () => {
     const { tools, sm } = setupMocks();
-    // Walk to REVIEWING without setting review_approved evidence
+    // Walk to REVIEWING
     sm.transition("SPEC_WORK");
     sm.setEvidence("spec_saved");
     sm.setEvidence("spec_user_approved");
@@ -878,15 +877,42 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     sm.setEvidence("test_run_this_state");
     sm.transition("REVIEWING");
 
+    // REVIEWING:APPROVED is an exception transition — requires reason
     const result = await executeTool(tools, "pi_coder_advance_fsm", { targetState: "APPROVED" });
 
-    assert.ok(result.isError, "Should be blocked by guard");
+    assert.ok(result.isError, "Should be blocked by exception transition check");
     assert.strictEqual(sm.currentState, "REVIEWING", "State should remain REVIEWING");
     const details = result.details as Record<string, unknown>;
     assert.strictEqual(details.success, false);
-    assert.ok((details.error as string).includes("guard"), `Error should mention guard, got: ${details.error}`);
-    const missing = details.missingEvidence as string[];
-    assert.ok(missing.includes("review_approved"), `Missing evidence should include review_approved, got: ${JSON.stringify(missing)}`);
+    assert.ok((details.error as string).includes("exception_transition_requires_reason"), `Error should mention exception, got: ${details.error}`);
+  });
+
+  it("REVIEWING→APPROVED with reason succeeds (exception transition escape hatch)", async () => {
+    const { tools, sm } = setupMocks();
+    // Walk to REVIEWING
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("REVIEWING");
+
+    // REVIEWING→APPROVED with reason should succeed
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "APPROVED",
+      reason: "Auto-transition failed, but review text clearly states approved",
+    });
+
+    assert.ok(!result.isError, `Should succeed with reason, got error: ${result.isError}`);
+    assert.strictEqual(sm.currentState, "APPROVED", "State should be APPROVED");
+    const details = result.details as Record<string, unknown>;
+    assert.strictEqual(details.exceptionTransition, "REVIEWING:APPROVED", "Should flag as exception transition");
   });
 
   it("includes GREEN_WRITE delegation hint", async () => {
@@ -899,7 +925,7 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     sm.transition("TDD_RED_VALIDATE");
     sm.setEvidence("test_run_this_state"); // Simulate running tests in RED_VALIDATE
     sm.transition("TDD_GREEN_WRITE");
-    // Now advance from GREEN_WRITE to GREEN_VALIDATE
+    // GREEN_WRITE → GREEN_VALIDATE is NOT an exception transition — normal flow, no reason needed
     const result = await executeTool(tools, "pi_coder_advance_fsm", {
       targetState: "TDD_GREEN_VALIDATE",
     });
@@ -1055,106 +1081,4 @@ describe("Phase 6: pi_coder_advance_fsm fixType parameter", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Phase 7: pi_coder_submit_review
-// ---------------------------------------------------------------------------
 
-describe("Phase 7: pi_coder_submit_review", () => {
-  it("submits approved review — sets evidence, transitions to APPROVED", async () => {
-    const { tools, sm } = setupMocks();
-    // Walk to REVIEWING
-    advanceToState(sm, "REVIEWING");
-
-    const result = await executeTool(tools, "pi_coder_submit_review", {
-      verdict: "approved",
-    });
-
-    assert.ok(!result.isError, "Should succeed");
-    assert.strictEqual(sm.currentState, "APPROVED", "Should transition to APPROVED");
-    assert.ok(sm.hasEvidence("review_approved"), "Should set review_approved evidence");
-    const details = result.details as Record<string, unknown>;
-    assert.strictEqual(details.success, true);
-    assert.strictEqual(details.verdict, "approved");
-  });
-
-  it("submits needs_changes with functional fixType — transitions to NEEDS_CHANGES, does NOT set non_functional_classified", async () => {
-    const { tools, sm } = setupMocks();
-    advanceToState(sm, "REVIEWING");
-
-    const result = await executeTool(tools, "pi_coder_submit_review", {
-      verdict: "needs_changes",
-      fixType: "functional",
-      issues: [
-        { title: "Missing null check", severity: "high", problem: "Crashes on null input", file: "src/auth.ts" },
-      ],
-    });
-
-    assert.ok(!result.isError, "Should succeed");
-    assert.strictEqual(sm.currentState, "NEEDS_CHANGES", "Should transition to NEEDS_CHANGES");
-    assert.ok(!sm.hasEvidence("non_functional_classified"), "Should NOT set non_functional_classified for functional fix");
-    assert.ok(sm.hasEvidence("review_approved") === false, "Should NOT set review_approved for needs_changes");
-    const details = result.details as Record<string, unknown>;
-    assert.strictEqual(details.success, true);
-    assert.strictEqual(details.verdict, "needs_changes");
-    assert.strictEqual(details.fixType, "functional");
-    const issueCount = details.issueCount as { high: number; medium: number; low: number };
-    assert.strictEqual(issueCount.high, 1);
-    assert.strictEqual(issueCount.medium, 0);
-    assert.strictEqual(issueCount.low, 0);
-  });
-
-  it("submits needs_changes with non-functional fixType in TDD mode — sets non_functional_classified evidence", async () => {
-    const { tools, sm } = setupMocks();
-    advanceToState(sm, "REVIEWING");
-
-    const result = await executeTool(tools, "pi_coder_submit_review", {
-      verdict: "needs_changes",
-      fixType: "non-functional",
-      issues: [
-        { title: "Missing test", severity: "medium", problem: "Edge case untested", suggestedFix: "Add test for empty input" },
-      ],
-    });
-
-    assert.ok(!result.isError, "Should succeed");
-    assert.strictEqual(sm.currentState, "NEEDS_CHANGES", "Should transition to NEEDS_CHANGES");
-    assert.ok(sm.hasEvidence("non_functional_classified"), "Should set non_functional_classified for non-functional fix in TDD mode");
-    const details = result.details as Record<string, unknown>;
-    assert.strictEqual(details.fixType, "non-functional");
-    const issueCount = details.issueCount as { high: number; medium: number; low: number };
-    assert.strictEqual(issueCount.medium, 1);
-  });
-
-  it("rejects needs_changes without fixType — returns error", async () => {
-    const { tools, sm } = setupMocks();
-    advanceToState(sm, "REVIEWING");
-
-    const result = await executeTool(tools, "pi_coder_submit_review", {
-      verdict: "needs_changes",
-    });
-
-    assert.ok(result.isError, "Should be error when needs_changes without fixType");
-    assert.strictEqual(sm.currentState, "REVIEWING", "State should not change on error");
-    const content = (result.content as Array<{ text: string }>)[0].text;
-    assert.ok(content.includes("fixType"), `Should mention fixType requirement, got: ${content}`);
-    const details = result.details as Record<string, unknown>;
-    assert.strictEqual(details.success, false);
-    assert.strictEqual(details.error, "fixType_required");
-  });
-
-  it("rejects when not in REVIEWING state — soft gate blocks the tool", async () => {
-    const { tools, sm } = setupMocks();
-    // sm starts in IDLE — not REVIEWING
-
-    const result = await executeTool(tools, "pi_coder_submit_review", {
-      verdict: "approved",
-    });
-
-    assert.ok(result.isError, "Should be error when not in REVIEWING state");
-    assert.strictEqual(sm.currentState, "IDLE", "State should not change");
-    const content = (result.content as Array<{ text: string }>)[0].text;
-    assert.ok(content.includes("not allowed"), `Should say not allowed, got: ${content}`);
-    assert.ok(content.includes("IDLE"), `Should mention current state, got: ${content}`);
-    const details = result.details as Record<string, unknown>;
-    assert.strictEqual(details.success, false);
-  });
-});

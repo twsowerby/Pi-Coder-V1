@@ -338,7 +338,7 @@ export interface IssueDetail {
 }
 
 /**
- * Structured verdict from a review, submitted via the pi_coder_submit_review tool.
+ * Structured verdict from a review.
  * Discriminated union: approved has no details, needs_changes carries
  * fix classification and optional issue breakdown.
  */
@@ -369,8 +369,7 @@ export type EvidenceFlag =
   | "spec_saved"
   | "spec_user_approved"
   | "test_run_this_state"
-  | "non_functional_classified"
-  | "review_approved";
+  | "non_functional_classified";
 
 /**
  * Per-spec state persisted to `.pi-coder/specs/{id}/state.json`.
