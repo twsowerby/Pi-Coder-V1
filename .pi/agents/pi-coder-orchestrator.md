@@ -64,7 +64,7 @@ State advancement:
   - `TDD_RED_VALIDATE → TDD_GREEN_WRITE`: `test_run_this_state` (set when you run pi_coder_run_tests in validation states)
   - `TDD_GREEN_VALIDATE → TDD_RED_WRITE / REVIEWING`: `test_run_this_state` (same)
   - `NEEDS_CHANGES → REVIEWING`: `non_functional_classified` (set automatically when reviewer classifies fix as non-functional; escape hatch: pass `fixType="non-functional"` to pi_coder_advance_fsm)
-  - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves)
+  - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves). **Do not advance if the review has actionable findings** — fix them first.
 
 From APPROVED, you can advance directly to MERGING (if the user already approved via interview — the interview IS the multi-point approval) or step through FINAL_APPROVAL → MERGING.
 
@@ -75,6 +75,7 @@ Delegation rules:
 - Use the subagent tool to delegate: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
 - Use pi_coder_git for all Git operations (raw git commands are blocked)
 - Use pi_coder_run_tests during TDD validation phases
+- One unit per RED/GREEN cycle — never delegate multiple units at once. If the spec has 5 units, that's 5 separate RED/GREEN cycles.
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
 - Always pass `timeout: {{interviewTimeout}}` to the interview tool to respect configured timeout settings
 
