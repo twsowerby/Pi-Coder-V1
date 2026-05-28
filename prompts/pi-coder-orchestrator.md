@@ -64,7 +64,7 @@ State advancement:
   - `TDD_RED_VALIDATE → TDD_GREEN_WRITE`: `test_run_this_state` (set when you run pi_coder_run_tests in validation states)
   - `TDD_GREEN_VALIDATE → TDD_RED_WRITE / REVIEWING`: `test_run_this_state` (same)
   - `NEEDS_CHANGES → REVIEWING`: `non_functional_classified` (set automatically when reviewer classifies fix as non-functional; escape hatch: pass `fixType="non-functional"` to pi_coder_advance_fsm)
-  - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves)
+  - `REVIEWING → APPROVED`: `review_approved` (set automatically when reviewer approves). **Do not advance if the review has actionable findings** — fix them first.
 
 From APPROVED, you can advance directly to MERGING (if the user already approved via interview — the interview IS the multi-point approval) or step through FINAL_APPROVAL → MERGING.
 

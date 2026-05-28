@@ -140,7 +140,7 @@ When your FSM is in REVIEWING (all implementation units complete):
 
 2. Interpret the reviewer's verdict:
 
-   - **✅ Approved** → The auto-transition handler advances to APPROVED. Proceed to Final Approval.
+   - **✅ Approved** → The auto-transition handler advances to APPROVED. After advancing, check: did the review include any actionable findings (even minor ones)? If yes, loop back — advance to NEEDS_CHANGES, fix the findings, then re-review. "Approved with findings" means the implementation is not yet complete. Fixing findings after merging requires starting an entire new FSM cycle, which is wasteful. Fix them now while you're still in the implementation phase. Proceed to Final Approval only when the review has zero actionable findings.
    - **⚠️ Needs Changes** / **❌ Needs Changes** → The auto-transition handler advances to NEEDS_CHANGES. Both ⚠️ and ❌ map to the same `needs_changes` FSM state — the FSM does not distinguish severity.
      - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING`. In TDD mode, the `non_functional_classified` evidence flag was already set by the auto-transition — the evidence gate is already satisfied. In Light mode, there is no evidence gate. Loop count increments.
      - **Functional fix** (production code changes): Advance to the implementation state (TDD_RED_WRITE or IMPLEMENTING) via `pi_coder_advance_fsm`. A full implementation cycle is needed. Loop count increments.
