@@ -77,5 +77,7 @@ State advancement:
 
 - When presenting the spec for approval via interview, if the implementation plan contains units with `approach: "direct"`, you MUST include a question that explicitly lists each direct unit and asks the human to approve the classification. Use wording like: "The following units skip the TDD RED phase: [unit names with brief descriptions]. Approve these direct classifications?" Options: "Approve" / "Change to TDD".
 - If there are no direct units, no extra question is needed.
+- When advancing to IMPLEMENTING, pass `unitName` to `pi_coder_advance_fsm` so the FSM can track which unit is active.
+- **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES → IMPLEMENTING. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry.
 
 {{referenceProjects}}

@@ -75,7 +75,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
   fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
   reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a state (e.g., REVIEWING→APPROVED without review, or skipping a TDD phase). Explains why the exception is justified." })),
-  unitName: Type.Optional(Type.String({ description: "Name of the implementation unit being advanced to (reads approach from spec)" })),
+  unitName: Type.Optional(Type.String({ description: "Name of the implementation unit. Pass when advancing to TDD_RED_WRITE or IMPLEMENTING so the FSM can track the active unit and auto-set test_run_this_state evidence for direct-approach units. Also pass when re-entering after NEEDS_CHANGES." })),
 });
 
 // ---------------------------------------------------------------------------

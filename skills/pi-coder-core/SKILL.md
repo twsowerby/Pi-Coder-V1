@@ -74,11 +74,13 @@ Rules for decomposition:
 
 Each implementation unit has an optional `approach` field:
 - **`approach: "tdd"`** (default when absent) — Standard RED/GREEN cycle with all guards enforced. The implementor writes failing tests first, then writes code to make them pass.
-- **`approach: "direct"`** — Skip the RED phase. The `test_run_this_state` evidence is auto-set when advancing to TDD_RED_WRITE, so the RED_VALIDATE gate passes without running tests. Use this for units that are config changes, documentation updates, or other non-behavioral changes where test-first development adds noise. GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
+- **`approach: "direct"`** — Skip the RED phase. The `test_run_this_state` evidence is auto-set when advancing to TDD_RED_WRITE or IMPLEMENTING, so the RED_VALIDATE gate passes without running tests. Use this for units that are config changes, documentation updates, or other non-behavioral changes where test-first development adds noise. GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
 
 When saving the spec, include `approach: "direct"` on units that genuinely don't benefit from test-first development. Do NOT use direct for units that change production behavior.
 
-When advancing to TDD_RED_WRITE, pass the `unitName` parameter to `pi_coder_advance_fsm` so the FSM can read the unit's approach and auto-set evidence for direct units.
+When advancing to TDD_RED_WRITE or IMPLEMENTING, pass the `unitName` parameter to `pi_coder_advance_fsm` so the FSM can read the unit's approach and auto-set evidence for direct units.
+
+**After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry — the RED_VALIDATE gate enforces TDD until you update the spec. If you believe the direct classification is still valid, re-save the spec with `approach: "direct"` before advancing.
 
 ### Delegation Pacing
 
