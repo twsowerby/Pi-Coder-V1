@@ -321,8 +321,9 @@ function serializeSpec(spec: SpecFile): string {
     lines.push("## Implementation Plan");
     for (const unit of spec.implementationPlan) {
       const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
+      const approachStr = unit.approach === "direct" ? " (approach: direct)" : ""; // Only serialize 'direct', not 'tdd'
       const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
-      lines.push(`- **${unit.name}** [${acRefs}]${deps}`);
+      lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${deps}`);
       for (const f of unit.keyFiles) {
         lines.push(`  - \`${f}\``);
       }
@@ -440,7 +441,7 @@ function extractTextSection(content: string, heading: string): string {
  * Extract the Implementation Plan section from a spec file.
  *
  * Format:
- *   - **Unit Name** [AC1, AC2] (depends on: Other Unit)
+ *   - **Unit Name** [AC1, AC2] (approach: direct) (depends on: Other Unit)
  *     - `path/to/file.ts`
  *
  * Returns an array of ImplementationUnit objects.
@@ -459,8 +460,9 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
   const section = sectionMatch[1].trim();
   const units: ImplementationUnit[] = [];
 
-  // Match unit lines: - **Name** [AC1, AC2] or - **Name** [AC1, AC2] (depends on: X, Y)
-  const unitRegex = /^- \*\*(.+?)\*\*\s*\[([^\]]+)\](?:\s*\(depends on: (.+?)\))?$/gm;
+  // Match unit lines: - **Name** [AC1, AC2] optionally (approach: direct/tdd) optionally (depends on: X, Y)
+  // The approach and depends-on can appear in any order after the AC refs
+  const unitRegex = /^- \*\*(.+?)\*\*\s*\[([^\]]+)\](.*)$/gm;
   let unitMatch: RegExpExecArray | null;
 
   while ((unitMatch = unitRegex.exec(section)) !== null) {
@@ -469,8 +471,21 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
       const num = s.trim().replace(/^AC/, "");
       return parseInt(num, 10) - 1; // Convert AC1 → index 0
     }).filter((n) => !isNaN(n));
-    const dependsOn = unitMatch[3]
-      ? unitMatch[3].split(",").map((s) => s.trim())
+    const trailing = unitMatch[3] ?? "";
+
+    // Extract approach from trailing string
+    let approach: "tdd" | "direct" | undefined;
+    const approachMatch = trailing.match(/\(approach:\s*(tdd|direct)\)/);
+    if (approachMatch) {
+      approach = approachMatch[1] as "tdd" | "direct";
+      // Normalize: undefined = tdd default, only set if explicitly "direct"
+      if (approach === "tdd") approach = undefined;
+    }
+
+    // Extract dependsOn from trailing string
+    const dependsOnMatch = trailing.match(/\(depends on:\s*(.+?)\)/);
+    const dependsOn = dependsOnMatch
+      ? dependsOnMatch[1].split(",").map((s) => s.trim())
       : [];
 
     // Find indented key files below this unit (stop at next unit line)
@@ -485,12 +500,16 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
       .map((line) => line.trim().replace(/^- `/, "").replace(/`$/, ""))
       .filter(Boolean);
 
-    units.push({
+    const unit: ImplementationUnit = {
       name,
       acceptanceCriteriaIndices: acRefs,
       keyFiles,
       dependsOn,
-    });
+    };
+    if (approach === "direct") {
+      unit.approach = "direct";
+    }
+    units.push(unit);
   }
 
   return units;

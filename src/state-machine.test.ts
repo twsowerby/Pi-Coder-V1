@@ -893,3 +893,82 @@ describe("Unit 1: buildDiagram", () => {
     assert.ok(!diagram.includes("RED tautology"));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unit 2: currentUnitName state tracking
+// ---------------------------------------------------------------------------
+
+describe("Unit 2: currentUnitName state tracking", () => {
+  it("should start as null", () => {
+    const sm = new StateMachine(makeConfig());
+    assert.strictEqual(sm.currentUnitName, null);
+  });
+
+  it("should be settable via setCurrentUnitName", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    assert.strictEqual(sm.currentUnitName, "Config update");
+  });
+
+  it("should be clearable via setCurrentUnitName(null)", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    sm.setCurrentUnitName(null);
+    assert.strictEqual(sm.currentUnitName, null);
+  });
+
+  it("should reset to null on IDLE entry", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    forceTransition(sm, "SPEC_WORK");
+    assert.strictEqual(sm.currentUnitName, "Config update", "Should persist through SPEC_WORK");
+    forceTransition(sm, "IDLE");
+    assert.strictEqual(sm.currentUnitName, null, "Should be null after IDLE entry");
+  });
+
+  it("should be included in toJSON output", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    const json = sm.toJSON();
+    assert.strictEqual(json.currentUnitName, "Config update");
+  });
+
+  it("should be null in toJSON when not set", () => {
+    const sm = new StateMachine(makeConfig());
+    const json = sm.toJSON();
+    assert.strictEqual(json.currentUnitName, null);
+  });
+
+  it("should be restored from JSON via fromJSON", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    const json = sm.toJSON();
+    const restored = StateMachine.fromJSON(json, makeConfig());
+    assert.strictEqual(restored.currentUnitName, "Config update");
+  });
+
+  it("should persist null currentUnitName through JSON round-trip", () => {
+    const sm = new StateMachine(makeConfig());
+    const json = sm.toJSON();
+    const restored = StateMachine.fromJSON(json, makeConfig());
+    assert.strictEqual(restored.currentUnitName, null);
+  });
+
+  it("should be cleared on reset()", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    sm.reset();
+    assert.strictEqual(sm.currentUnitName, null);
+  });
+
+  it("LightStateMachine also supports currentUnitName", () => {
+    const sm = new LightStateMachine(makeConfig());
+    assert.strictEqual(sm.currentUnitName, null);
+    sm.setCurrentUnitName("Config update");
+    assert.strictEqual(sm.currentUnitName, "Config update");
+    const json = sm.toJSON();
+    assert.strictEqual(json.currentUnitName, "Config update");
+    const restored = LightStateMachine.fromJSON(json, makeConfig());
+    assert.strictEqual(restored.currentUnitName, "Config update");
+  });
+});

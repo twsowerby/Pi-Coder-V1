@@ -467,6 +467,7 @@ export async function persistState(): Promise<void> {
         loopCount: fsmJson.loopCount as number,
         gitRef: fsmJson.gitRef as string | null,
         evidence: fsmJson.evidence as EvidenceFlag[],
+        currentUnitName: fsmJson.currentUnitName as string | null ?? null,
         createdAt: specStateCreatedAt ?? now,
         updatedAt: now,
       };
@@ -1448,6 +1449,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               currentState: specState.currentState as FSMState,
               loopCount: specState.loopCount,
               gitRef: specState.gitRef,
+              currentUnitName: specState.currentUnitName ?? null,
               evidence: specState.evidence,
             }, config);
           } else if (piCoderMode === "light") {
@@ -1455,6 +1457,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               currentState: specState.currentState as import("../src/types.ts").LightFSMState,
               loopCount: specState.loopCount,
               gitRef: specState.gitRef,
+              currentUnitName: specState.currentUnitName ?? null,
               evidence: specState.evidence,
             }, config);
           } else {
@@ -2373,13 +2376,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           }
 
           const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
+          // Build reclassification guidance for direct units flagged by reviewer
+          let reclassificationGuidance = "";
+          if (piCoderMode === "tdd" && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
+            reclassificationGuidance = " If the reviewer flagged a direct unit as needing TDD, re-save the spec with that unit's approach changed to 'tdd', present the change to the user via interview, and proceed with a full RED/GREEN cycle.";
+          }
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off)."
             : piCoderMode === "light" && reviewVerdict.verdict === "needs_changes"
               ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}. You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
               : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
                 ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
-                : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
+                : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.${reclassificationGuidance}`;
 
           // Append to tool result content
           if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {

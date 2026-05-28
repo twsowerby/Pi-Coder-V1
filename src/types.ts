@@ -90,6 +90,8 @@ export interface IStateMachine {
   loopCount: number;
   /** Pre-implementation git ref for rollback and diff */
   readonly gitRef: string | null;
+  /** Name of the currently active implementation unit */
+  readonly currentUnitName: string | null;
   /** Attempt a state transition. Returns TransitionGuardError if guard fails. Throws on illegal transitions. */
   transition(targetState: string): TransitionGuardError | void;
   /** Set an evidence flag */
@@ -108,6 +110,8 @@ export interface IStateMachine {
   canNudge(): { shouldNudge: boolean; expectedAction: string; expectedTool: string };
   /** Set the git ref independently (used after checkpoint) */
   setGitRef(ref: string): void;
+  /** Set the current implementation unit name */
+  setCurrentUnitName(name: string | null): void;
   /** Build a compact FSM diagram string from the state machine definition */
   buildDiagram(): string;
   /** Full reset to IDLE */
@@ -295,6 +299,8 @@ export interface ImplementationUnit {
   keyFiles: string[];
   /** Names of other units that must be implemented before this one */
   dependsOn: string[];
+  /** Approach classification: "tdd" (default, standard RED/GREEN cycle) or "direct" (skip RED phase) */
+  approach?: "tdd" | "direct";
 }
 
 /**
@@ -386,6 +392,8 @@ export interface SpecState {
   gitRef: string | null;
   /** Evidence flags set by tools during this spec's lifecycle */
   evidence: EvidenceFlag[];
+  /** Name of the currently active implementation unit, or null */
+  currentUnitName?: string | null;
   /** ISO timestamp of state creation */
   createdAt: string;
   /** ISO timestamp of last state update */

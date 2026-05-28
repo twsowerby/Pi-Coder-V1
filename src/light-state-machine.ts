@@ -131,6 +131,7 @@ export interface LightStateMachineJSON {
   currentState: LightFSMState;
   loopCount: number;
   gitRef: string | null;
+  currentUnitName: string | null;
   evidence: EvidenceFlag[];
 }
 

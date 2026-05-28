@@ -70,6 +70,16 @@ Rules for decomposition:
 - **Scope key files per unit.** Each unit lists only the files it touches.
 - **Sequential by default.** The implementor works one unit at a time. Parallel delegation is not used.
 
+#### Unit Approach Classification
+
+Each implementation unit has an optional `approach` field:
+- **`approach: "tdd"`** (default when absent) — Standard RED/GREEN cycle with all guards enforced. The implementor writes failing tests first, then writes code to make them pass.
+- **`approach: "direct"`** — Skip the RED phase. The `test_run_this_state` evidence is auto-set when advancing to TDD_RED_WRITE, so the RED_VALIDATE gate passes without running tests. Use this for units that are config changes, documentation updates, or other non-behavioral changes where test-first development adds noise. GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
+
+When saving the spec, include `approach: "direct"` on units that genuinely don't benefit from test-first development. Do NOT use direct for units that change production behavior.
+
+When advancing to TDD_RED_WRITE, pass the `unitName` parameter to `pi_coder_advance_fsm` so the FSM can read the unit's approach and auto-set evidence for direct units.
+
 ### Delegation Pacing
 
 **Never delegate the entire spec to a single implementor call.** The implementation plan breaks work into atomic units for a reason — delegate 1-2 units per implementor call. This preserves:
@@ -110,6 +120,7 @@ Then present the spec for approval using `interview` with **multiple focused que
 2. **Acceptance criteria question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?"
 3. **Constraints question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Constraints: [bulleted list]. Anything missing or wrong?"
 4. **Implementation plan question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Implementation plan: [unit names with AC references]. Does this decomposition look right?"
+5. **Direct classification question** (ONLY if any units have `approach: "direct"`): `type: "single"`, options: ["Approve", "Change to TDD"]. "The following units skip the TDD RED phase: [list unit names with brief descriptions]. Approve these direct classifications?"
 
 If the user selects "Needs changes" for any question, `spec_user_approved` will NOT be set — review the feedback and revise the spec, then re-present for approval.
 
@@ -151,6 +162,21 @@ When your FSM is in REVIEWING (all implementation units complete):
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec.
 
 4. Monitor the loop count. Every NEEDS_CHANGES exit increments the counter. If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
+
+5. **Direct unit verification**: If the reviewer finds that a direct unit changed production behavior, the unit should be reclassified as TDD. See the "Reclassifying Direct Units" section below.
+
+---
+
+## Reclassifying Direct Units
+
+If the reviewer finds that a direct unit changed production behavior and should have been TDD:
+
+1. Re-save the spec with `pi_coder_save_spec`, changing the unit's approach from `"direct"` to `"tdd"`
+2. Present the reclassification to the user via interview for approval
+3. The NEEDS_CHANGES → TDD_RED_WRITE flow will run a full RED/GREEN cycle for the unit
+4. The `test_run_this_state` evidence will NOT be auto-set (the spec now says `"tdd"`), so the RED phase gate is enforced normally
+
+The human's original spec approval covered the OLD classification. The reclassification is a material change that requires human sign-off.
 
 ---
 

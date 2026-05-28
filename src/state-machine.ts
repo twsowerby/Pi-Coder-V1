@@ -162,6 +162,7 @@ export interface StateMachineJSON {
   currentState: FSMState;
   loopCount: number;
   gitRef: string | null;
+  currentUnitName: string | null;
   evidence: EvidenceFlag[];
 }
 

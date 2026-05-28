@@ -392,3 +392,141 @@ describe("Spec round-trip integrity", () => {
     assert.deepStrictEqual(list, ["other-spec"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 4: Spec approach field serialization/parsing
+// ---------------------------------------------------------------------------
+
+describe("Spec approach field serialization", () => {
+  let tmpDir: string;
+  let manager: SpecManager;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-coder-approach-test-"));
+    manager = new SpecManager(tmpDir);
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("serializes approach: direct in markdown", async () => {
+    const spec: SpecFile = {
+      id: "approach-test",
+      title: "Approach Test",
+      acceptanceCriteria: ["Config updated", "Feature works"],
+      constraints: [],
+      keyFiles: ["config.json", "src/feature.ts"],
+      prunedContext: "Test context",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: ["Config update"] },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const raw = await manager.readSpecRaw("approach-test");
+    // Direct approach should be serialized
+    assert.ok(raw.includes("(approach: direct)"), `Should include '(approach: direct)' in markdown, got: ${raw}`);
+    // TDD approach (undefined) should NOT be serialized
+    // The Feature unit has no approach, so there should be no '(approach: tdd)'
+    assert.ok(!raw.includes("(approach: tdd)"), `Should NOT include '(approach: tdd)', got: ${raw}`);
+  });
+
+  it("parses approach: direct from markdown", async () => {
+    const spec: SpecFile = {
+      id: "approach-test",
+      title: "Approach Test",
+      acceptanceCriteria: ["Config updated", "Feature works"],
+      constraints: [],
+      keyFiles: ["config.json", "src/feature.ts"],
+      prunedContext: "Test context",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: ["Config update"] },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("approach-test");
+    assert.ok(read, "Should return a spec");
+    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
+    assert.strictEqual(read!.implementationPlan[1].approach, undefined);
+  });
+
+  it("round-trips approach: direct through serialize/parse", async () => {
+    const spec: SpecFile = {
+      id: "approach-test",
+      title: "Approach Test",
+      acceptanceCriteria: ["Config updated"],
+      constraints: [],
+      keyFiles: ["config.json"],
+      prunedContext: "Test context",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("approach-test");
+    assert.deepStrictEqual(read!.implementationPlan, spec.implementationPlan);
+  });
+
+  it("round-trips undefined approach (default tdd) through serialize/parse", async () => {
+    const spec: SpecFile = {
+      id: "approach-test",
+      title: "Approach Test",
+      acceptanceCriteria: ["Feature works"],
+      constraints: [],
+      keyFiles: ["src/feature.ts"],
+      prunedContext: "Test context",
+      implementationPlan: [
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [] },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("approach-test");
+    assert.strictEqual(read!.implementationPlan[0].approach, undefined);
+  });
+
+  it("handles approach: direct with depends on", async () => {
+    const spec: SpecFile = {
+      id: "approach-test",
+      title: "Approach Test",
+      acceptanceCriteria: ["Config updated", "Feature works"],
+      constraints: [],
+      keyFiles: ["config.json", "src/feature.ts"],
+      prunedContext: "Test context",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: ["Config update"], approach: "direct" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("approach-test");
+    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
+    assert.strictEqual(read!.implementationPlan[1].approach, "direct");
+    assert.deepStrictEqual(read!.implementationPlan[1].dependsOn, ["Config update"]);
+  });
+
+  it("backward compat: parses old format without approach field", async () => {
+    const spec: SpecFile = {
+      id: "old-format",
+      title: "Old Format",
+      acceptanceCriteria: ["Feature works"],
+      constraints: [],
+      keyFiles: ["src/feature.ts"],
+      prunedContext: "Test context",
+      implementationPlan: [
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: ["Other Unit"] },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("old-format");
+    assert.strictEqual(read!.implementationPlan[0].approach, undefined, "Old format should have undefined approach (defaults to tdd)");
+    assert.deepStrictEqual(read!.implementationPlan[0].dependsOn, ["Other Unit"]);
+  });
+});

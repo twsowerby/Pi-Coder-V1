@@ -214,6 +214,7 @@ function isValidSpecState(value: unknown): value is SpecState {
   if (!VALID_STATES.has(obj.currentState)) return false;
   if (typeof obj.loopCount !== "number") return false;
   if (obj.gitRef !== null && typeof obj.gitRef !== "string") return false;
+  if (obj.currentUnitName !== undefined && obj.currentUnitName !== null && typeof obj.currentUnitName !== "string") return false;
   if (!Array.isArray(obj.evidence)) return false;
   if (typeof obj.createdAt !== "string") return false;
   if (typeof obj.updatedAt !== "string") return false;

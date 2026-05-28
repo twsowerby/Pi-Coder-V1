@@ -75,6 +75,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
   fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
   reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a state (e.g., REVIEWING→APPROVED without review, or skipping a TDD phase). Explains why the exception is justified." })),
+  unitName: Type.Optional(Type.String({ description: "Name of the implementation unit being advanced to (reads approach from spec)" })),
 });
 
 // ---------------------------------------------------------------------------
@@ -469,6 +470,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         acceptanceCriteriaIndices: Type.Array(Type.Number(), { description: "0-based indices into acceptanceCriteria array" }),
         keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
+        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct")], { description: "Approach classification: 'tdd' (standard RED/GREEN cycle) or 'direct' (skip RED phase for non-behavioral changes)" })),
       }), { description: "Ordered list of atomic implementation units" })),
     }),
 
@@ -486,6 +488,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             acceptanceCriteriaIndices: u.acceptanceCriteriaIndices,
             keyFiles: u.keyFiles,
             dependsOn: u.dependsOn ?? [],
+            approach: u.approach,
           })) ?? [],
           status: smRef.current.currentState,
         };
@@ -568,8 +571,9 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           lines.push("", "## Implementation Plan");
           for (const unit of spec.implementationPlan) {
             const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
+            const approachStr = unit.approach === "direct" ? " (approach: direct)" : "";
             const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
-            lines.push(`- **${unit.name}** [${acRefs}]${deps}`);
+            lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${deps}`);
             for (const f of unit.keyFiles) {
               lines.push(`  - ${f}`);
             }
@@ -620,7 +624,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     parameters: ADVANCE_FSM_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { targetState, request, fixType, reason } = params;
+      const { targetState, request, fixType, reason, unitName } = params;
       const previousState = smRef.current.currentState;
 
       // No static state validation — each state machine (StateMachine, LightStateMachine)
@@ -641,6 +645,36 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Light mode does not have this gate — fixType is ignored in Light mode.
       if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && deps.piCoderMode.current === "tdd") {
         smRef.current.setEvidence("non_functional_classified");
+      }
+
+      // Handle unitName for TDD_RED_WRITE advancement
+      if (unitName && targetState === "TDD_RED_WRITE") {
+        smRef.current.setCurrentUnitName(unitName);
+      }
+
+      // Check if the current unit is a direct unit (reads spec lazily)
+      // This affects evidence-setting: direct units auto-satisfy test_run_this_state
+      // for RED_VALIDATE, but NOT for GREEN_VALIDATE (test suite must still run).
+      let isDirectUnit = false;
+      const currentUnit = smRef.current.currentUnitName;
+      if (currentUnit) {
+        // For GREEN_VALIDATE → REVIEWING, never treat as direct — the test
+        // suite MUST actually run as a safety net regardless of approach.
+        const isGreenExit = smRef.current.currentState === "TDD_GREEN_VALIDATE";
+        if (!isGreenExit) {
+          try {
+            const specId = deps.activeSpecId.current;
+            if (specId) {
+              const spec = await deps.specManager.readSpec(specId);
+              if (spec) {
+                const unit = spec.implementationPlan.find(u => u.name === currentUnit);
+                isDirectUnit = unit?.approach === "direct";
+              }
+            }
+          } catch {
+            // Spec read failed — assume not direct (safe default)
+          }
+        }
       }
 
       // Check for exception transitions BEFORE attempting the transition.
@@ -680,6 +714,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             },
             isError: true,
           };
+        }
+
+        // Post-transition: auto-set test_run_this_state for direct units
+        // This must be AFTER transition() because transition() clears transient evidence.
+        // For direct units in the RED phase, this satisfies the RED_VALIDATE guard.
+        // For GREEN_VALIDATE, we DON'T auto-set — the test suite must actually run.
+        if (isDirectUnit) {
+          smRef.current.setEvidence("test_run_this_state");
         }
 
         // On SPEC_WORK entry: generate spec ID and set active, but delay

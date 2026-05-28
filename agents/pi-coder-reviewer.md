@@ -39,6 +39,9 @@ These are what you MUST review, in order of importance:
 3. **Security:** Input validation, injection vulnerabilities, authentication/authorization gaps, data exposure.
 4. **Correctness:** Does the code actually satisfy each Acceptance Criterion? Trace through the logic, don't assume.
 5. **API Contracts:** Breaking changes to public interfaces, missing error handling, inconsistent return types.
+6. **Direct Unit Verification:** If the task brief indicates a unit was classified as `direct` (approach: direct), verify that the unit did NOT change production behavior beyond what the acceptance criteria describe. If a direct unit modified production logic — not just config, documentation, or non-behavioral changes — flag it as 🔴 High: "Unit was classified as direct but changed production behavior — should have been TDD." This is a critical check because direct units bypass the RED phase and therefore have no test-first coverage.
+
+Read the spec (via `pi_coder_read_spec`) or check the task brief for unit approach classifications before reviewing.
 
 ## What You Skip
 

@@ -1081,4 +1081,167 @@ describe("Phase 6: pi_coder_advance_fsm fixType parameter", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Unit 3: pi_coder_advance_fsm with unitName and direct approach
+// ---------------------------------------------------------------------------
+
+describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
+  it("sets currentUnitName when unitName is provided with TDD_RED_WRITE", async () => {
+    const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
+    advanceToState(sm, "GIT_CHECKPOINT");
+    setActiveSpec("test-spec");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    // Save a spec with a direct unit
+    await executeTool(tools, "pi_coder_save_spec", {
+      id: "test-spec",
+      title: "Test Spec",
+      acceptanceCriteria: ["Config is updated"],
+      constraints: [],
+      keyFiles: ["config.json"],
+      prunedContext: "Config update",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+      ],
+    });
+
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "TDD_RED_WRITE",
+      unitName: "Config update",
+    });
+    assert.ok(!result.isError, `Should succeed, got error: ${JSON.stringify(result.details)}`);
+    assert.strictEqual(sm.currentUnitName, "Config update");
+  });
+
+  it("auto-sets test_run_this_state evidence for direct approach units", async () => {
+    const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
+    advanceToState(sm, "GIT_CHECKPOINT");
+    setActiveSpec("test-spec");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    // Save a spec with a direct unit
+    await executeTool(tools, "pi_coder_save_spec", {
+      id: "test-spec",
+      title: "Test Spec",
+      acceptanceCriteria: ["Config is updated"],
+      constraints: [],
+      keyFiles: ["config.json"],
+      prunedContext: "Config update",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+      ],
+    });
+
+    await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "TDD_RED_WRITE",
+      unitName: "Config update",
+    });
+
+    assert.ok(sm.hasEvidence("test_run_this_state"), "Should auto-set test_run_this_state for direct units");
+  });
+
+  it("does NOT auto-set test_run_this_state for TDD approach units", async () => {
+    const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
+    advanceToState(sm, "GIT_CHECKPOINT");
+    setActiveSpec("test-spec");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    // Save a spec with a TDD unit (explicit approach)
+    await executeTool(tools, "pi_coder_save_spec", {
+      id: "test-spec",
+      title: "Test Spec",
+      acceptanceCriteria: ["Feature works"],
+      constraints: [],
+      keyFiles: ["src/feature.ts"],
+      prunedContext: "Feature implementation",
+      implementationPlan: [
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [], approach: "tdd" },
+      ],
+    });
+
+    // Clear any existing evidence
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "TDD_RED_WRITE",
+      unitName: "Feature",
+    });
+
+    assert.ok(!sm.hasEvidence("test_run_this_state"), "Should NOT auto-set test_run_this_state for TDD units");
+  });
+
+  it("does NOT auto-set test_run_this_state when unit has no approach (undefined = tdd)", async () => {
+    const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
+    advanceToState(sm, "GIT_CHECKPOINT");
+    setActiveSpec("test-spec");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    // Save a spec with a unit that has no approach
+    await executeTool(tools, "pi_coder_save_spec", {
+      id: "test-spec",
+      title: "Test Spec",
+      acceptanceCriteria: ["Feature works"],
+      constraints: [],
+      keyFiles: ["src/feature.ts"],
+      prunedContext: "Feature implementation",
+      implementationPlan: [
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [] },
+      ],
+    });
+
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "TDD_RED_WRITE",
+      unitName: "Feature",
+    });
+
+    assert.ok(!sm.hasEvidence("test_run_this_state"), "Should NOT auto-set test_run_this_state for units with undefined approach");
+  });
+
+  it("advances without unitName (backward compat)", async () => {
+    const { tools, sm, setActiveSpec } = setupMocks();
+    advanceToState(sm, "GIT_CHECKPOINT");
+    setActiveSpec("test-spec");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "TDD_RED_WRITE",
+    });
+
+    assert.ok(!result.isError, "Should succeed without unitName (backward compat)");
+    assert.strictEqual(sm.currentUnitName, null, "currentUnitName should remain null when no unitName provided");
+  });
+
+  it("saves spec with approach field on implementation plan units", async () => {
+    const { tools, sm, mockSpec } = setupMocks();
+    const result = await executeTool(tools, "pi_coder_save_spec", {
+      id: "mixed-units",
+      title: "Mixed Units Spec",
+      acceptanceCriteria: ["Config updated", "Feature works"],
+      constraints: [],
+      keyFiles: ["config.json", "src/feature.ts"],
+      prunedContext: "Mixed spec",
+      implementationPlan: [
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: [], approach: "tdd" },
+      ],
+    });
+    assert.ok(!result.isError, "Should succeed saving spec with approach fields");
+    // Verify approach was persisted
+    const specCall = mockSpec.calls.find(c => c.method === "createSpec");
+    assert.ok(specCall, "Should have called createSpec");
+    const savedSpec = specCall!.args[0] as { implementationPlan: Array<{ name: string; approach?: string }> };
+    assert.strictEqual(savedSpec.implementationPlan[0].approach, "direct");
+    assert.strictEqual(savedSpec.implementationPlan[1].approach, "tdd");
+  });
+});
+
 

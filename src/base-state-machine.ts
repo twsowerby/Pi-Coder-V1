@@ -136,6 +136,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
   private _currentState: S;
   private _loopCount: number = 0;
   private _gitRef: string | null = null;
+  protected _currentUnitName: string | null = null;
   private _evidence: Set<EvidenceFlag> = new Set();
   protected readonly _config: PiCoderConfig;
 
@@ -174,6 +175,14 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
 
   get gitRef(): string | null {
     return this._gitRef;
+  }
+
+  get currentUnitName(): string | null {
+    return this._currentUnitName;
+  }
+
+  setCurrentUnitName(name: string | null): void {
+    this._currentUnitName = name;
   }
 
   // --- Evidence Management ---
@@ -255,10 +264,11 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       this._loopCount++;
     }
 
-    // Reset loop counter and evidence on IDLE entry
+    // Reset loop counter, evidence, and currentUnitName on IDLE entry
     if (to === "IDLE") {
       this._loopCount = 0;
       this._evidence.clear();
+      this._currentUnitName = null;
     }
   }
 
@@ -278,6 +288,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     this._currentState = "IDLE" as S;
     this._loopCount = 0;
     this._gitRef = null;
+    this._currentUnitName = null;
     this._evidence.clear();
   }
 
@@ -379,6 +390,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       currentState: this._currentState,
       loopCount: this._loopCount,
       gitRef: this._gitRef,
+      currentUnitName: this._currentUnitName,
       evidence: [...this._evidence],
     };
   }
@@ -388,6 +400,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     this._currentState = data.currentState as S;
     this._loopCount = (data.loopCount as number) ?? 0;
     this._gitRef = (data.gitRef as string | null) ?? null;
+    this._currentUnitName = (data.currentUnitName as string | null) ?? null;
     this._evidence = new Set((data.evidence as EvidenceFlag[]) ?? []);
   }
 }

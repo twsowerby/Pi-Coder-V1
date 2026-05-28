@@ -410,6 +410,59 @@ describe("ImplementationUnit", () => {
     };
     assert.strictEqual(unit.dependsOn.length, 0);
   });
+
+  it("should accept approach: 'tdd'", () => {
+    const unit: ImplementationUnit = {
+      name: "Feature with TDD",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: ["src/feature.ts"],
+      dependsOn: [],
+      approach: "tdd",
+    };
+    assert.strictEqual(unit.approach, "tdd");
+  });
+
+  it("should accept approach: 'direct'", () => {
+    const unit: ImplementationUnit = {
+      name: "Config change",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: ["config.json"],
+      dependsOn: [],
+      approach: "direct",
+    };
+    assert.strictEqual(unit.approach, "direct");
+  });
+
+  it("should allow approach to be undefined (default tdd)", () => {
+    const unit: ImplementationUnit = {
+      name: "Default unit",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: ["src/feature.ts"],
+      dependsOn: [],
+    };
+    assert.strictEqual(unit.approach, undefined);
+  });
+
+  it("should round-trip approach through JSON", () => {
+    const unit: ImplementationUnit = {
+      name: "Config change",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: ["config.json"],
+      dependsOn: [],
+      approach: "direct",
+    };
+    const parsed = JSON.parse(JSON.stringify(unit)) as ImplementationUnit;
+    assert.strictEqual(parsed.approach, "direct");
+    // Undefined approach should be omitted from JSON
+    const defaultUnit: ImplementationUnit = {
+      name: "Default",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: [],
+      dependsOn: [],
+    };
+    const defaultParsed = JSON.parse(JSON.stringify(defaultUnit)) as ImplementationUnit;
+    assert.strictEqual(defaultParsed.approach, undefined);
+  });
 });
 
 describe("KnowledgeEntry", () => {

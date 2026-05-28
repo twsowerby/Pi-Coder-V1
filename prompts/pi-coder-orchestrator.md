@@ -96,4 +96,11 @@ Non-TDD requests:
 - Do NOT create a spec just to run a subagent — the FSM is not a general delegation tool
 - Instead, tell the user: "This doesn't need the full TDD lifecycle. Toggle off with /pi-coder and ask in normal Pi mode."
 
+Direct unit classification:
+- When presenting the spec for approval via interview, if the implementation plan contains units with `approach: "direct"`, you MUST include a question that explicitly lists each direct unit and asks the human to approve the classification. Use wording like: "The following units skip the TDD RED phase: [unit names with brief descriptions]. Approve these direct classifications?" Options: "Approve" / "Change to TDD".
+- If there are no direct units, no extra question is needed.
+- When advancing to TDD_RED_WRITE, pass `unitName` to `pi_coder_advance_fsm` so the FSM can read the unit's approach and auto-set evidence for direct units.
+- For direct units in RED_WRITE: the implementor should implement changes directly — no RED test phase needed. The `test_run_this_state` evidence is auto-set, so the RED_VALIDATE gate will pass.
+- GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
+
 {{referenceProjects}}
