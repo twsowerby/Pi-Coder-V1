@@ -101,6 +101,13 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
         "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
         "changes), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead.",
     },
+    {
+      from: "REVIEWING",
+      to: "APPROVED",
+      requiredEvidence: ["review_approved"],
+      errorMessage:
+        "Cannot advance to APPROVED without review approval. The reviewer must approve the implementation before advancing.",
+    },
   ],
 
   actionRules: [
@@ -131,7 +138,7 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
 
   alwaysAllowed: ["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm"],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified"],
+  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified", "review_approved"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },

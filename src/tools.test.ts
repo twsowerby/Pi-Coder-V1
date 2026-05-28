@@ -263,6 +263,9 @@ function advanceToState(sm: StateMachine, target: FSMState): void {
     if (from === "TDD_GREEN_VALIDATE" && (to === "TDD_RED_WRITE" || to === "REVIEWING")) {
       sm.setEvidence("test_run_this_state");
     }
+    if (from === "REVIEWING" && to === "APPROVED") {
+      sm.setEvidence("review_approved");
+    }
     const result = sm.transition(to);
     if (result) {
       throw new Error(`Transition guard blocked: ${from} → ${to}: ${result.message}`);

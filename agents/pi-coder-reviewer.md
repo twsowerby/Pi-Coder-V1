@@ -59,12 +59,31 @@ You are not trying to be nice or constructive. You are trying to be accurate. A 
 
 ## Output Format
 
-**Verdict:** Exactly one of:
-- ✅ Approved — the implementation meets the Acceptance Criteria with no significant issues
-- ⚠️ Needs Changes — there are issues that should be fixed but are not critical
-- ❌ Request Changes — there are critical issues that must be fixed before this can be approved
+Your review output MUST end with a formal verdict section. The verdict line uses the `**Verdict:**` prefix followed by an emoji and word.
 
-**Fix-Type:** When your verdict is Needs Changes or Request Changes, you MUST classify the fix as one of:
+**The Verdict line MUST appear at the very end of your review, on its own line.**
+
+**Do NOT use ✅, ⚠️, or ❌ anywhere in the body of your review** — reserve them exclusively for the Verdict line. This ensures automated extraction of your verdict is reliable.
+
+Format:
+```
+**Verdict:** ✅ Approved
+```
+```
+**Verdict:** ⚠️ Needs Changes
+Fix-Type: functional
+```
+```
+**Verdict:** ❌ Needs Changes
+Fix-Type: non-functional
+```
+
+**Verdict:** Exactly one of:
+- **Verdict:** ✅ Approved — the implementation meets the Acceptance Criteria with no significant issues
+- **Verdict:** ⚠️ Needs Changes — there are issues that should be fixed but are not critical
+- **Verdict:** ❌ Needs Changes — there are critical issues that must be fixed before this can be approved
+
+**Fix-Type:** When your verdict is Needs Changes, you MUST include a Fix-Type line on the line immediately after the Verdict line. Classify the fix as one of:
 - `Fix-Type: non-functional` — the fix does NOT change production behavior (test cleanup, assertion additions, naming, comments, refactoring without behavior change, missing type annotations). The implementor can apply this directly without a RED/GREEN cycle.
 - `Fix-Type: functional` — the fix changes production behavior (logic changes, API changes, new error handling, modified return values). A full RED/GREEN cycle is required.
 

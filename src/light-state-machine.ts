@@ -74,6 +74,13 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
         "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
         "changes), advance to IMPLEMENTING for a full implementation cycle instead.",
     },
+    {
+      from: "REVIEWING",
+      to: "APPROVED",
+      requiredEvidence: ["review_approved"],
+      errorMessage:
+        "Cannot advance to APPROVED without review approval. The reviewer must approve the implementation before advancing.",
+    },
   ],
 
   actionRules: [
@@ -112,7 +119,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     "intercom", "ls", "find", "grep", "pi_coder_advance_fsm",
   ],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified"],
+  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified", "review_approved"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },

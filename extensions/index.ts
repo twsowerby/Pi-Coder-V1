@@ -983,15 +983,23 @@ function extractTokenUsage(result: unknown): { input: number; output: number; to
 }
 
 /**
+ * Structured verdict result returned by extractReviewVerdict.
+ * Discriminated union: approved has no details, needs_changes carries
+ * fix classification and issue breakdown.
+ */
+export type VerdictResult =
+  | { verdict: "approved" }
+  | { verdict: "needs_changes"; fixType: "functional" | "non-functional"; issueCount: { high: number; medium: number; low: number } };
+
+/**
  * Extract review verdict from a subagent output (reviewer agent).
  * Looks for common verdict patterns in the text output.
+ *
+ * Tier 1 (highest priority): Emoji verdict markers — uses LAST occurrence
+ * in the text to avoid false positives from emojis in prose.
+ * Tier 2 (fallback): Text-based pattern matching on full text.
  */
-export function extractReviewVerdict(result: unknown): {
-  verdict: "approved" | "needs_changes" | "request_changes";
-  fixType: "functional" | "non-functional" | null;
-  issueCount: number;
-  highSeverityCount: number;
-} | null {
+export function extractReviewVerdict(result: unknown): VerdictResult | null {
   if (!result || typeof result !== "object") return null;
 
   const r = result as Record<string, unknown>;
@@ -1020,35 +1028,77 @@ export function extractReviewVerdict(result: unknown): {
 
   if (!text) return null;
 
-  // Check for verdict markers used by the reviewer agent prompt
-  let verdict: "approved" | "needs_changes" | "request_changes";
-  if (text.includes("✅") || /approved/i.test(text.slice(0, 500))) {
-    verdict = "approved";
-  } else if (text.includes("❌") || /request.?changes/i.test(text.slice(0, 500))) {
-    verdict = "request_changes";
-  } else if (text.includes("⚠️") || /needs.?changes/i.test(text.slice(0, 500))) {
-    verdict = "needs_changes";
-  } else {
-    return null; // Can't determine verdict
+  // --- Tier 1: Emoji-based verdict extraction (highest priority) ---
+  // Use LAST occurrence to avoid false positives from emojis in prose.
+  // The reviewer's verdict appears at the END of the review.
+  const approvedIndex = text.lastIndexOf("✅");
+  const rejectIndex = text.lastIndexOf("❌");
+  const changesIndex = text.lastIndexOf("⚠️");
+
+  let emojiVerdict: "approved" | "needs_changes" | null = null;
+
+  if (approvedIndex !== -1 || rejectIndex !== -1 || changesIndex !== -1) {
+    // Build a list of (verdict, index) pairs for emojis that were found
+    const verdicts: Array<{ verdict: "approved" | "needs_changes"; index: number }> = [];
+
+    if (approvedIndex !== -1) {
+      verdicts.push({ verdict: "approved", index: approvedIndex });
+    }
+    if (rejectIndex !== -1) {
+      verdicts.push({ verdict: "needs_changes", index: rejectIndex });
+    }
+    if (changesIndex !== -1) {
+      verdicts.push({ verdict: "needs_changes", index: changesIndex });
+    }
+
+    // Sort by index descending — the LAST emoji in text wins
+    verdicts.sort((a, b) => b.index - a.index);
+    emojiVerdict = verdicts[0].verdict;
   }
 
-  // Extract fix type classification from reviewer output
-  // The reviewer is prompted to include a fix type in its verdict
-  let fixType: "functional" | "non-functional" | null = null;
-  if (verdict !== "approved") {
-    const fixTypeMatch = text.match(/fix.?type:\s*(functional|non-functional|non_functional)/i);
-    if (fixTypeMatch) {
-      fixType = fixTypeMatch[1].toLowerCase().replace("_", "-") === "non-functional" ? "non-functional" : "functional";
+  // --- Tier 2: Text-based pattern matching (fallback) ---
+  // Search the full text (no 500-char limit) for text-only verdicts.
+  // Only used if Tier 1 didn't find any emoji markers.
+  let textVerdict: "approved" | "needs_changes" | null = null;
+  if (emojiVerdict === null) {
+    if (/\*\*Verdict:\*\*\s*approved/i.test(text)) {
+      textVerdict = "approved";
+    } else if (/\*\*Verdict:\*\*\s*(?:request\s+changes|needs\s+changes)/i.test(text)) {
+      textVerdict = "needs_changes";
+    } else if (/approved/i.test(text)) {
+      textVerdict = "approved";
+    } else if (/needs.?changes|request.?changes/i.test(text)) {
+      textVerdict = "needs_changes";
     }
+  }
+
+  const verdict = emojiVerdict ?? textVerdict;
+  if (verdict === null) return null;
+
+  // For approved verdicts, no additional data needed
+  if (verdict === "approved") {
+    return { verdict: "approved" };
+  }
+
+  // --- needs_changes: extract fix type and issue counts ---
+
+  // Extract fix type classification from reviewer output
+  let fixType: "functional" | "non-functional" = "functional"; // Safe default
+  const fixTypeMatch = text.match(/fix.?type:\s*(functional|non-functional|non_functional)/i);
+  if (fixTypeMatch) {
+    fixType = fixTypeMatch[1].toLowerCase().replace("_", "-") === "non-functional" ? "non-functional" : "functional";
   }
 
   // Count issues — look for severity markers
   const highSeverity = (text.match(/🔴/g) ?? []).length;
   const medSeverity = (text.match(/🟠/g) ?? []).length;
   const lowSeverity = (text.match(/🟡/g) ?? []).length;
-  const issueCount = highSeverity + medSeverity + lowSeverity;
 
-  return { verdict, fixType, issueCount, highSeverityCount: highSeverity };
+  return {
+    verdict: "needs_changes",
+    fixType,
+    issueCount: { high: highSeverity, medium: medSeverity, low: lowSeverity },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2210,8 +2260,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (reviewVerdict) {
           logEvent("review_result", {
             verdict: reviewVerdict.verdict,
-            issueCount: reviewVerdict.issueCount,
-            highSeverityCount: reviewVerdict.highSeverityCount,
+            issueCount: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issueCount : undefined,
+            highSeverityCount: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issueCount.high : undefined,
+            fixType: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.fixType : undefined,
             loopCount: stateMachine!.loopCount,
             specId: activeSpecId,
           });
@@ -2219,18 +2270,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // AUTO-TRANSITION: review verdict drives next state
           // This replaces the need for manual pi_coder_advance_fsm REVIEWING → APPROVED/NEEDS_CHANGES
           const target = reviewVerdict.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
+
+          // Set review_approved evidence before transitioning — the guard requires it
+          if (target === "APPROVED") {
+            stateMachine!.setEvidence("review_approved");
+          }
+
           stateMachine!.transition(target);
 
           // If reviewer classified fix as non-functional, set evidence
           // This gates the NEEDS_CHANGES → REVIEWING path and implementor delegation
-          if (reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
+          if (reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
             stateMachine!.setEvidence("non_functional_classified");
           }
 
           const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to FINAL_APPROVAL for user sign-off."
-            : reviewVerdict.fixType === "non-functional"
+            : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
               ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with fixType=\"non-functional\" for re-review.`
               : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
 
@@ -2241,6 +2298,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             // Don't return here — fall through to normal persist/refresh
             (rawContent[0] as { type: "text"; text: string }).text = appendedText;
           }
+        } else {
+          // Verdict extraction returned null — log for debugging
+          logEvent("verdict_extraction_failed", {
+            fsmState: stateMachine?.currentState ?? "N/A",
+            mode: piCoderMode,
+            textLength: typeof details === "string" ? details.length : 0,
+            firstHundredChars: (typeof details === "string" ? details : "").slice(0, 100).replace(/\n/g, "\\n"),
+          });
         }
       }
 
