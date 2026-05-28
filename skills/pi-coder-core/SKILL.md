@@ -259,6 +259,8 @@ Key Files for this unit:
 
 {end for each unit}
 
+Check .pi-coder/knowledge/ for project-specific rules before writing code.
+
 After completing these units, stop and return what you've done. Do NOT continue to other units in the implementation plan — each delegation is scoped to 1-2 units. The orchestrator will delegate the next batch.
 ```
 
