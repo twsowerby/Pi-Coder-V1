@@ -475,9 +475,9 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
 
     // Extract approach from trailing string
     let approach: "tdd" | "direct" | undefined;
-    const approachMatch = trailing.match(/\(approach:\s*(tdd|direct)\)/);
+    const approachMatch = trailing.match(/\(approach:\s*(tdd|direct)\)/i);
     if (approachMatch) {
-      approach = approachMatch[1] as "tdd" | "direct";
+      approach = approachMatch[1].toLowerCase() as "tdd" | "direct";
       // Normalize: undefined = tdd default, only set if explicitly "direct"
       if (approach === "tdd") approach = undefined;
     }

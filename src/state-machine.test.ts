@@ -961,6 +961,23 @@ describe("Unit 2: currentUnitName state tracking", () => {
     assert.strictEqual(sm.currentUnitName, null);
   });
 
+  it("should be cleared on NEEDS_CHANGES entry (prevents infinite loop on direct re-entry)", () => {
+    const sm = new StateMachine(makeConfig());
+    sm.setCurrentUnitName("Config update");
+    // Walk to REVIEWING first, then NEEDS_CHANGES is reachable
+    forceTransition(sm, "SPEC_WORK");
+    forceTransition(sm, "SPEC_APPROVED");
+    forceTransition(sm, "GIT_CHECKPOINT");
+    forceTransition(sm, "TDD_RED_WRITE");
+    forceTransition(sm, "TDD_RED_VALIDATE");
+    forceTransition(sm, "TDD_GREEN_WRITE");
+    forceTransition(sm, "TDD_GREEN_VALIDATE");
+    forceTransition(sm, "REVIEWING");
+    assert.strictEqual(sm.currentUnitName, "Config update", "name should persist to REVIEWING");
+    forceTransition(sm, "NEEDS_CHANGES");
+    assert.strictEqual(sm.currentUnitName, null, "currentUnitName should be cleared on NEEDS_CHANGES entry");
+  });
+
   it("LightStateMachine also supports currentUnitName", () => {
     const sm = new LightStateMachine(makeConfig());
     assert.strictEqual(sm.currentUnitName, null);

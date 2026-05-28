@@ -9,7 +9,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { generateSpecId, SpecManager } from "./spec.ts";
 import type { SpecFile } from "./types.ts";
@@ -528,5 +528,16 @@ describe("Spec approach field serialization", () => {
     const read = await manager.readSpec("old-format");
     assert.strictEqual(read!.implementationPlan[0].approach, undefined, "Old format should have undefined approach (defaults to tdd)");
     assert.deepStrictEqual(read!.implementationPlan[0].dependsOn, ["Other Unit"]);
+  });
+
+  it("parses case-insensitive APPROACH: DIRECT from markdown", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-coder-spec-test-"));
+    const manager = new SpecManager(dir);
+    // Manually write a spec with uppercase approach
+    const specDir = join(dir, "case-test");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(join(specDir, "spec.md"), `---\nid: case-test\ntitle: Case Test\nstatus: SPEC_WORK\n---\n\n# Case Test\n\n## Acceptance Criteria\n\n1. Config updated\n\n## Implementation Plan\n\n- **Config update** [1] (APPROACH: DIRECT)\n`);
+    const read = await manager.readSpec("case-test");
+    assert.strictEqual(read!.implementationPlan[0].approach, "direct", "Should parse uppercase APPROACH: DIRECT as direct");
   });
 });

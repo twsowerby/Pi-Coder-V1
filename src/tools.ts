@@ -647,17 +647,25 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         smRef.current.setEvidence("non_functional_classified");
       }
 
-      // Handle unitName for TDD_RED_WRITE advancement
-      if (unitName && targetState === "TDD_RED_WRITE") {
+      // Handle unitName for implementation entry states (TDD and Light mode)
+      if (unitName && (targetState === "TDD_RED_WRITE" || targetState === "IMPLEMENTING")) {
         smRef.current.setCurrentUnitName(unitName);
       }
 
       // Check if the current unit is a direct unit (reads spec lazily)
       // This affects evidence-setting: direct units auto-satisfy test_run_this_state
       // for RED_VALIDATE, but NOT for GREEN_VALIDATE (test suite must still run).
+      //
+      // CRITICAL: After NEEDS_CHANGES, do NOT auto-set evidence even if the spec
+      // still says "direct". If the reviewer flagged a direct unit as needing
+      // functional changes, the unit MUST go through full TDD on re-entry.
+      // The orchestrator must re-save the spec with approach: "tdd" before
+      // re-advancing, otherwise the evidence won't be auto-set and the
+      // RED_VALIDATE gate will enforce the TDD requirement.
       let isDirectUnit = false;
       const currentUnit = smRef.current.currentUnitName;
-      if (currentUnit) {
+      const cameFromNeedsChanges = smRef.current.currentState === "NEEDS_CHANGES";
+      if (currentUnit && !cameFromNeedsChanges) {
         // For GREEN_VALIDATE → REVIEWING, never treat as direct — the test
         // suite MUST actually run as a safety net regardless of approach.
         const isGreenExit = smRef.current.currentState === "TDD_GREEN_VALIDATE";
