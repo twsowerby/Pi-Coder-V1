@@ -135,6 +135,10 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
       toolPattern: "pi_coder_git",
       allowedStates: new Set(["GIT_CHECKPOINT", "REVIEWING", "MERGING", "BLOCKED", "IDLE"]),
     },
+    {
+      toolPattern: "pi_coder_submit_review",
+      allowedStates: new Set(["REVIEWING"]),
+    },
   ],
 
   alwaysAllowed: ["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm"],

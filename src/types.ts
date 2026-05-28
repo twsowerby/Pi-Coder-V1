@@ -321,6 +321,32 @@ export interface SpecFile {
 }
 
 /**
+ * A single issue found during review, with structured fields.
+ * Replaces the emoji-based severity counting (🔴🟠🟡) in extractReviewVerdict().
+ */
+export interface IssueDetail {
+  /** Short description of the issue */
+  title: string;
+  /** Severity level — maps to the former emoji markers: high=🔴, medium=🟠, low=🟡 */
+  severity: "high" | "medium" | "low";
+  /** File path where the issue was found, if applicable */
+  file?: string;
+  /** Description of the problem */
+  problem: string;
+  /** Suggested fix, if applicable */
+  suggestedFix?: string;
+}
+
+/**
+ * Structured verdict from a review, submitted via the pi_coder_submit_review tool.
+ * Discriminated union: approved has no details, needs_changes carries
+ * fix classification and optional issue breakdown.
+ */
+export type ReviewVerdict =
+  | { verdict: "approved" }
+  | { verdict: "needs_changes"; fixType: "functional" | "non-functional"; issues?: IssueDetail[] };
+
+/**
  * A knowledge entry — persisted project learnings.
  * The file IS the storage format (raw markdown).
  */

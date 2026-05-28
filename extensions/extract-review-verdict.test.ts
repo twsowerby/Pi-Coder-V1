@@ -8,7 +8,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { extractReviewVerdict, type VerdictResult } from "./index.ts";
+import { extractReviewVerdict, type ReviewVerdict } from "./index.ts";
 
 // ---------------------------------------------------------------------------
 // pi-subagents Details format
@@ -31,7 +31,7 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
       assert.equal(result.fixType, "functional"); // defaults to functional when missing
-      assert.deepEqual(result.issueCount, { high: 0, medium: 0, low: 0 });
+      assert.deepEqual(result.issues, []); // regex extraction cannot produce structured issues
     }
   });
 
@@ -51,7 +51,7 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
       assert.equal(result.fixType, "non-functional");
-      assert.deepEqual(result.issueCount, { high: 0, medium: 0, low: 1 });
+      assert.deepEqual(result.issues, []); // regex extraction cannot produce structured issues
     }
   });
 
@@ -63,7 +63,7 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
       assert.equal(result.fixType, "functional");
-      assert.deepEqual(result.issueCount, { high: 1, medium: 0, low: 0 });
+      assert.deepEqual(result.issues, []); // regex extraction cannot produce structured issues
     }
   });
 
@@ -85,7 +85,7 @@ describe("extractReviewVerdict — pi-subagents Details format", () => {
     });
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
-      assert.deepEqual(result.issueCount, { high: 2, medium: 1, low: 1 });
+      assert.deepEqual(result.issues, []); // regex extraction cannot produce structured issues
     }
   });
 
@@ -340,21 +340,18 @@ describe("extractReviewVerdict — VerdictResult type shape", () => {
       content: "✅ Approved",
     });
     assert.equal(result?.verdict, "approved");
-    // Approved variant should NOT have fixType or issueCount
+    // Approved variant should NOT have fixType or issues
     assert.deepEqual(Object.keys(result!), ["verdict"]);
   });
 
-  it("needs_changes result has verdict, fixType, issueCount fields", () => {
+  it("needs_changes result has verdict, fixType, issues fields", () => {
     const result = extractReviewVerdict({
       content: "⚠️ Needs Changes\nFix-Type: functional",
     });
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
       assert.equal(typeof result.fixType, "string");
-      assert.equal(typeof result.issueCount, "object");
-      assert.equal("high" in result.issueCount, true);
-      assert.equal("medium" in result.issueCount, true);
-      assert.equal("low" in result.issueCount, true);
+      assert.equal(Array.isArray(result.issues), true);
     }
   });
 

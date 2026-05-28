@@ -23,7 +23,7 @@ import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools, type StateMachineRef } from "../src/tools.ts";
-import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig, TestCommands } from "../src/types.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig, TestCommands, ReviewVerdict } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { sendDesktopNotification } from "../src/desktop-notifier.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
@@ -47,6 +47,7 @@ export const ORCHESTRATOR_TOOLS = [
   "pi_coder_save_spec",
   "pi_coder_read_spec",
   "pi_coder_advance_fsm",
+  "pi_coder_submit_review",
   "interview",
   "intercom",
 ];
@@ -62,6 +63,7 @@ export const LIGHT_TOOLS = [
   "pi_coder_save_spec",
   "pi_coder_read_spec",
   "pi_coder_advance_fsm",
+  "pi_coder_submit_review",
   "upsert_knowledge",
   "interview",
   "intercom",
@@ -519,6 +521,8 @@ function summarizeToolInput(toolName: string, input: unknown): Record<string, un
       return { questions: "..." }; // Don't log interview content
     case "upsert_knowledge":
       return { filename: inp.filename };
+    case "pi_coder_submit_review":
+      return { verdict: inp.verdict, fixType: inp.fixType };
     default:
       return {}; // ls, find, grep — no sensitive data, but also not worth logging the pattern
   }
@@ -983,15 +987,6 @@ function extractTokenUsage(result: unknown): { input: number; output: number; to
 }
 
 /**
- * Structured verdict result returned by extractReviewVerdict.
- * Discriminated union: approved has no details, needs_changes carries
- * fix classification and issue breakdown.
- */
-export type VerdictResult =
-  | { verdict: "approved" }
-  | { verdict: "needs_changes"; fixType: "functional" | "non-functional"; issueCount: { high: number; medium: number; low: number } };
-
-/**
  * Extract review verdict from a subagent output (reviewer agent).
  * Looks for common verdict patterns in the text output.
  *
@@ -999,7 +994,7 @@ export type VerdictResult =
  * in the text to avoid false positives from emojis in prose.
  * Tier 2 (fallback): Text-based pattern matching on full text.
  */
-export function extractReviewVerdict(result: unknown): VerdictResult | null {
+export function extractReviewVerdict(result: unknown): ReviewVerdict | null {
   if (!result || typeof result !== "object") return null;
 
   const r = result as Record<string, unknown>;
@@ -1089,15 +1084,16 @@ export function extractReviewVerdict(result: unknown): VerdictResult | null {
     fixType = fixTypeMatch[1].toLowerCase().replace("_", "-") === "non-functional" ? "non-functional" : "functional";
   }
 
-  // Count issues — look for severity markers
-  const highSeverity = (text.match(/🔴/g) ?? []).length;
-  const medSeverity = (text.match(/🟠/g) ?? []).length;
-  const lowSeverity = (text.match(/🟡/g) ?? []).length;
+  // Count issues — look for severity markers (kept for potential future use,
+  // but regex extraction cannot produce structured IssueDetail entries)
+  // const highSeverity = (text.match(/🔴/g) ?? []).length;
+  // const medSeverity = (text.match(/🟠/g) ?? []).length;
+  // const lowSeverity = (text.match(/🟡/g) ?? []).length;
 
   return {
     verdict: "needs_changes",
     fixType,
-    issueCount: { high: highSeverity, medium: medSeverity, low: lowSeverity },
+    issues: [], // Regex extraction cannot produce structured issues
   };
 }
 
@@ -2279,8 +2275,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (reviewVerdict) {
           logEvent("review_result", {
             verdict: reviewVerdict.verdict,
-            issueCount: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issueCount : undefined,
-            highSeverityCount: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issueCount.high : undefined,
+            issues: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issues : undefined,
+            issueCount: reviewVerdict.verdict === "needs_changes" ? {
+              high: reviewVerdict.issues?.filter(i => i.severity === "high").length ?? 0,
+              medium: reviewVerdict.issues?.filter(i => i.severity === "medium").length ?? 0,
+              low: reviewVerdict.issues?.filter(i => i.severity === "low").length ?? 0,
+            } : undefined,
+            highSeverityCount: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issues?.filter(i => i.severity === "high").length ?? 0 : undefined,
             fixType: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.fixType : undefined,
             loopCount: stateMachine!.loopCount,
             specId: activeSpecId,
@@ -2339,6 +2340,48 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               "Read the review above and manually advance with pi_coder_advance_fsm to APPROVED or NEEDS_CHANGES based on your reading.";
             (rawContent[0] as { type: "text"; text: string }).text = appendedText;
           }
+        }
+      } else if (currentState === "APPROVED" || currentState === "NEEDS_CHANGES") {
+        // Structured review was submitted via pi_coder_submit_review inside the subagent.
+        // The tool already transitioned the FSM and set evidence flags. We just need to
+        // append the steer message and log the event.
+        //
+        // This fires when: toolName === "subagent" && currentState is APPROVED or NEEDS_CHANGES.
+        // The only way we'd be in APPROVED/NEEDS_CHANGES inside the subagent handler is
+        // if the structured tool (pi_coder_submit_review) already transitioned the FSM
+        // inside the subagent. There's no other path that would get us here.
+        //
+        // The legacy regex path keeps us in REVIEWING at this point (handled above),
+        // so there's no ambiguity.
+        const structuredVerdict = currentState === "APPROVED" ? "approved" : "needs_changes";
+
+        logEvent("review_result", {
+          verdict: structuredVerdict,
+          source: "structured_tool_subagent",
+          loopCount: stateMachine!.loopCount,
+          specId: activeSpecId,
+        });
+
+        // Append steer message — same logic as the pi_coder_submit_review handler
+        const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
+        const isNonFunctional = stateMachine!.hasEvidence("non_functional_classified");
+
+        let reviewSteer: string;
+        if (structuredVerdict === "approved") {
+          reviewSteer = "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off).";
+        } else if (piCoderMode === "light" && isNonFunctional) {
+          reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.";
+        } else if (piCoderMode === "light") {
+          reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.";
+        } else if (isNonFunctional) {
+          reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.";
+        } else {
+          reviewSteer = `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.`;
+        }
+
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          textBlock.text += reviewSteer;
         }
       }
 
@@ -2400,6 +2443,62 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Persist state after transition
       await persistState();
+    }
+
+    // Handle pi_coder_submit_review results (structured review verdict)
+    // The tool's execute function has ALREADY transitioned the FSM and set evidence flags.
+    // This handler ONLY logs the review result and appends a steer message.
+    if (toolName === "pi_coder_submit_review") {
+      const reviewDetails = details as {
+        success?: boolean;
+        verdict?: string;
+        fixType?: string;
+        issues?: Array<{ severity: string }>;
+        issueCount?: { high: number; medium: number; low: number };
+        summary?: string;
+      } | undefined;
+
+      if (reviewDetails?.success !== false) {
+        // 1. Log the review result event
+        logEvent("review_result", {
+          verdict: reviewDetails?.verdict,
+          fixType: reviewDetails?.fixType,
+          issueCount: reviewDetails?.issueCount,
+          highSeverityCount: reviewDetails?.issueCount?.high,
+          loopCount: stateMachine!.loopCount,
+          specId: activeSpecId,
+          source: "structured_tool",
+        });
+
+        // 2. Append the appropriate steer message
+        // The FSM has already transitioned — just provide the steer text.
+        let reviewSteer: string | undefined;
+
+        if (reviewDetails?.verdict === "approved") {
+          reviewSteer = "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off).";
+        } else if (reviewDetails?.verdict === "needs_changes") {
+          if (piCoderMode === "light") {
+            if (reviewDetails.fixType === "non-functional") {
+              reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.";
+            } else {
+              reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.";
+            }
+          } else {
+            // TDD mode
+            if (reviewDetails.fixType === "non-functional") {
+              reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.";
+            } else {
+              reviewSteer = "\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to TDD_RED_WRITE for a full implementation cycle.";
+            }
+          }
+        }
+
+        // Append steer to tool result content (same mutation pattern as subagent handler)
+        if (reviewSteer && Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          textBlock.text += reviewSteer;
+        }
+      }
     }
 
     // Catch-all persist: any tool may have transitioned the FSM

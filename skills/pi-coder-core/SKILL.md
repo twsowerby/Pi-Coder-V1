@@ -298,6 +298,7 @@ MUST DO before giving verdict:
 - If the project requires infrastructure (databases, dev servers) to run tests, start it first
 - Record the test results in your review output
 - Do NOT approve if tests cannot be executed or are failing
+- Submit your verdict using `pi_coder_submit_review` tool — call it after writing your full review in prose
 ```
 
 Do not include the diff itself in the task payload. The reviewer discovers the diff independently.

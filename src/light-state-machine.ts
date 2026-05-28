@@ -104,6 +104,10 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
       toolPattern: "pi_coder_git",
       allowedStates: new Set(["GIT_CHECKPOINT", "REVIEWING", "MERGING", "BLOCKED", "IDLE"]),
     },
+    {
+      toolPattern: "pi_coder_submit_review",
+      allowedStates: new Set(["REVIEWING"]),
+    },
   ],
 
   alwaysAllowed: [
