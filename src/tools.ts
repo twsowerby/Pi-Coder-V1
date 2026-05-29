@@ -74,7 +74,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
   targetState: Type.String({ description: "The FSM state to advance to (e.g., SPEC_WORK, SPEC_APPROVED, GIT_CHECKPOINT, IDLE)" }),
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
   fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
-  reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a state (e.g., REVIEWING→APPROVED without review, or skipping a TDD phase). Explains why the exception is justified." })),
+  reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a TDD phase. Explains why the exception is justified. Does NOT bypass evidence gates on REVIEWING → APPROVED — that transition requires review_completed evidence set by the auto-transition handler." })),
   unitName: Type.Optional(Type.String({ description: "Name of the implementation unit. Pass when advancing to TDD_RED_WRITE or IMPLEMENTING so the FSM can track the active unit and auto-set test_run_this_state evidence for direct-approach units. Also pass when re-entering after NEEDS_CHANGES." })),
 });
 
@@ -83,7 +83,6 @@ const ADVANCE_FSM_PARAMS = Type.Object({
 // ---------------------------------------------------------------------------
 
 const EXCEPTION_TRANSITIONS: Set<string> = new Set([
-  "REVIEWING:APPROVED",              // skip review
   "TDD_RED_WRITE:TDD_GREEN_WRITE",   // skip RED phase
   "TDD_GREEN_VALIDATE:APPROVED",     // skip review after GREEN
 ]);
@@ -619,7 +618,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "NEEDS_CHANGES → REVIEWING (TDD mode): Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
       "NEEDS_CHANGES → IMPLEMENTING (Light mode): Review requires functional fixes.",
       "NEEDS_CHANGES → REVIEWING (Light mode): Review requires fixes. No evidence gate in Light mode — advance directly after delegating implementor.",
-"REVIEWING → APPROVED: Normally triggered by auto-transition after the reviewer includes a ---VERDICT--- block. If auto-transition failed, re-delegate the reviewer or advance manually.",
+      "REVIEWING → APPROVED: Requires review_completed evidence (set by auto-transition handler when reviewer returns verdict). If auto-transition failed, re-delegate the reviewer. Do NOT skip review.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 
@@ -704,9 +703,20 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       }
 
       try {
-        const guardError = smRef.current.transition(targetState);
+        let guardError = smRef.current.transition(targetState);
 
         // Handle transition guard errors (missing evidence)
+        // Exception transitions with 'reason' can override evidence guards —
+        // the reason is logged/auditable and the orchestrator is taking explicit
+        // responsibility for bypassing the normal flow.
+        if (guardError && EXCEPTION_TRANSITIONS.has(transitionKey) && reason) {
+          // Auto-set the missing evidence and retry
+          for (const flag of guardError.missingEvidence) {
+            smRef.current.setEvidence(flag);
+          }
+          guardError = smRef.current.transition(targetState);
+        }
+
         if (guardError) {
           return {
             content: [{

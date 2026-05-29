@@ -271,7 +271,7 @@ function advanceToState(sm: StateMachine, target: FSMState): void {
       sm.setEvidence("test_run_this_state");
     }
     if (from === "REVIEWING" && to === "APPROVED") {
-      // review_approved guard removed — transition succeeds without evidence
+      sm.setEvidence("review_completed");
     }
     const result = sm.transition(to);
     if (result) {
@@ -861,7 +861,7 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     assert.ok(content.includes("researcher"), `Should mention researcher delegation, got: ${content}`);
   });
 
-  it("REVIEWING→APPROVED requires reason (exception transition — skipping normal review flow)", async () => {
+  it("REVIEWING→APPROVED requires review_completed evidence (cannot skip review)", async () => {
     const { tools, sm } = setupMocks();
     // Walk to REVIEWING
     sm.transition("SPEC_WORK");
@@ -877,17 +877,25 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     sm.setEvidence("test_run_this_state");
     sm.transition("REVIEWING");
 
-    // REVIEWING:APPROVED is an exception transition — requires reason
+    // REVIEWING→APPROVED without reviewCompleted evidence should fail
     const result = await executeTool(tools, "pi_coder_advance_fsm", { targetState: "APPROVED" });
 
-    assert.ok(result.isError, "Should be blocked by exception transition check");
+    assert.ok(result.isError, "Should be blocked by evidence guard");
     assert.strictEqual(sm.currentState, "REVIEWING", "State should remain REVIEWING");
     const details = result.details as Record<string, unknown>;
     assert.strictEqual(details.success, false);
-    assert.ok((details.error as string).includes("exception_transition_requires_reason"), `Error should mention exception, got: ${details.error}`);
+    assert.ok((details.error as string).includes("review_completed"), `Error should mention review_completed, got: ${details.error}`);
+
+    // Even with reason parameter, it should fail (REVIEWING:APPROVED is NOT an exception transition)
+    const result2 = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "APPROVED",
+      reason: "Trying to skip review",
+    });
+    assert.ok(result2.isError, "Should still be blocked — reason does not bypass review_completed guard");
+    assert.strictEqual(sm.currentState, "REVIEWING", "State should still be REVIEWING");
   });
 
-  it("REVIEWING→APPROVED with reason succeeds (exception transition escape hatch)", async () => {
+  it("REVIEWING→APPROVED succeeds when review_completed evidence is set (after reviewer)", async () => {
     const { tools, sm } = setupMocks();
     // Walk to REVIEWING
     sm.transition("SPEC_WORK");
@@ -903,16 +911,13 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
     sm.setEvidence("test_run_this_state");
     sm.transition("REVIEWING");
 
-    // REVIEWING→APPROVED with reason should succeed
-    const result = await executeTool(tools, "pi_coder_advance_fsm", {
-      targetState: "APPROVED",
-      reason: "Auto-transition failed, but review text clearly states approved",
-    });
+    // Set review_completed evidence (as the auto-transition handler does)
+    sm.setEvidence("review_completed");
 
-    assert.ok(!result.isError, `Should succeed with reason, got error: ${result.isError}`);
+    const result = await executeTool(tools, "pi_coder_advance_fsm", { targetState: "APPROVED" });
+
+    assert.ok(!result.isError, `Should succeed with evidence, got error: ${result.isError}`);
     assert.strictEqual(sm.currentState, "APPROVED", "State should be APPROVED");
-    const details = result.details as Record<string, unknown>;
-    assert.strictEqual(details.exceptionTransition, "REVIEWING:APPROVED", "Should flag as exception transition");
   });
 
   it("includes GREEN_WRITE delegation hint", async () => {

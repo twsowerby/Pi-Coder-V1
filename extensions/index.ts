@@ -2367,6 +2367,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // This replaces the need for manual pi_coder_advance_fsm REVIEWING → APPROVED/NEEDS_CHANGES
           const target = reviewVerdict.verdict === "approved" ? "APPROVED" : "NEEDS_CHANGES";
 
+          // Set review_completed evidence BEFORE transitioning — the guard on
+          // REVIEWING → APPROVED requires it. This is the primary path for
+          // satisfying the guard; the only other path is the exception transition
+          // with reason (emergency escape hatch for verdict extraction failures).
+          stateMachine!.setEvidence("review_completed");
           stateMachine!.transition(target);
 
           // If reviewer classified fix as non-functional, set evidence
@@ -2413,7 +2418,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             const textBlock = rawContent[0] as { type: "text"; text: string };
             const appendedText = textBlock.text +
               "\n\n⚠️ AUTO-TRANSITION FAILED: Could not extract review verdict from subagent output. " +
-              "Read the review above and manually advance with pi_coder_advance_fsm to APPROVED or NEEDS_CHANGES based on your reading.";
+              "Re-delegate the reviewer with explicit instructions to use the ---VERDICT--- block format. " +
+              "Do NOT skip review by advancing manually — the REVIEWING → APPROVED guard requires review_completed evidence.";
             (rawContent[0] as { type: "text"; text: string }).text = appendedText;
           }
         }

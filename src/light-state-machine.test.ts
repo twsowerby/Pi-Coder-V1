@@ -21,6 +21,9 @@ function forceTransition(sm: LightStateMachine, to: LightFSMState): void {
     sm.setEvidence("spec_saved");
     sm.setEvidence("spec_user_approved");
   }
+  if (from === "REVIEWING" && to === "APPROVED") {
+    sm.setEvidence("review_completed");
+  }
   const result = sm.transition(to);
   if (result) {
     throw new Error(`Transition guard blocked ${from} → ${to}: ${result.message}`);
@@ -665,13 +668,19 @@ describe("LightStateMachine: Evidence & Transition Guards", () => {
     assert.strictEqual(sm.currentState, "REVIEWING");
   });
 
-  it("REVIEWING → APPROVED succeeds without review_approved evidence (guard removed)", () => {
+  it("REVIEWING → APPROVED requires review_completed evidence", () => {
     const sm = new LightStateMachine(makeConfig());
     walkToState(sm, "REVIEWING");
-    // The review_approved evidence guard has been removed —
-    // the ---VERDICT--- block and auto-transition handle review integrity
+    // Without review_completed evidence, the transition should fail
     const transitionResult = sm.transition("APPROVED");
-    assert.strictEqual(transitionResult, undefined, "Transition should succeed");
+    assert.ok(transitionResult, "Transition should fail without review_completed evidence");
+    assert.strictEqual(transitionResult!.missingEvidence[0], "review_completed");
+    assert.strictEqual(sm.currentState, "REVIEWING");
+
+    // With evidence, the transition should succeed
+    sm.setEvidence("review_completed");
+    const transitionResult2 = sm.transition("APPROVED");
+    assert.strictEqual(transitionResult2, undefined, "Transition should succeed with evidence");
     assert.strictEqual(sm.currentState, "APPROVED");
   });
 

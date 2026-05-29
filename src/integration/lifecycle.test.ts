@@ -227,6 +227,9 @@ function forceTransition(sm: StateMachine, to: FSMState): void {
   if (from === "NEEDS_CHANGES" && to === "REVIEWING") {
     sm.setEvidence("non_functional_classified");
   }
+  if (from === "REVIEWING" && to === "APPROVED") {
+    sm.setEvidence("review_completed");
+  }
   const result = sm.transition(to);
   if (result) throw new Error("Guard blocked: " + result.message);
 }

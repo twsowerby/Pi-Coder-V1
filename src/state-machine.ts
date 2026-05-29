@@ -102,6 +102,16 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
         "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
         "changes), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead.",
     },
+    {
+      from: "REVIEWING",
+      to: "APPROVED",
+      requiredEvidence: ["review_completed"],
+      errorMessage:
+        "Cannot advance to APPROVED without completing a review. " +
+        "Delegate to pi-coder.reviewer first — the review must actually happen. " +
+        "The auto-transition handler sets this evidence when the reviewer returns a verdict. " +
+        "If the auto-transition failed, re-delegate the reviewer instead of skipping review.",
+    },
   ],
 
   actionRules: [
@@ -132,7 +142,7 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
 
   alwaysAllowed: ["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm"],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified"],
+  persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified", "review_completed"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
