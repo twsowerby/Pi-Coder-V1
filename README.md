@@ -18,6 +18,7 @@ Pi Coder replaces the default "you're a coding assistant" mode with a structured
 - [Commands](#commands)
 - [Damage Control](#damage-control)
 - [Configuration](#configuration)
+  - [logging](#logging)
   - [referenceProjects (Experimental)](#referenceprojects-experimental)
   - [notifications](#notifications)
 - [Customization](#customization)
@@ -124,7 +125,7 @@ In Light mode, the FSM is simpler but still enforces the same non-negotiables: s
 ### 1. Install
 
 ```bash
-pi install npm:pi-coder-v1
+pi install git:github.com/twsowerby/Pi-Coder-V1
 ```
 
 Pi Coder requires [pi-subagents](https://www.npmjs.com/package/pi-subagents) as a peer dependency. Install it first if you haven't:
@@ -466,7 +467,8 @@ The key insight: the invariant is "all behavior is tested," NOT "every test must
 | `/pi-coder` | Switch mode (TDD / Light / Plan / Off) via selection menu |
 | `/pi-coder-init` | Initialize `.pi-coder/` structure and config |
 | `/pi-coder-reset-agents` | Reset agent `.md` files to package defaults (requires confirmation) |
-| `/pi-coder-logs` | Show interaction log statistics |
+| `/pi-coder-close` | Close an active spec (CANCELLED status, deletes state.json, keeps spec.md as audit trail) |
+| `/pi-coder-logs` | Show interaction log statistics (supports session/spec filtering) |
 
 ## Damage Control
 
@@ -570,7 +572,17 @@ All configuration lives in `.pi-coder/config.json` (created by `/pi-coder-init`)
   "logging": {
     "enabled": false,
     "level": "standard",
-    "maxLogFiles": 10
+    "maxLogFiles": 10,
+    "tokenPricing": {
+      "anthropic/claude-sonnet-4": {
+        "inputPerMillion": 3.0,
+        "outputPerMillion": 15.0,
+        "cacheReadPerMillion": 0.3,
+        "cacheWritePerMillion": 3.75
+      }
+    },
+    "timezone": "America/New_York",
+    "sessionIdPrefix": "myapp"
   }
 }
 ```
@@ -695,7 +707,7 @@ The per-state nudge system prevents the orchestrator from stalling. When the orc
 
 ### `logging`
 
-Structured interaction logging for harness improvement. Logs are JSONL files in `.pi-coder/logs/`.
+Structured interaction logging for process efficiency analysis and cost tracking. Logs are JSONL files in `.pi-coder/logs/`.
 
 **`logging.enabled`** — master switch. Default: `false` (opt-in telemetry).
 
@@ -703,11 +715,131 @@ Structured interaction logging for harness improvement. Logs are JSONL files in 
 
 | Level | Events captured |
 |---|---|
-| `"minimal"` | FSM transitions, TDD validations, lifecycle start/end, circuit breaker |
-| `"standard"` | All of minimal + subagent start/end, review results, user commands, user interventions, state restore events |
+| `"minimal"` | FSM transitions, TDD validations, lifecycle start/end, circuit breaker, session summary |
+| `"standard"` | All of minimal + subagent start/end (with model, tokens, cost, exit code), per-turn usage, review results, user commands, user interventions, state restore, spec approval, unit start/end, config validation |
 | `"verbose"` | All of standard + nudge firings and escalations |
 
-**`logging.maxLogFiles`** — maximum log files to retain. Oldest are deleted when exceeded. Default: `10`.
+**`logging.maxLogFiles`** — maximum log files to retain per session directory. Oldest are deleted when exceeded. Default: `10`.
+
+**`logging.tokenPricing`** — per-model pricing for cost estimation (optional). Keys are model identifiers (e.g., `"anthropic/claude-sonnet-4"`). When pi-subagents provides `usage.cost > 0`, that takes priority. This table is a fallback for custom providers or when cost is zero.
+
+```json
+{
+  "logging": {
+    "tokenPricing": {
+      "anthropic/claude-sonnet-4": {
+        "inputPerMillion": 3.0,
+        "outputPerMillion": 15.0,
+        "cacheReadPerMillion": 0.3,
+        "cacheWritePerMillion": 3.75
+      }
+    }
+  }
+}
+```
+
+Each entry has `inputPerMillion` and `outputPerMillion` (required), plus optional `cacheReadPerMillion` and `cacheWritePerMillion`. When no pricing is configured, log analysis shows raw token counts with a note rather than cost estimates.
+
+**`logging.timezone`** — IANA timezone for local timestamps (optional). When set, every log event gets a `localTimestamp` field in this timezone. When unset, uses the system's local timezone. Examples: `"America/New_York"`, `"Europe/London"`, `"Asia/Tokyo"`.
+
+**`logging.sessionIdPrefix`** — prefix for the session log directory name (optional). When set, the session directory is named `{prefix}-{sessionId}` instead of just `{sessionId}`. Useful for identifying which project a log belongs to when multiple projects share the same log storage location. Example: `"myapp"` → `.pi-coder/logs/myapp-550e8400-e29b/2026-05-29.log`.
+
+#### Log directory structure
+
+Logs are organized by session — each pi session gets its own directory under `.pi-coder/logs/`:
+
+```
+.pi-coder/logs/
+├── 550e8400-e29b-41d4-a716-446655440000/   ← Session 1
+│   ├── 2026-05-29.log
+│   └── 2026-05-30.log                        ← Cross-midnight session
+├── myapp-6ba7b810-9dad-11d1-80b4-00c04fd430c8/  ← With sessionIdPrefix: "myapp"
+│   └── 2026-05-29.log
+└── 2026-05-25.log                            ← Legacy flat file (pre-session-scoped)
+```
+
+Each session directory contains one log file per day. Legacy flat files from older pi-coder versions are also read during log analysis for backward compatibility.
+
+#### Log event format
+
+Each log entry is a JSON object with dual timestamps:
+
+```jsonl
+{"timestamp":"2026-05-29T05:39:13.219Z","localTimestamp":"2026-05-29T15:39:13.000+10:00","sessionId":"550e8400-e29b","type":"fsm_transition","payload":{"from":"IDLE","to":"SPEC_WORK","trigger":"auto_subagent_complete","event":"start_research","loopCount":0,"specId":"user-auth","mode":"tdd","turnCount":3}}
+{"timestamp":"2026-05-29T05:39:15.456Z","localTimestamp":"2026-05-29T15:39:15.000+10:00","sessionId":"550e8400-e29b","type":"subagent_end","payload":{"agent":"pi-coder.researcher","model":"anthropic/claude-sonnet-4","durationMs":2233,"tokenUsage":{"input":1200,"output":3500,"cacheRead":6000,"cacheWrite":1500,"cost":0.07},"turns":5,"exitCode":0,"error":null,"outcome":"success","specId":"user-auth","mode":"tdd","turnCount":4}}
+{"timestamp":"2026-05-29T05:39:16.789Z","localTimestamp":"2026-05-29T15:39:16.000+10:00","sessionId":"550e8400-e29b","type":"turn_usage","payload":{"input":500,"output":800,"cacheRead":2000,"cacheWrite":500,"cost":0.02,"model":"anthropic/claude-sonnet-4","specId":"user-auth","fsmState":"SPEC_WORK","mode":"tdd","turnCount":5}}
+```
+
+- **`timestamp`** — always UTC ISO 8601
+- **`localTimestamp`** — local time with timezone offset (configurable via `logging.timezone`)
+- **`mode`** — included on every event payload (TDD/Light/Plan/Off)
+- **`turnCount`** — included on every event payload
+
+#### Event types reference
+
+| Type | Level | Payload highlights |
+|---|---|---|
+| `lifecycle_start` | minimal | specId, fsmState |
+| `lifecycle_end` | minimal | specId, outcome, wallClockMs, totalTokens {input, output, cacheRead, cacheWrite, cost, turns} |
+| `fsm_transition` | minimal | from, to, **trigger** (typed), event (legacy), loopCount, specId |
+| `tdd_red_validate` | minimal | specId, passed, loopCount |
+| `tdd_green_validate` | minimal | specId, passed, loopCount |
+| `circuit_breaker` | minimal | specId, loopCount, reason |
+| `session_summary` | minimal | totalTurns, totalTokens, specsAttempted, finalMode, finalFsmState, sessionDurationMs |
+| `subagent_start` | standard | agent, taskSummary, specId, fsmState |
+| `subagent_end` | standard | agent, **model**, durationMs, tokenUsage {input, output, cacheRead, cacheWrite, cost}, **turns**, **exitCode**, **error**, outcome, specId |
+| `turn_usage` | standard | input, output, cacheRead, cacheWrite, cost, model, specId, fsmState |
+| `review_result` | standard | verdict, specId |
+| `spec_approval` | standard | status, responseCount, **durationMs** |
+| `unit_start` | standard | specId, unitName, loopCount, fsmState |
+| `unit_end` | standard | specId, unitName, outcome, loopCount, fsmState |
+| `command` | standard | command, result |
+| `user_intervention` | standard | reason, specId, fsmState |
+| `state_restore` | standard | specId, fsmState, fromPersisted |
+| `config_validation` | standard | warnings [{field, value, fix}] |
+| `tool_call` | standard | toolName, specId |
+| `tool_call_blocked` | standard | toolName, reason, specId |
+| `mode_switch` | standard | from, to |
+| `review_override` | standard | specId, reason |
+| `review_override_contradiction` | standard | specId, expected, actual |
+| `verdict_extraction_failed` | standard | specId, rawContent |
+| `prompt_size` | standard | promptTokens, contextWindow |
+| `skill_read` | standard | skill, specId |
+| `subagent_control` | standard | event, runId, agent |
+| `nudge_fired` | verbose | state, level, turnsInState |
+| `nudge_escalation` | verbose | state, level, turnsInState |
+
+**Bold** fields are new in the current version. The `trigger` field on `fsm_transition` uses typed values (`auto_tdd_validation`, `auto_git_checkpoint`, `auto_git_merge`, `auto_review_verdict`, `auto_subagent_complete`, `manual_advance_fsm`, `fsm_reset`) alongside the legacy `event` string for backward compatibility.
+
+#### Token tracking
+
+Pi Coder captures token usage from **both** the main orchestrator session and subagent sessions:
+
+- **Subagent tokens** — extracted from `details.results[0].usage` when a subagent completes. Includes input, output, cacheRead, cacheWrite, cost, and turns.
+- **Orchestrator tokens** — captured from `TurnEndEvent.message.usage` after each LLM turn. Logged as `turn_usage` events and accumulated into the session's `lifecycleTokens`.
+- **`lifecycle_end` and `session_summary`** include the combined total from both sources in their `totalTokens` field.
+
+#### Cost analysis
+
+When cost data is available (from pi-subagents' `usage.cost` or user-configured `tokenPricing`), the `/pi-coder-logs` command includes a cost breakdown:
+
+- Estimated total cost with source attribution (pi-subagents, user pricing, or unavailable)
+- Per-agent cost breakdown
+- Cache savings percentage
+- Average cost per spec
+
+Cost degrades gracefully: no pricing configured → shows raw token counts with a note; no model logged → no per-model breakdowns.
+
+#### Querying logs
+
+Use `/pi-coder-logs` to see aggregate statistics:
+
+| Command | What it shows |
+|---|---|
+| `/pi-coder-logs` | Aggregate summary across all sessions |
+| `/pi-coder-logs abc123` | Logs for a specific session (prefix match) |
+| `/pi-coder-logs --spec=user-auth` | Events for a specific spec across all sessions |
+| `/pi-coder-logs abc123 --spec=user-auth` | A specific session + spec combination |
 
 ### `subagentControl`
 
@@ -720,18 +852,6 @@ Monitoring of long-running or stuck subagents:
 The `subagentControl` config in `.pi-coder/config.json` is reserved for future async delegation support. For now, it only controls whether the event bus listener is active (for diagnostic logging if events somehow still arrive).
 
 The orchestrator can check status with `subagent({ action: "status", id: "<runId>" })` and interrupt with `subagent({ action: "interrupt", id: "<runId>" })`. These are advisory — the orchestrator's tool_call handler does not pass `control` overrides for management actions.
-
-Log file naming: `pi-coder-YYYY-MM-DD.log` (one file per calendar day).
-
-Each log entry is a JSON object:
-
-```jsonl
-{"timestamp":"2026-05-25T10:15:30.123Z","sessionId":"a1b2c3d4","type":"fsm_transition","payload":{"from":"IDLE","to":"SPEC_WORK","event":"start_research","loopCount":0,"specId":"user-auth"}}
-{"timestamp":"2026-05-25T10:15:45.456Z","sessionId":"a1b2c3d4","type":"subagent_start","payload":{"agent":"pi-coder.researcher","taskSummary":"Research the codebase for user authentication...","specId":"user-auth","fsmState":"SPEC_WORK"}}
-{"timestamp":"2026-05-25T10:16:22.789Z","sessionId":"a1b2c3d4","type":"subagent_end","payload":{"agent":"pi-coder.researcher","durationMs":37333,"tokenUsage":{"input":1200,"output":3500,"total":4700},"outcome":"success","specId":"user-auth"}}
-```
-
-Use `/pi-coder-logs` to see aggregate statistics from your logs.
 
 ### `referenceProjects` (⚠️ EXPERIMENTAL)
 
@@ -1087,11 +1207,12 @@ Pi Coder hooks into pi's extension lifecycle to enforce invariants:
 
 | Event | What the extension does |
 |---|---|
-| `session_start` | Load config, initialize state machine, register tools, restore persisted state from `.pi-coder/state.json` + `.pi-coder/specs/{id}/state.json` with integrity checks |
-| `session_shutdown` | Clean up timers, persist final state, reset session counters |
+| `session_start` | Load config, initialize state machine, register tools, restore persisted state from `.pi-coder/state.json` + `.pi-coder/specs/{id}/state.json` with integrity checks, emit `config_validation` if warnings found |
+| `session_shutdown` | Clean up timers, persist final state, reset session counters, emit `session_summary` event |
 | `before_agent_start` | Replace system prompt with mode-specific orchestrator identity, filter tools, prepend `[MODE: ...]` indicator, check nudge thresholds |
 | `tool_call` | Validate tool calls against FSM state, block raw git commands, track subagent starts |
 | `tool_result` | Auto-transition FSM on test results, subagent completions, and review verdicts; set evidence flags (`spec_user_approved`, `test_run_this_state`); filter subagent list output to pi-coder agents only; persist state to disk; log events |
+| `turn_end` | Capture main-session token usage from `AssistantMessage.usage`, accumulate into `lifecycleTokens`, emit `turn_usage` event |
 
 ## Project Structure
 
@@ -1103,6 +1224,8 @@ your-project/
 │   ├── state.json           # Persisted FSM state (auto-managed)
 │   ├── knowledge/           # Persisted project learnings
 │   ├── logs/                # Interaction telemetry (JSONL)
+│   │   └── {sessionId}/     # Per-session directory
+│   │       └── YYYY-MM-DD.log  # Daily log file
 │   └── specs/
 │       └── {spec-id}/
 │           ├── request.md    # User's original request (created on SPEC_WORK entry)
@@ -1149,7 +1272,7 @@ This prevents the LLM from accidentally delegating to a built-in `researcher` in
 
 ```bash
 npm install          # Install dependencies
-npm test             # Run test suite (685 tests)
+npm test             # Run test suite (868 tests)
 npm run typecheck    # TypeScript strict mode check
 ```
 

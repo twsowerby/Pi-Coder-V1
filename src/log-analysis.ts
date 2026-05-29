@@ -19,7 +19,10 @@ import type { TokenPricing } from "./types.ts";
 
 /** A parsed log entry from a JSONL log file. */
 export interface LogEntry {
+  /** ISO 8601 UTC timestamp */
   timestamp: string;
+  /** Local timestamp with timezone offset (optional, added by dual-timestamp feature) */
+  localTimestamp?: string;
   sessionId: string;
   type: string;
   payload: Record<string, unknown>;
@@ -74,26 +77,56 @@ export interface LogSummary {
  * Note: Uses dynamic import of node:fs and node:path.
  * For pure-testability, use parseLogEntries() with raw JSONL strings.
  */
+/**
+ * Parse log entries from a log directory.
+ * Supports both flat daily files and session-scoped subdirectories.
+ * - Flat: .pi-coder/logs/pi-coder-YYYY-MM-DD.log (legacy)
+ * - Session-scoped: .pi-coder/logs/{sessionId}/YYYY-MM-DD.log
+ * Reads all .log files found, traversing subdirectories automatically.
+ */
 export async function parseLogDir(logDir: string): Promise<LogEntry[]> {
-  const { readdirSync, readFileSync, existsSync } = await import("node:fs");
+  const { readdirSync, readFileSync, existsSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
 
   if (!existsSync(logDir)) return [];
 
   const entries: LogEntry[] = [];
-  const files = readdirSync(logDir).filter((f: string) => f.endsWith(".log")).sort();
 
-  for (const file of files) {
-    const content = readFileSync(join(logDir, file), "utf-8");
-    for (const line of content.trim().split("\n").filter(Boolean)) {
+  // Collect .log files from the directory and any subdirectories
+  function readLogFiles(dir: string): void {
+    let topEntries: string[];
+    try {
+      topEntries = readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const entry of topEntries) {
+      const fullPath = join(dir, entry);
+      let isDir = false;
       try {
-        entries.push(JSON.parse(line));
+        isDir = statSync(fullPath).isDirectory();
       } catch {
-        // Skip malformed lines
+        continue;
+      }
+
+      if (isDir) {
+        // Recurse into subdirectory (e.g., session-scoped dir)
+        readLogFiles(fullPath);
+      } else if (entry.endsWith(".log")) {
+        const content = readFileSync(fullPath, "utf-8");
+        for (const line of content.trim().split("\n").filter(Boolean)) {
+          try {
+            entries.push(JSON.parse(line));
+          } catch {
+            // Skip malformed lines
+          }
+        }
       }
     }
   }
 
+  readLogFiles(logDir);
   return entries;
 }
 

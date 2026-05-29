@@ -52,7 +52,8 @@ export type LogEventType =
   | "session_summary"
   | "unit_start"
   | "unit_end"
-  | "config_validation";
+  | "config_validation"
+  | "turn_usage";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -88,6 +89,7 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   unit_start: "standard",
   unit_end: "standard",
   config_validation: "standard",
+  turn_usage: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",
@@ -124,8 +126,10 @@ const LEVEL_ORDER: Record<string, number> = {
  * A single structured log event written as one JSON line.
  */
 export interface LogEvent {
-  /** ISO 8601 timestamp */
+  /** ISO 8601 timestamp (always UTC) */
   timestamp: string;
+  /** Local timestamp with timezone offset (e.g., 2026-05-29T15:39:13+10:00) */
+  localTimestamp?: string;
   /** UUID identifying the extension session */
   sessionId: string;
   /** Event type (determines payload shape) */
@@ -142,21 +146,111 @@ export interface LogEvent {
  * Structured JSONL logger for pi-coder telemetry.
  *
  * - Each log entry is one JSON object per line
- * - Log files are named `pi-coder-{YYYY-MM-DD}.log`
+ * - Log files are organized by session: `.pi-coder/logs/{sessionId}/YYYY-MM-DD.log`
  * - One file per calendar day, with automatic rotation
  * - When `config.enabled` is false, `log()` is a no-op
  * - Log level controls which event types are written
+ * - Dual timestamps: UTC `timestamp` + local `localTimestamp`
  */
 export class Logger {
-  private readonly logDir: string;
+  private readonly baseLogDir: string;
   private readonly config: LoggingConfig;
+  /** Session ID for this logger instance — determines the session subdirectory */
+  private sessionId: string | null = null;
   /** Track the current day's log file name to avoid repeated path computation */
   private currentLogFile: string | null = null;
   private currentLogDate: string | null = null;
 
-  constructor(logDir: string, loggingConfig: LoggingConfig) {
-    this.logDir = logDir;
+  constructor(baseLogDir: string, loggingConfig: LoggingConfig, sessionId?: string) {
+    this.baseLogDir = baseLogDir;
     this.config = loggingConfig;
+    if (sessionId) {
+      this.sessionId = sessionId;
+    }
+  }
+
+  /**
+   * Set or update the session ID. This determines the session subdirectory.
+   * Call this after construction when the session ID becomes available.
+   */
+  setSessionId(id: string): void {
+    this.sessionId = id;
+    // Reset file tracking so next log() resolves the new directory
+    this.currentLogFile = null;
+    this.currentLogDate = null;
+  }
+
+  /**
+   * Get the effective log directory (session-scoped if sessionId is set).
+   * When sessionIdPrefix is configured, the directory is named `{prefix}-{sessionId}`.
+   */
+  private getEffectiveLogDir(): string {
+    if (this.sessionId) {
+      const dirName = this.config.sessionIdPrefix
+        ? `${this.config.sessionIdPrefix}-${this.sessionId}`
+        : this.sessionId;
+      return join(this.baseLogDir, dirName);
+    }
+    return this.baseLogDir;
+  }
+
+  /**
+   * Format a local timestamp with timezone offset.
+   * Uses the timezone from config if set, otherwise system local timezone.
+   */
+  private formatLocalTimestamp(d: Date): string {
+    const tz = this.config.timezone;
+    if (tz) {
+      // Use the configured IANA timezone
+      try {
+        const formatter = new Intl.DateTimeFormat("sv-SE", {
+          timeZone: tz,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          fractionalSecondDigits: 3,
+          timeZoneName: "shortOffset",
+        });
+        // Format like: 2026-05-29 15:39:13.000 GMT+10
+        // Convert to ISO-ish: 2026-05-29T15:39:13.000+10:00
+        const parts = formatter.formatToParts(d);
+        const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+        const tzName = get("timeZoneName"); // e.g., "GMT+10", "GMT−4" (may use Unicode minus U+2212)
+        // Normalize timezone offset to ±HH:MM format
+        // Replace Unicode minus (U+2212) with ASCII hyphen for consistency
+        const normalizedTz = tzName.replace(/\u2212/g, "-");
+        const offsetMatch = normalizedTz.match(/([+-])(\d{1,2})(?::?(\d{2}))?/);
+        let offset = "+00:00";
+        if (offsetMatch) {
+          const sign = offsetMatch[1];
+          const hours = offsetMatch[2].padStart(2, "0");
+          const minutes = (offsetMatch[3] ?? "00").padStart(2, "0");
+          offset = `${sign}${hours}:${minutes}`;
+        }
+        return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}.${get("fractionalSecond")}${offset}`;
+      } catch {
+        // Invalid timezone — fall through to local below
+      }
+    }
+    // Default: system local timezone with offset
+    const offsetMin = -d.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? "+" : "-";
+    const absMin = Math.abs(offsetMin);
+    const hours = String(Math.floor(absMin / 60)).padStart(2, "0");
+    const minutes = String(absMin % 60).padStart(2, "0");
+    const offsetStr = `${sign}${hours}:${minutes}`;
+    // Build local ISO string manually for maximum compatibility
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const hour = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    const sec = String(d.getSeconds()).padStart(2, "0");
+    const ms = String(d.getMilliseconds()).padStart(3, "0");
+    return `${year}-${month}-${day}T${hour}:${min}:${sec}.${ms}${offsetStr}`;
   }
 
   /**
@@ -170,25 +264,32 @@ export class Logger {
     // Filter by log level
     if (!this.shouldLog(event.type)) return;
 
+    const effectiveLogDir = this.getEffectiveLogDir();
+
     // Ensure log directory exists
-    if (!existsSync(this.logDir)) {
-      mkdirSync(this.logDir, { recursive: true });
+    if (!existsSync(effectiveLogDir)) {
+      mkdirSync(effectiveLogDir, { recursive: true });
     }
+
+    // Add local timestamp if not already set by caller
+    const eventWithLocal: LogEvent = event.localTimestamp
+      ? event
+      : { ...event, localTimestamp: this.formatLocalTimestamp(new Date()) };
 
     // Determine the current day's log file
     const now = new Date();
     const dateStr = this.formatDate(now);
 
-    if (this.currentLogDate !== dateStr) {
+    if (this.currentLogDate !== dateStr || !this.currentLogFile) {
       this.currentLogDate = dateStr;
-      this.currentLogFile = join(this.logDir, `pi-coder-${dateStr}.log`);
+      this.currentLogFile = join(effectiveLogDir, `${dateStr}.log`);
 
       // Rotate old files if we're starting a new day's file
       this.rotateIfNeeded();
     }
 
     // Append one JSON line
-    const line = JSON.stringify(event);
+    const line = JSON.stringify(eventWithLocal);
     appendFileSync(this.currentLogFile!, line + "\n", "utf-8");
   }
 
@@ -209,8 +310,9 @@ export class Logger {
    */
   private rotateIfNeeded(): void {
     try {
-      const files = readdirSync(this.logDir)
-        .filter(f => f.startsWith("pi-coder-") && f.endsWith(".log"))
+      const dir = this.getEffectiveLogDir();
+      const files = readdirSync(dir)
+        .filter(f => f.endsWith(".log"))
         .sort();
 
       const maxFiles = this.config.maxLogFiles ?? 10;
@@ -219,7 +321,7 @@ export class Logger {
       while (files.length >= maxFiles) {
         const oldest = files.shift();
         if (oldest) {
-          unlinkSync(join(this.logDir, oldest));
+          unlinkSync(join(dir, oldest));
         } else {
           break;
         }

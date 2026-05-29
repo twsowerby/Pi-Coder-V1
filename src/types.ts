@@ -195,6 +195,16 @@ export interface LoggingConfig {
    *  When pi-subagents provides usage.cost > 0, that takes priority.
    *  This table serves as a fallback for custom providers or when cost is 0. */
   tokenPricing?: Record<string, TokenPricing>;
+  /** IANA timezone for local timestamps (e.g., "America/New_York", "Europe/London").
+   *  When set, every log event gets a `localTimestamp` field in this timezone.
+   *  When unset/undefined, uses the system's local timezone. */
+  timezone?: string;
+  /** Prefix for the session log directory name. When set, the session directory
+   *  is named `{prefix}-{sessionId}` instead of just `{sessionId}`.
+   *  Useful for identifying which project a log belongs to when multiple projects
+   *  share the same log storage location, or when browsing log directories.
+   *  Example: "myapp" → `.pi-coder/logs/myapp-550e8400-e29b/2026-05-29.log` */
+  sessionIdPrefix?: string;
 }
 
 /**

@@ -1315,10 +1315,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const configResult = loadConfig(cwd);
     config = configResult.config;
 
-    // Generate session ID and initialize logger
+    // Generate session ID and initialize logger with session-scoped directory
     sessionId = randomUUID();
     const logDir = join(cwd, ".pi-coder", "logs");
-    logger = new Logger(logDir, config.logging);
+    logger = new Logger(logDir, config.logging, sessionId);
 
     // Emit config_validation if there were warnings
     if (configResult.warnings.length > 0) {
@@ -1721,6 +1721,37 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   pi.on("agent_end", async () => {
     if (piCoderMode === "off") return;
     notify("agent_end", "Pi Coder \u00b7 Idle", "Waiting for your input");
+  });
+
+  // -----------------------------------------------------------------------
+  // Main-Session Token Capture — hook turn_end for orchestrator usage
+  // -----------------------------------------------------------------------
+
+  pi.on("turn_end", async (event) => {
+    if (piCoderMode === "off") return;
+    // Extract usage from the assistant message in this turn
+    const msg = event.message as { usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number }; totalTokens: number } };
+    const usage = msg?.usage;
+    if (!usage) return;
+
+    // Accumulate into lifecycle tokens (same accumulator as subagent tokens)
+    lifecycleTokens.input += usage.input ?? 0;
+    lifecycleTokens.output += usage.output ?? 0;
+    lifecycleTokens.cacheRead += usage.cacheRead ?? 0;
+    lifecycleTokens.cacheWrite += usage.cacheWrite ?? 0;
+    lifecycleTokens.cost += usage.cost?.total ?? 0;
+
+    // Log per-turn usage for granular analysis
+    logEvent("turn_usage", {
+      input: usage.input ?? 0,
+      output: usage.output ?? 0,
+      cacheRead: usage.cacheRead ?? 0,
+      cacheWrite: usage.cacheWrite ?? 0,
+      cost: usage.cost?.total ?? 0,
+      model: (event.message as { model?: string }).model ?? null,
+      specId: activeSpecId,
+      fsmState: stateMachine?.currentState ?? "N/A",
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -3393,34 +3424,92 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   });
 
   // -----------------------------------------------------------------------
-  // Spec 14: Logs Command — /pi-coder-logs
+  // Spec 14: Logs Command — /pi-coder-logs [sessionId] [--spec specId]
   // -----------------------------------------------------------------------
 
   pi.registerCommand("pi-coder-logs", {
-    description: "Show pi-coder interaction log statistics",
-    handler: async (_args, ctx) => {
-      const logDir = join(ctx.cwd, ".pi-coder", "logs");
+    description: "Show pi-coder interaction log statistics. Options: /pi-coder-logs [sessionId] [--spec specId] [--all]",
+    handler: async (args, ctx) => {
+      const baseLogDir = join(ctx.cwd, ".pi-coder", "logs");
 
-      if (!existsSync(logDir)) {
+      if (!existsSync(baseLogDir)) {
         ctx.ui.notify("No logs found. Enable logging in .pi-coder/config.json to start collecting telemetry.", "info");
         return;
       }
 
-      // Parse all log files
-      const files = readdirSync(logDir).filter(f => f.endsWith(".log")).sort();
-      if (files.length === 0) {
-        ctx.ui.notify("Log directory exists but contains no log files.", "info");
+      // Parse arguments
+      const argParts = args.trim().split(/\s+/);
+      let filterSessionId: string | null = null;
+      let filterSpecId: string | null = null;
+      let showAll = false;
+
+      for (const part of argParts) {
+        if (part === "--all") {
+          showAll = true;
+        } else if (part.startsWith("--spec=")) {
+          filterSpecId = part.slice(7);
+        } else if (part.startsWith("--spec")) {
+          // --spec value (next arg handled below or value after =)
+          filterSpecId = part.slice(7) || null;
+        } else if (part && !part.startsWith("--")) {
+          // Positional arg = session ID (or prefix)
+          filterSessionId = part;
+        }
+      }
+
+      // Discover session directories and log files
+      const entries: Array<Record<string, unknown>> = [];
+      const logDirsToRead: string[] = [];
+
+      if (showAll || !filterSessionId) {
+        // Read all session directories (or flat files for backward compat)
+        const topEntries = readdirSync(baseLogDir, { withFileTypes: true });
+        for (const entry of topEntries) {
+          if (entry.isDirectory()) {
+            // Session-scoped directory
+            if (filterSessionId && !entry.name.startsWith(filterSessionId)) continue;
+            logDirsToRead.push(join(baseLogDir, entry.name));
+          } else if (entry.name.endsWith(".log")) {
+            // Legacy flat file (pre-session-scoped)
+            logDirsToRead.push(baseLogDir);
+          }
+        }
+        if (logDirsToRead.length === 0 && topEntries.some(e => e.name.endsWith(".log"))) {
+          // All .log files are in baseLogDir (legacy)
+          logDirsToRead.push(baseLogDir);
+        }
+      } else {
+        // Specific session — look for matching directory
+        const topEntries = readdirSync(baseLogDir, { withFileTypes: true });
+        const match = topEntries.find(e => e.isDirectory() && e.name.startsWith(filterSessionId!));
+        if (match) {
+          logDirsToRead.push(join(baseLogDir, match.name));
+        }
+        // Also check for legacy flat files
+        if (topEntries.some(e => e.name.endsWith(".log"))) {
+          logDirsToRead.push(baseLogDir);
+        }
+      }
+
+      if (logDirsToRead.length === 0) {
+        ctx.ui.notify("No log files found for the given filters.", "info");
         return;
       }
 
-      const entries: Array<Record<string, unknown>> = [];
-      for (const file of files) {
-        const content = readFileSync(join(logDir, file), "utf-8");
-        for (const line of content.trim().split("\n").filter(Boolean)) {
-          try {
-            entries.push(JSON.parse(line));
-          } catch {
-            // Skip malformed lines
+      // Read and parse log files from each directory
+      const seenDirs = new Set<string>();
+      for (const dir of logDirsToRead) {
+        if (seenDirs.has(dir)) continue;
+        seenDirs.add(dir);
+        const files = readdirSync(dir).filter(f => f.endsWith(".log")).sort();
+        for (const file of files) {
+          const content = readFileSync(join(dir, file), "utf-8");
+          for (const line of content.trim().split("\n").filter(Boolean)) {
+            try {
+              entries.push(JSON.parse(line));
+            } catch {
+              // Skip malformed lines
+            }
           }
         }
       }
@@ -3430,15 +3519,28 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         return;
       }
 
+      // Filter by specId if requested
+      let filteredEntries = entries;
+      if (filterSpecId) {
+        filteredEntries = entries.filter(e => {
+          const p = (e as Record<string, unknown>).payload as Record<string, unknown> | undefined;
+          return p?.specId === filterSpecId;
+        });
+        if (filteredEntries.length === 0) {
+          ctx.ui.notify(`No log entries found for spec '${filterSpecId}'.`, "info");
+          return;
+        }
+      }
+
       // Compute and display summary using analysis functions
       const { computeFullSummary, formatSummary } = await import("../src/log-analysis.ts");
-      const summary = computeFullSummary(entries as any, config.logging.tokenPricing);
+      const summary = computeFullSummary(filteredEntries as any, config.logging.tokenPricing);
       const text = formatSummary(summary);
 
       ctx.ui.notify(text, "info");
 
       // Log that logs were viewed
-      logEvent("command", { command: "logs", result: "success", entryCount: entries.length });
+      logEvent("command", { command: "logs", result: "success", entryCount: filteredEntries.length, filterSessionId, filterSpecId });
     },
   });
 }

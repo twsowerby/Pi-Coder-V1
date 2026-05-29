@@ -11,7 +11,7 @@
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { LoggingConfig } from "../src/types.ts";
@@ -44,10 +44,32 @@ function cleanupLogDir(dir: string): void {
   }
 }
 
-function readLogLines(dir: string): string[] {
-  const files = readdirSync(dir).filter(f => f.endsWith(".log")).sort();
+function readLogLines(dir: string, sessionId?: string): string[] {
+  // If sessionId given, look in the session subdirectory
+  const effectiveDir = sessionId ? join(dir, sessionId) : dir;
+  // If no sessionId, check for subdirectories (session-scoped)
+  let logFileDir = effectiveDir;
+  if (!sessionId) {
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      const subdirs = entries.filter(e => e.isDirectory());
+      if (subdirs.length > 0) {
+        // Use the most recently modified session directory
+        let latest = subdirs[0];
+        for (const sd of subdirs) {
+          try {
+            if (statSync(join(dir, sd.name)).mtimeMs > statSync(join(dir, latest.name)).mtimeMs) {
+              latest = sd;
+            }
+          } catch { /* ignore */ }
+        }
+        logFileDir = join(dir, latest.name);
+      }
+    } catch { /* ignore */ }
+  }
+  const files = readdirSync(logFileDir).filter(f => f.endsWith(".log")).sort();
   if (files.length === 0) return [];
-  const content = readFileSync(join(dir, files[files.length - 1]), "utf-8");
+  const content = readFileSync(join(logFileDir, files[files.length - 1]), "utf-8");
   return content.trim().split("\n").filter(Boolean);
 }
 
@@ -135,19 +157,20 @@ describe("Logger", () => {
 
   // --- Log file naming ---
 
-  it("names log files as pi-coder-YYYY-MM-DD.log", () => {
-    const logger = new Logger(logDir, makeLoggingConfig());
+  it("names log files as YYYY-MM-DD.log within session directory", () => {
+    const sid = "test-session-123";
+    const logger = new Logger(logDir, makeLoggingConfig(), sid);
     logger.log(makeEvent("fsm_transition"));
 
-    const files = readdirSync(logDir).filter(f => f.endsWith(".log"));
+    // Should create session-scoped directory
+    const sessionDir = join(logDir, sid);
+    assert.ok(existsSync(sessionDir), "session subdirectory should exist");
+
+    const files = readdirSync(sessionDir).filter(f => f.endsWith(".log"));
     assert.strictEqual(files.length, 1);
     assert.ok(
-      files[0].startsWith("pi-coder-"),
-      `log file name should start with pi-coder-, got: ${files[0]}`,
-    );
-    assert.ok(
-      /^\d{4}-\d{2}-\d{2}\.log$/.test(files[0].replace("pi-coder-", "")),
-      `date portion should be YYYY-MM-DD, got: ${files[0]}`,
+      /^\d{4}-\d{2}-\d{2}\.log$/.test(files[0]),
+      `log file name should be YYYY-MM-DD.log, got: ${files[0]}`,
     );
 
     cleanupLogDir(logDir);
@@ -156,28 +179,30 @@ describe("Logger", () => {
   // --- File rotation ---
 
   it("rotates old log files when maxLogFiles is exceeded", () => {
+    const sid = "test-rotation";
+    const sessionDir = join(logDir, sid);
+    mkdirSync(sessionDir, { recursive: true });
     const config = makeLoggingConfig({ maxLogFiles: 3 });
 
     // Pre-create some old log files to simulate rotation
     for (let i = 1; i <= 4; i++) {
       const date = `2026-01-${String(i).padStart(2, "0")}`;
-      writeFileSync(join(logDir, `pi-coder-${date}.log`), "old data\n", "utf-8");
+      writeFileSync(join(sessionDir, `${date}.log`), "old data\n", "utf-8");
     }
 
-    const logger = new Logger(logDir, config);
+    const logger = new Logger(logDir, config, sid);
     logger.log(makeEvent("fsm_transition"));
 
     // After rotation, there should be at most 3+1 files (maxLogFiles)
-    // The oldest should have been deleted
-    const files = readdirSync(logDir).filter(f => f.endsWith(".log")).sort();
+    const files = readdirSync(sessionDir).filter(f => f.endsWith(".log")).sort();
     assert.ok(
       files.length <= 4, // maxLogFiles + 1 for the new one
       `too many files after rotation: ${files.length}`,
     );
 
-    // The oldest file (pi-coder-2026-01-01.log) should be gone
+    // The oldest file (2026-01-01.log) should be gone
     assert.ok(
-      !files.includes("pi-coder-2026-01-01.log"),
+      !files.includes("2026-01-01.log"),
       "oldest log file should have been rotated away",
     );
 
@@ -185,21 +210,24 @@ describe("Logger", () => {
   });
 
   it("does not rotate when file count is within maxLogFiles", () => {
+    const sid = "test-no-rotation";
+    const sessionDir = join(logDir, sid);
+    mkdirSync(sessionDir, { recursive: true });
     const config = makeLoggingConfig({ maxLogFiles: 10 });
 
     // Create 5 old files
     for (let i = 1; i <= 5; i++) {
       const date = `2026-01-${String(i).padStart(2, "0")}`;
-      writeFileSync(join(logDir, `pi-coder-${date}.log`), "old data\n", "utf-8");
+      writeFileSync(join(sessionDir, `${date}.log`), "old data\n", "utf-8");
     }
 
-    const logger = new Logger(logDir, config);
+    const logger = new Logger(logDir, config, sid);
     logger.log(makeEvent("fsm_transition"));
 
-    const files = readdirSync(logDir).filter(f => f.endsWith(".log")).sort();
+    const files = readdirSync(sessionDir).filter(f => f.endsWith(".log")).sort();
     assert.strictEqual(files.length, 6); // 5 old + 1 new
     // All 5 old files still exist
-    assert.ok(files.includes("pi-coder-2026-01-01.log"));
+    assert.ok(files.includes("2026-01-01.log"));
 
     cleanupLogDir(logDir);
   });
@@ -310,5 +338,80 @@ describe("Logger", () => {
     assert.strictEqual(lines.length, 3);
 
     cleanupLogDir(logDir);
+  });
+
+  // --- Dual timestamps ---
+
+  it("adds localTimestamp to every log event", () => {
+    const sid = "test-dual-ts";
+    const logger = new Logger(logDir, makeLoggingConfig(), sid);
+    logger.log(makeEvent("fsm_transition", { from: "IDLE", to: "SPEC_WORK" }));
+
+    const lines = readLogLines(logDir, sid);
+    assert.strictEqual(lines.length, 1);
+    const event = JSON.parse(lines[0]);
+    assert.ok(event.timestamp, "should have UTC timestamp");
+    assert.ok(event.localTimestamp, "should have localTimestamp");
+    // localTimestamp should have timezone offset format (+HH:MM or -HH:MM)
+    assert.ok(/[+-]\d{2}:\d{2}$/.test(event.localTimestamp),
+      `localTimestamp should end with timezone offset, got: ${event.localTimestamp}`);
+
+    cleanupLogDir(logDir);
+  });
+
+  it("uses configured IANA timezone for localTimestamp", () => {
+    const sid = "test-tz-config";
+    const config = makeLoggingConfig({ timezone: "America/New_York" });
+    const logger = new Logger(logDir, config, sid);
+    logger.log(makeEvent("fsm_transition"));
+
+    const lines = readLogLines(logDir, sid);
+    const event = JSON.parse(lines[0]);
+    assert.ok(event.localTimestamp);
+    // NY in May is EDT = UTC-4, so offset should be -04:00
+    assert.ok(event.localTimestamp.includes("-04:00"),
+      `Expected -04:00 offset for America/New_York in May, got: ${event.localTimestamp}`);
+
+    cleanupLogDir(logDir);
+  });
+
+  it("respects pre-set localTimestamp on event", () => {
+    const sid = "test-preset-ts";
+    const logger = new Logger(logDir, makeLoggingConfig(), sid);
+    const preset = "2026-05-29T15:00:00.000+10:00";
+    logger.log({ ...makeEvent("fsm_transition"), localTimestamp: preset });
+
+    const lines = readLogLines(logDir, sid);
+    const event = JSON.parse(lines[0]);
+    assert.strictEqual(event.localTimestamp, preset, "should keep pre-set localTimestamp");
+
+    cleanupLogDir(logDir);
+  });
+
+  // --- setSessionId ---
+
+  it("setSessionId changes the log directory", () => {
+    const logger = new Logger(logDir, makeLoggingConfig());
+    // First write without sessionId goes to base dir
+    logger.log(makeEvent("lifecycle_start"));
+
+    const sid = "dynamic-session";
+    logger.setSessionId(sid);
+    logger.log(makeEvent("fsm_transition"));
+
+    // Second write should be in session subdirectory
+    const sessionDir = join(logDir, sid);
+    assert.ok(existsSync(sessionDir), "session subdirectory should exist after setSessionId");
+    const files = readdirSync(sessionDir).filter(f => f.endsWith(".log"));
+    assert.strictEqual(files.length, 1);
+
+    cleanupLogDir(logDir);
+  });
+
+  // --- turn_usage event ---
+
+  it("turn_usage is a valid log event type at standard level", () => {
+    assert.ok("turn_usage" in LOG_LEVEL_MAP);
+    assert.strictEqual(LOG_LEVEL_MAP.turn_usage, "standard");
   });
 });
