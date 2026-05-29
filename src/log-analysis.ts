@@ -5,7 +5,13 @@
  * All functions are pure and testable without the pi runtime.
  * Input is parsed log entries (array of JSON objects).
  * Output is structured statistics.
+ *
+ * Supports both old-format events (tokenUsage: { input, output, total })
+ * and new-format events (tokenUsage: { input, output, cacheRead, cacheWrite, cost }).
+ * The `total` field is computed as `input + output` when not present.
  */
+
+import type { TokenPricing } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,10 +41,16 @@ export interface LogSummary {
   nudgeEffectiveness: { actedWithinTurn: number; escalated: number };
   /** Token usage totals and per-agent breakdown */
   tokenUsage: {
-    total: { input: number; output: number; total: number };
-    perAgent: Record<string, { input: number; output: number; total: number }>;
-    avgPerSpec: { input: number; output: number; total: number } | null;
+    total: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number };
+    perAgent: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number }>;
+    avgPerSpec: { input: number; output: number; total: number; cost: number } | null;
   };
+  /** Cost analysis (uses usage.cost from pi-subagents, falls back to user pricing) */
+  costAnalysis: CostAnalysis;
+  /** Per-agent duration stats */
+  agentDurations: Record<string, AgentDurationStats>;
+  /** Per-unit stats */
+  unitStats: UnitStats[];
   /** Number of RED_TAUTOLOGY events */
   redTautologyCount: number;
   /** Spec count (for averaging) */
@@ -243,50 +255,68 @@ export function computeNudgeEffectiveness(entries: LogEntry[]): { actedWithinTur
 
 /**
  * Compute token usage totals and per-agent breakdown.
+ * Supports both old-format (tokenUsage: { input, output, total }) and
+ * new-format (tokenUsage: { input, output, cacheRead, cacheWrite, cost }).
+ * The `total` field is computed as `input + output` when not present.
  */
 export function computeTokenUsage(entries: LogEntry[]): {
-  total: { input: number; output: number; total: number };
-  perAgent: Record<string, { input: number; output: number; total: number }>;
-  avgPerSpec: { input: number; output: number; total: number } | null;
+  total: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number };
+  perAgent: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number }>;
+  avgPerSpec: { input: number; output: number; total: number; cost: number } | null;
 } {
-  const total = { input: 0, output: 0, total: 0 };
-  const perAgent: Record<string, { input: number; output: number; total: number }> = {};
+  const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 };
+  const perAgent: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number }> = {};
 
   const subagentEnds = entries.filter(e => e.type === "subagent_end");
 
   for (const e of subagentEnds) {
-    const usage = e.payload.tokenUsage as { input: number; output: number; total: number } | undefined;
+    const usage = e.payload.tokenUsage as { input?: number; output?: number; total?: number; cacheRead?: number; cacheWrite?: number; cost?: number } | undefined;
     if (!usage) continue;
 
-    total.input += usage.input;
-    total.output += usage.output;
-    total.total += usage.total;
+    const input = usage.input ?? 0;
+    const output = usage.output ?? 0;
+    const cacheRead = usage.cacheRead ?? 0;
+    const cacheWrite = usage.cacheWrite ?? 0;
+    const cost = usage.cost ?? 0;
+    const computedTotal = usage.total ?? (input + output);
+
+    total.input += input;
+    total.output += output;
+    total.cacheRead += cacheRead;
+    total.cacheWrite += cacheWrite;
+    total.total += computedTotal;
+    total.cost += cost;
 
     const agent = e.payload.agent as string;
     if (!perAgent[agent]) {
-      perAgent[agent] = { input: 0, output: 0, total: 0 };
+      perAgent[agent] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 };
     }
-    perAgent[agent].input += usage.input;
-    perAgent[agent].output += usage.output;
-    perAgent[agent].total += usage.total;
+    perAgent[agent].input += input;
+    perAgent[agent].output += output;
+    perAgent[agent].cacheRead += cacheRead;
+    perAgent[agent].cacheWrite += cacheWrite;
+    perAgent[agent].total += computedTotal;
+    perAgent[agent].cost += cost;
   }
 
   // Average per spec (from lifecycle_end totalTokens)
   const lifecycleEnds = entries.filter(e => e.type === "lifecycle_end");
-  let avgPerSpec: { input: number; output: number; total: number } | null = null;
+  let avgPerSpec: { input: number; output: number; total: number; cost: number } | null = null;
   if (lifecycleEnds.length > 0) {
-    const sumTokens = { input: 0, output: 0, total: 0 };
+    const sumTokens = { input: 0, output: 0, total: 0, cost: 0 };
     for (const e of lifecycleEnds) {
-      const tokens = e.payload.totalTokens as { input: number; output: number; total: number } | undefined;
+      const tokens = e.payload.totalTokens as { input?: number; output?: number; total?: number; cost?: number } | undefined;
       if (!tokens) continue;
-      sumTokens.input += tokens.input;
-      sumTokens.output += tokens.output;
-      sumTokens.total += tokens.total;
+      sumTokens.input += tokens.input ?? 0;
+      sumTokens.output += tokens.output ?? 0;
+      sumTokens.total += tokens.total ?? ((tokens.input ?? 0) + (tokens.output ?? 0));
+      sumTokens.cost += tokens.cost ?? 0;
     }
     avgPerSpec = {
       input: sumTokens.input / lifecycleEnds.length,
       output: sumTokens.output / lifecycleEnds.length,
       total: sumTokens.total / lifecycleEnds.length,
+      cost: sumTokens.cost / lifecycleEnds.length,
     };
   }
 
@@ -383,13 +413,227 @@ export function computeSkillUtilization(entries: LogEntry[]): Record<string, num
 }
 
 // ---------------------------------------------------------------------------
+// Cost Analysis
+// ---------------------------------------------------------------------------
+
+/** Cost analysis result from log entries. */
+export interface CostAnalysis {
+  /** Total estimated cost in USD */
+  totalCostUsd: number;
+  /** Cost source: "usage_cost" (from pi-subagents usage.cost), "user_pricing" (from config), or "unavailable" */
+  source: "usage_cost" | "user_pricing" | "unavailable" | "mixed";
+  /** Per-agent cost breakdown */
+  perAgent: Record<string, { costUsd: number; source: "usage_cost" | "user_pricing" | "unavailable" }>;
+  /** Per-spec average cost */
+  avgPerSpec: number | null;
+  /** Cache savings: cacheRead tokens as percentage of what would have been full-price input */
+  cacheSavingsPercent: number | null;
+  /** Total cacheRead tokens */
+  cacheReadTokens: number;
+  /** Total cacheWrite tokens */
+  cacheWriteTokens: number;
+  /** Total input tokens (including cache-treatable ones) */
+  totalInputTokens: number;
+  /** Count of events where cost was available vs unavailable */
+  coverageStats: { withCost: number; withoutCost: number; total: number };
+}
+
+/** Per-agent duration statistics. */
+export interface AgentDurationStats {
+  avgMs: number;
+  count: number;
+  totalMs: number;
+  minMs: number;
+  maxMs: number;
+}
+
+/** Per-unit statistics from unit_start/unit_end events. */
+export interface UnitStats {
+  unitName: string;
+  specId: string | null;
+  count: number;
+  avgLoopCount: number;
+  outcomes: Record<string, number>;
+}
+
+/**
+ * Compute cost analysis from log entries.
+ * Primary source: usage.cost from pi-subagents.
+ * Fallback: user-configured token pricing from config.
+ */
+export function computeCostAnalysis(
+  entries: LogEntry[],
+  userPricing?: Record<string, TokenPricing>,
+): CostAnalysis {
+  const subagentEnds = entries.filter(e => e.type === "subagent_end");
+  let totalCostUsd = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let totalInputTokens = 0;
+  let withCost = 0;
+  let withoutCost = 0;
+  const perAgent: Record<string, { costUsd: number; source: "usage_cost" | "user_pricing" | "unavailable" }> = {};
+  const sourceSet = new Set<"usage_cost" | "user_pricing" | "unavailable">();
+
+  for (const e of subagentEnds) {
+    const usage = e.payload.tokenUsage as { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number } | undefined;
+    const model = e.payload.model as string | null;
+    const agent = (e.payload.agent as string) ?? "unknown";
+
+    const input = usage?.input ?? 0;
+    const output = usage?.output ?? 0;
+    const cacheRead = usage?.cacheRead ?? 0;
+    const cacheWrite = usage?.cacheWrite ?? 0;
+
+    cacheReadTokens += cacheRead;
+    cacheWriteTokens += cacheWrite;
+    totalInputTokens += input + cacheRead;
+
+    let eventCost = 0;
+    let source: "usage_cost" | "user_pricing" | "unavailable";
+
+    if ((usage?.cost ?? 0) > 0) {
+      eventCost = usage!.cost!;
+      source = "usage_cost";
+      withCost++;
+    } else if (model && userPricing?.[model]) {
+      // Fallback to user-configured pricing
+      const pricing = userPricing[model];
+      eventCost =
+        (input / 1_000_000) * pricing.inputPerMillion +
+        (output / 1_000_000) * pricing.outputPerMillion +
+        (cacheRead / 1_000_000) * (pricing.cacheReadPerMillion ?? 0) +
+        (cacheWrite / 1_000_000) * (pricing.cacheWritePerMillion ?? 0);
+      source = "user_pricing";
+      withCost++;
+    } else {
+      source = "unavailable";
+      withoutCost++;
+    }
+
+    sourceSet.add(source);
+    totalCostUsd += eventCost;
+
+    if (!perAgent[agent]) {
+      perAgent[agent] = { costUsd: 0, source: "unavailable" };
+    }
+    perAgent[agent].costUsd += eventCost;
+    // Upgrade source priority: usage_cost > user_pricing > unavailable
+    if (source === "usage_cost" || (source === "user_pricing" && perAgent[agent].source === "unavailable")) {
+      perAgent[agent].source = source;
+    }
+  }
+
+  // Compute avg per spec
+  const lifecycleEnds = entries.filter(e => e.type === "lifecycle_end");
+  let avgPerSpec: number | null = null;
+  if (lifecycleEnds.length > 0) {
+    let specCost = 0;
+    for (const e of lifecycleEnds) {
+      const tokens = e.payload.totalTokens as { cost?: number } | undefined;
+      specCost += tokens?.cost ?? 0;
+    }
+    avgPerSpec = specCost / lifecycleEnds.length;
+  }
+
+  // Cache savings
+  let cacheSavingsPercent: number | null = null;
+  if (cacheReadTokens > 0 && totalInputTokens > 0) {
+    cacheSavingsPercent = (cacheReadTokens / totalInputTokens) * 100;
+  }
+
+  // Source determination
+  let finalSource: CostAnalysis["source"] = "unavailable";
+  if (sourceSet.size === 1) {
+    finalSource = [...sourceSet][0];
+  } else if (sourceSet.size > 1) {
+    finalSource = "mixed";
+  }
+
+  return {
+    totalCostUsd,
+    source: finalSource,
+    perAgent,
+    avgPerSpec,
+    cacheSavingsPercent,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalInputTokens,
+    coverageStats: { withCost, withoutCost, total: subagentEnds.length },
+  };
+}
+
+/**
+ * Compute per-agent duration stats from subagent_end events.
+ */
+export function computeAgentDurations(entries: LogEntry[]): Record<string, AgentDurationStats> {
+  const subagentEnds = entries.filter(e => e.type === "subagent_end");
+  const byAgent: Record<string, number[]> = {};
+
+  for (const e of subagentEnds) {
+    const agent = (e.payload.agent as string) ?? "unknown";
+    const durationMs = e.payload.durationMs as number | null | undefined;
+    if (typeof durationMs === "number" && durationMs > 0) {
+      if (!byAgent[agent]) byAgent[agent] = [];
+      byAgent[agent].push(durationMs);
+    }
+  }
+
+  const result: Record<string, AgentDurationStats> = {};
+  for (const [agent, durations] of Object.entries(byAgent)) {
+    const totalMs = durations.reduce((a, b) => a + b, 0);
+    result[agent] = {
+      avgMs: totalMs / durations.length,
+      count: durations.length,
+      totalMs,
+      minMs: Math.min(...durations),
+      maxMs: Math.max(...durations),
+    };
+  }
+  return result;
+}
+
+/**
+ * Compute per-unit stats from unit_start/unit_end events.
+ * Groups by (specId, unitName) composite key to distinguish
+ * identically-named units across different specs.
+ */
+export function computeUnitStats(entries: LogEntry[]): UnitStats[] {
+  const unitEnds = entries.filter(e => e.type === "unit_end");
+  const byKey: Record<string, { specId: string | null; unitName: string; loopCounts: number[]; outcomes: Record<string, number> }> = {};
+
+  for (const e of unitEnds) {
+    const unitName = (e.payload.unitName as string) ?? "unknown";
+    const specId = (e.payload.specId as string) ?? null;
+    const loopCount = e.payload.loopCount as number ?? 0;
+    const outcome = (e.payload.outcome as string) ?? "unknown";
+
+    // Composite key to distinguish units across specs
+    const key = `${specId ?? "none"}::${unitName}`;
+    if (!byKey[key]) {
+      byKey[key] = { specId, unitName, loopCounts: [], outcomes: {} };
+    }
+    byKey[key].loopCounts.push(loopCount);
+    byKey[key].outcomes[outcome] = (byKey[key].outcomes[outcome] ?? 0) + 1;
+  }
+
+  return Object.entries(byKey).map(([, data]) => ({
+    unitName: data.unitName,
+    specId: data.specId,
+    count: data.loopCounts.length,
+    avgLoopCount: data.loopCounts.reduce((a, b) => a + b, 0) / data.loopCounts.length,
+    outcomes: data.outcomes,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Full Summary
 // ---------------------------------------------------------------------------
 
 /**
  * Compute a full summary from all log entries.
  */
-export function computeFullSummary(entries: LogEntry[]): LogSummary {
+export function computeFullSummary(entries: LogEntry[], userPricing?: Record<string, TokenPricing>): LogSummary {
   return {
     totalSessions: computeTotalSessions(entries),
     avgLifecycleDurationMs: computeAvgLifecycleDuration(entries),
@@ -398,6 +642,9 @@ export function computeFullSummary(entries: LogEntry[]): LogSummary {
     reviewDistribution: computeReviewDistribution(entries),
     nudgeEffectiveness: computeNudgeEffectiveness(entries),
     tokenUsage: computeTokenUsage(entries),
+    costAnalysis: computeCostAnalysis(entries, userPricing),
+    agentDurations: computeAgentDurations(entries),
+    unitStats: computeUnitStats(entries),
     redTautologyCount: computeRedTautologyCount(entries),
     specCount: computeSpecCount(entries),
     timeInState: computeTimeInState(entries),
@@ -446,6 +693,9 @@ export function formatSummary(summary: LogSummary): string {
   const tu = summary.tokenUsage;
   if (tu.total.total > 0) {
     lines.push(`\nToken usage: ${tu.total.total.toLocaleString()} total (${tu.total.input.toLocaleString()} in, ${tu.total.output.toLocaleString()} out)`);
+    if (tu.total.cacheRead > 0 || tu.total.cacheWrite > 0) {
+      lines.push(`  Cache: ${tu.total.cacheRead.toLocaleString()} read, ${tu.total.cacheWrite.toLocaleString()} write`);
+    }
     const agents = Object.entries(tu.perAgent);
     if (agents.length > 1) {
       lines.push("Per agent:");
@@ -455,6 +705,61 @@ export function formatSummary(summary: LogSummary): string {
     }
     if (tu.avgPerSpec) {
       lines.push(`Avg per spec: ${Math.round(tu.avgPerSpec.total).toLocaleString()} tokens`);
+    }
+  }
+
+  // Cost analysis
+  const ca = summary.costAnalysis;
+  if (ca.totalCostUsd > 0 || ca.cacheReadTokens > 0) {
+    if (ca.totalCostUsd > 0) {
+      const sourceLabel = ca.source === "usage_cost" ? "pi-subagents usage.cost"
+        : ca.source === "user_pricing" ? "config tokenPricing"
+        : ca.source === "mixed" ? "mixed sources"
+        : "unavailable";
+      const coverage = ca.coverageStats.withoutCost > 0
+        ? ` (${ca.coverageStats.withCost} of ${ca.coverageStats.total} events had cost data${ca.coverageStats.withoutCost > 0 ? `, ${ca.coverageStats.withoutCost} estimated from config` : ""})`
+        : "";
+      lines.push(`\n💰 Estimated cost: $${ca.totalCostUsd.toFixed(2)} total (source: ${sourceLabel})${coverage}`);
+      const perAgentEntries = Object.entries(ca.perAgent).filter(([, v]) => v.costUsd > 0);
+      if (perAgentEntries.length > 0) {
+        lines.push("   Per agent:");
+        for (const [agent, data] of perAgentEntries) {
+          lines.push(`     ${agent}: $${data.costUsd.toFixed(2)}`);
+        }
+      }
+      if (ca.avgPerSpec !== null) {
+        lines.push(`   Avg per spec: $${ca.avgPerSpec.toFixed(2)}`);
+      }
+    } else if (ca.cacheReadTokens === 0) {
+      // Only show "no data" when there's truly no cost or cache data
+      lines.push("\n💰 Cost: no data available. Token counts are logged; add logging.tokenPricing to config.json for cost estimates.");
+    }
+    // Cache stats always shown when available (with or without cost)
+    if (ca.cacheSavingsPercent !== null) {
+      lines.push(`   Cache: ${ca.cacheSavingsPercent.toFixed(0)}% savings (${ca.cacheReadTokens.toLocaleString()} cache-read of ${ca.totalInputTokens.toLocaleString()} input tokens)`);
+    }
+  }
+
+  // Per-agent durations
+  const ad = summary.agentDurations;
+  const adEntries = Object.entries(ad);
+  if (adEntries.length > 0) {
+    lines.push(`\n⏱️ Per-agent durations:`);
+    for (const [agent, stats] of adEntries.sort((a, b) => b[1].avgMs - a[1].avgMs)) {
+      const avgSecs = (stats.avgMs / 1000).toFixed(1);
+      const minSecs = (stats.minMs / 1000).toFixed(1);
+      const maxSecs = (stats.maxMs / 1000).toFixed(1);
+      lines.push(`  ${agent}: avg ${avgSecs}s (${stats.count} runs, ${minSecs}s–${maxSecs}s)`);
+    }
+  }
+
+  // Per-unit stats
+  const us = summary.unitStats;
+  if (us.length > 0) {
+    lines.push(`\n🔬 Per-unit stats:`);
+    for (const u of us) {
+      const outcomes = Object.entries(u.outcomes).map(([k, v]) => `${k}: ${v}`).join(", ");
+      lines.push(`  ${u.unitName} (spec: ${u.specId ?? "unknown"}): ${u.count} run${u.count !== 1 ? "s" : ""}, avg ${u.avgLoopCount.toFixed(1)} loops, ${outcomes}`);
     }
   }
 

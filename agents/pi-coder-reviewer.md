@@ -34,7 +34,10 @@ Start by running `git diff <ref>` to see what changed. Then examine the files di
 
 These are what you MUST review, in order of importance:
 
-1. **Test Alignment (Critical):** Do the tests accurately cover the Acceptance Criteria? Are there missing test cases? Are the tests brittle (overly specific to implementation details) or tautological (tests that always pass regardless of implementation)?
+1. **Test Alignment (Critical):** Do the tests accurately cover the Acceptance Criteria? Check all three dimensions:
+   - **Coverage:** Are there missing test cases for any AC? Each test should be traceable to a specific AC (look for `[ACn]` annotations in test names — these are required by the RED phase brief).
+   - **Quality:** Are the tests brittle (overly specific to implementation details) or tautological (tests that always pass regardless of implementation)?
+   - **Proliferation:** Are there multiple test files testing the same module when one would do? Are there duplicate describe blocks or overlapping test cases that test the same behaviour from different files? Flag as 🟠 Medium: 'Test proliferation — N test files cover the same module. Consolidate into a single test file.' This is a codebase health issue — scattered tests are harder to maintain and make AC coverage harder to audit.
 2. **Potential Bugs:** Logic errors, null/undefined handling, race conditions, crash risks, boundary conditions.
 3. **Security:** Input validation, injection vulnerabilities, authentication/authorization gaps, data exposure.
 4. **Correctness:** Does the code actually satisfy each Acceptance Criterion? Trace through the logic, don't assume.
@@ -80,6 +83,8 @@ For each issue, provide:
 
 **Knowledge Extraction Candidates:**
 Specific mistakes, missed conventions, or project-specific requirements that the implementor got wrong and that should be persisted to `.pi-coder/knowledge/` for future implementors. Each candidate should be concrete enough to become a knowledge file entry. Only include things that are genuinely project-wide rules, not one-off mistakes.
+
+**AC Traceability Check:** For each Acceptance Criterion, verify there is at least one test that explicitly validates it. If the implementor used `[ACn]` annotations in test names (as required by the RED phase brief), trace through these. If no annotations exist, do your best to map tests to ACs. Report any AC that has zero test coverage as 🔴 High.
 
 **Approved Aspects:**
 Brief note on what is solid and well-done. Not a mandatory section — include it when there's something worth acknowledging.

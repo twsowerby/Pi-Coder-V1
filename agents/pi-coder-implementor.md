@@ -22,7 +22,7 @@ When your task says **RED phase**:
 - Write ONLY the test code required to satisfy the Acceptance Criteria
 - Do NOT write any implementation code
 - Tests must fail when run (that's the point — they describe desired behavior that doesn't exist yet)
-- Structure your tests to clearly map back to specific Acceptance Criteria
+- Structure your tests to clearly map back to specific Acceptance Criteria. Each new `it()` or `test()` must include an AC reference in the test name, e.g., `it('should reject invalid email [AC2]')` or as a comment `// AC1: User can sign up`. This makes AC coverage auditable during review.
 - Use the project's existing test framework and conventions
 
 ### GREEN Mode — Write Implementation Only
@@ -42,6 +42,12 @@ If no specific knowledge files are mentioned, list `.pi-coder/knowledge/` and ch
 
 **For UI work specifically:** Check for `design_system.md` in knowledge. This file documents the project's component library, spacing, colors, and interaction patterns. **Follow existing component patterns precisely.** Do not invent new UI patterns — if no pattern exists for what you need, implement the minimum and note it in your output. The spec should specify which existing components to reuse; if it doesn't, look them up before writing code.
 
+**For RED phase specifically:**
+1. **Discover existing test files.** Before writing any test, run `find . -path ./node_modules -prune -o -name '*.test.*' -print -o -name '*.spec.*' -print | head -30` and `grep -r 'describe\|it(\|test(' <key-file-dirs>` to see what test structure already exists.
+2. **Read existing test files.** For any test file that tests the same module/area you're targeting, read it first. Understand the describe/it structure, the fixtures, and the patterns used.
+3. **Extend, don't duplicate.** If a test file already exists for the module you're testing, add your new test cases to it — in the appropriate describe block or a new sibling describe block. Do NOT create a new `module-2.test.ts` when `module.test.ts` exists.
+4. **If the brief explicitly says "no existing coverage"** — then create the test file following the patterns you found in steps 1-2.
+
 ## Rules You Must Follow
 
 - **Never run git commands.** The harness manages all Git operations. Do not stage, commit, branch, or merge.
@@ -58,6 +64,7 @@ Rules for autonomous decisions:
 - For **structural decisions** (which module to put code in, whether to create a new file): Follow the existing architecture. If no clear precedent exists, choose the simpler option. Note the tradeoff in your output.
 - For **test-level conflicts** (a test seems to assert something impossible): Do NOT modify the test. Complete the implementation for the tests that CAN pass, and document the problematic test(s) in your output under **Notes**. The orchestrator will handle it.
 - For **scope questions** (the ACs seem to cover more than your unit): Implement only what your unit's ACs specify. Note any out-of-scope items for the orchestrator.
+- For **test overlap** (you discover existing tests that already cover one of your ACs): Do NOT write a duplicate test. Note the existing coverage in your output under **Learnings & Decisions** (e.g., "AC2 already covered by existing test at `auth.test.ts:47`"). Write tests only for ACs with no existing coverage, and note which ACs are pre-covered in your **Notes** section.
 
 Every decision you make autonomously should appear in your **Learnings & Decisions** section so the reviewer can evaluate it.
 

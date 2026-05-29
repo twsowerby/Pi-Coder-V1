@@ -463,3 +463,409 @@ describe("Spec 13 Phase 3: Customization Support", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 16 Phase 1: Orchestrator Prompt Discipline
+// ---------------------------------------------------------------------------
+
+describe("Spec 16 Phase 1: Orchestrator Prompt Discipline", () => {
+  it("the orchestrator prompt contains the output parameter prohibition", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("NEVER use the `output` parameter on subagent calls"),
+      "Must include output parameter prohibition",
+    );
+    assert.ok(
+      content.includes("Do NOT pass `output` or `outputMode` to any `subagent()` call"),
+      "Must include explicit output and outputMode ban",
+    );
+  });
+
+  it("the Brief Discipline table has consistent column counts", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    // Find the table under Delegation Brief Discipline
+    const sections = content.split("## Delegation Brief Discipline");
+    assert.ok(sections.length >= 2, "Must have Delegation Brief Discipline section");
+    const section = sections[1].split("##")[0]; // Stop at next ## heading
+    const tableLines = section.split("\n").filter(l => l.startsWith("|"));
+    assert.ok(tableLines.length >= 2, "Must have at least a header and one data row");
+    const colCounts = tableLines.map(l => l.split("|").length);
+    const uniqueCounts = new Set(colCounts);
+    assert.strictEqual(uniqueCounts.size, 1, `Table has inconsistent column counts: ${[...uniqueCounts]}`);
+  });
+
+  it("the orchestrator prompt contains the Delegation Brief Discipline section", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("## Delegation Brief Discipline"),
+      "Must have Delegation Brief Discipline heading",
+    );
+    assert.ok(
+      content.includes("Every implementor task MUST include these fields in the brief"),
+      "Must state that brief fields are mandatory",
+    );
+    // Verify key fields are documented
+    const requiredFields = [
+      "Mode",
+      "Acceptance Criteria",
+      "Constraints",
+      "Key files",
+      "Knowledge files",
+      "Existing test discovery",
+      "Existing test coverage",
+      "Unit name and approach",
+      "Test suite",
+    ];
+    for (const field of requiredFields) {
+      assert.ok(
+        content.includes(`**${field}**`),
+        `Must document the "${field}" field`,
+      );
+    }
+  });
+
+  it("the brief discipline section requires test discovery before RED-phase delegation", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("grep") && content.includes("find"),
+      "Must require grep and find for test discovery",
+    );
+    assert.ok(
+      content.includes("BEFORE delegating"),
+      "Must require discovery BEFORE delegating",
+    );
+  });
+
+  it("the brief discipline section includes the test-to-AC mapping requirement", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("Test-to-AC Mapping"),
+      "Must have test-to-AC mapping section",
+    );
+    assert.ok(
+      content.includes("NEW: no existing coverage"),
+      "Must define the NEW coverage marker",
+    );
+  });
+
+  it("the one-unit-per-cycle rule requires explicit unit numbering", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("You are implementing unit N of M"),
+      "Must require explicit unit numbering in RED-phase briefs",
+    );
+  });
+
+  it("the prompt contains the NEEDS_CHANGES Re-delegation section", () => {
+    const content = readFileSync(orchestratorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("## NEEDS_CHANGES Re-delegation"),
+      "Must have NEEDS_CHANGES re-delegation heading",
+    );
+    assert.ok(
+      content.includes("Copy the reviewer's issue descriptions verbatim"),
+      "Must require verbatim copying of reviewer issues",
+    );
+    assert.ok(
+      content.includes("Do NOT modify the passing tests"),
+      "Must warn against modifying passing tests",
+    );
+  });
+
+  it("loaded and substituted prompt includes all Spec 16 Phase 1 directives", async () => {
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    resetOrchestratorPromptCache();
+    const template = loadOrchestratorPrompt();
+
+    // Verify key directives survive frontmatter stripping + comment stripping
+    assert.ok(template.includes("NEVER use the `output` parameter"), "Output prohibition must survive loading");
+    assert.ok(
+      template.includes("Delegation Brief Discipline"),
+      "Brief discipline section must survive loading",
+    );
+    assert.ok(
+      template.includes("Test-to-AC Mapping"),
+      "Test-to-AC mapping must survive loading",
+    );
+    assert.ok(
+      template.includes("NEEDS_CHANGES Re-delegation"),
+      "NEEDS_CHANGES section must survive loading",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 16 Phase 2: Implementor Prompt Improvements
+// ---------------------------------------------------------------------------
+
+describe("Spec 16 Phase 2: Implementor Prompt Improvements", () => {
+  const implementorPromptPath = join(packageRoot, "agents", "pi-coder-implementor.md");
+
+  it("the implementor prompt contains the RED phase test discovery steps", () => {
+    const content = readFileSync(implementorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("For RED phase specifically"),
+      "Must have RED phase specific instructions",
+    );
+    assert.ok(
+      content.includes("Discover existing test files"),
+      "Must have test file discovery step",
+    );
+    assert.ok(
+      content.includes("Extend, don't duplicate"),
+      "Must have extend-don't-duplicate rule",
+    );
+    assert.ok(
+      content.includes("no existing coverage"),
+      "Must instruct what to do when brief says no existing coverage",
+    );
+  });
+
+  it("the implementor prompt requires AC references in test names", () => {
+    const content = readFileSync(implementorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("[AC"),
+      "Must show [ACn] annotation example in test names",
+    );
+    assert.ok(
+      content.includes("AC reference in the test name"),
+      "Must require AC references in test names",
+    );
+  });
+
+  it("the implementor prompt handles test overlap", () => {
+    const content = readFileSync(implementorPromptPath, "utf-8");
+    assert.ok(
+      content.includes("test overlap"),
+      "Must have test overlap handling",
+    );
+    assert.ok(
+      content.includes("Do NOT write a duplicate test"),
+      "Must prohibit duplicate tests",
+    );
+    assert.ok(
+      content.includes("already covered by existing test"),
+      "Must instruct noting existing coverage in Learnings & Decisions",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 16 Phase 3: Reviewer Prompt Improvements
+// ---------------------------------------------------------------------------
+
+describe("Spec 16 Phase 3: Reviewer Prompt Improvements", () => {
+  const reviewerPromptPath = join(packageRoot, "agents", "pi-coder-reviewer.md");
+
+  it("the reviewer prompt expands Test Alignment to three dimensions", () => {
+    const content = readFileSync(reviewerPromptPath, "utf-8");
+    assert.ok(
+      content.includes("Coverage:"),
+      "Must have Coverage dimension",
+    );
+    assert.ok(
+      content.includes("Quality:"),
+      "Must have Quality dimension",
+    );
+    assert.ok(
+      content.includes("Proliferation:"),
+      "Must have Proliferation dimension",
+    );
+  });
+
+  it("the reviewer prompt checks for [ACn] annotations", () => {
+    const content = readFileSync(reviewerPromptPath, "utf-8");
+    assert.ok(
+      content.includes("[ACn]"),
+      "Must reference [ACn] annotation format",
+    );
+    assert.ok(
+      content.includes("required by the RED phase brief"),
+      "Must explain these annotations are required by the RED phase brief",
+    );
+  });
+
+  it("the reviewer prompt flags test proliferation", () => {
+    const content = readFileSync(reviewerPromptPath, "utf-8");
+    assert.ok(
+      content.includes("Test proliferation"),
+      "Must have test proliferation section",
+    );
+    assert.ok(
+      content.includes("Consolidate into a single test file"),
+      "Must recommend consolidation",
+    );
+  });
+
+  it("the reviewer prompt includes AC Traceability Check", () => {
+    const content = readFileSync(reviewerPromptPath, "utf-8");
+    assert.ok(
+      content.includes("AC Traceability Check"),
+      "Must have AC Traceability Check section",
+    );
+    assert.ok(
+      content.includes("zero test coverage"),
+      "Must flag ACs with zero test coverage",
+    );
+    assert.ok(
+      content.includes("🔴 High"),
+      "Must classify missing AC coverage as High severity",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 16 Phase 4: Desktop Notification Improvements
+// ---------------------------------------------------------------------------
+
+describe("Spec 16 Phase 4: Desktop Notification Call-Sites", () => {
+  const extensionPath = join(packageRoot, "extensions", "index.ts");
+
+  it("agent_end notification uses descriptive title with middle-dot separator", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('notify("agent_end", "Pi Coder \\u00b7 Idle"'),
+      "agent_end must use 'Pi Coder · Idle' title",
+    );
+    assert.ok(
+      content.includes('"Waiting for your input"'),
+      "agent_end must use informative body",
+    );
+  });
+
+  it("spec_approval notification uses review emoji and spec ID", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('notify("spec_approval", "Pi Coder \\u00b7 \\uD83D\\uDCCB Review"'),
+      "spec_approval must use 'Pi Coder · 📋 Review' title",
+    );
+    assert.ok(
+      content.includes('Spec ${activeSpecId'),
+      "spec_approval body must include spec ID",
+    );
+  });
+
+  it("circuit_breaker notification uses red circle emoji and spec ID", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('notify("circuit_breaker", "Pi Coder \\u00b7 \\uD83D\\uDD34 Circuit Breaker"'),
+      "circuit_breaker must use 'Pi Coder · 🔴 Circuit Breaker' title",
+    );
+    assert.ok(
+      content.includes('exceeded on spec ${activeSpecId'),
+      "circuit_breaker body must include spec ID",
+    );
+  });
+
+  it("complete notification uses check emoji and merged successfully body", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('notify("complete", "Pi Coder \\u00b7 \\u2705 Complete"'),
+      "complete must use 'Pi Coder · ✅ Complete' title",
+    );
+    assert.ok(
+      content.includes('merged successfully'),
+      "complete body must say 'merged successfully'",
+    );
+  });
+
+  it("no generic 'Pi Coder' titles remain on notification call sites", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    // Find all notify() call sites with 'Pi Coder' bare title
+    const nakedNotifyMatches = content.match(/notify\("[^"]+",\s*"Pi Coder"/g);
+    assert.strictEqual(
+      nakedNotifyMatches,
+      null,
+      `Found notify calls with generic 'Pi Coder' title: ${nakedNotifyMatches}`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 16 Phase 5: Spec Close Command
+// ---------------------------------------------------------------------------
+
+describe("Spec 16 Phase 5: Spec Close Command", () => {
+  const extensionPath = join(packageRoot, "extensions", "index.ts");
+
+  it("pi-coder-close command is registered", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('registerCommand("pi-coder-close"'),
+      "Must register pi-coder-close command",
+    );
+  });
+
+  it("close command sets CANCELLED status", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('status: "CANCELLED"'),
+      "Must set status to CANCELLED",
+    );
+  });
+
+  it("close command deletes state.json via SpecStatePersistence.delete", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes("SpecStatePersistence.delete(specManager.specsDir,"),
+      "Must call SpecStatePersistence.delete with specsDir and specId",
+    );
+  });
+
+  it("close command resets FSM and clears activeSpecId for active spec", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes("stateMachine.reset()"),
+      "Must reset state machine when closing active spec",
+    );
+    assert.ok(
+      content.includes("activeSpecId = null"),
+      "Must clear activeSpecId when closing active spec",
+    );
+    assert.ok(
+      content.includes('resetNudgeState("IDLE")'),
+      "Must reset nudge state to IDLE",
+    );
+  });
+
+  it("close command persists state and refreshes UI", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes("await persistState()"),
+      "Must persist state after closing",
+    );
+    assert.ok(
+      content.includes("refreshUI()"),
+      "Must refresh UI after closing",
+    );
+  });
+
+  it("close command logs the event for audit", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes('logEvent("command", { command: "close_spec"'),
+      "Must log close_spec command event",
+    );
+    assert.ok(
+      content.includes("previousStatus"),
+      "Must log previous status for audit",
+    );
+  });
+
+  it("close command filters to non-COMPLETE/CANCELLED specs", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    // Verify the filtering logic
+    assert.ok(
+      content.includes('"COMPLETE"') && content.includes('"CANCELLED"'),
+      "Must filter out both COMPLETE and CANCELLED specs",
+    );
+  });
+
+  it("close command shows no-open-specs notification", () => {
+    const content = readFileSync(extensionPath, "utf-8");
+    assert.ok(
+      content.includes("No open specs to close"),
+      "Must notify when no open specs exist",
+    );
+  });
+});

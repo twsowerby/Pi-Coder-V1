@@ -21,6 +21,9 @@ import {
   computeReviewDistribution,
   computeNudgeEffectiveness,
   computeTokenUsage,
+  computeCostAnalysis,
+  computeAgentDurations,
+  computeUnitStats,
   computeRedTautologyCount,
   computeFullSummary,
   formatSummary,
@@ -162,17 +165,31 @@ describe("Phase 3: Log Analysis", () => {
 
   // --- Token usage ---
 
-  it("computes token usage totals and per-agent breakdown", () => {
+  it("computeTokenUsage handles new-shape events with cacheRead/cacheWrite/cost", () => {
     const entries: LogEntry[] = [
-      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, total: 3000 } } },
-      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.implementor", tokenUsage: { input: 500, output: 1500, total: 2000 } } },
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", model: "anthropic/claude-sonnet-4", tokenUsage: { input: 1000, output: 2000, cacheRead: 500, cacheWrite: 100, cost: 0.05 } } },
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.implementor", model: "anthropic/claude-sonnet-4", tokenUsage: { input: 500, output: 1500, cacheRead: 200, cacheWrite: 50, cost: 0.03 } } },
     ];
     const usage = computeTokenUsage(entries);
     assert.strictEqual(usage.total.input, 1500);
     assert.strictEqual(usage.total.output, 3500);
-    assert.strictEqual(usage.total.total, 5000);
-    assert.strictEqual(usage.perAgent["pi-coder.researcher"].total, 3000);
-    assert.strictEqual(usage.perAgent["pi-coder.implementor"].total, 2000);
+    assert.strictEqual(usage.total.cacheRead, 700);
+    assert.strictEqual(usage.total.cacheWrite, 150);
+    assert.strictEqual(usage.total.cost, 0.08);
+    assert.strictEqual(usage.perAgent["pi-coder.researcher"].cost, 0.05);
+    assert.strictEqual(usage.perAgent["pi-coder.implementor"].cost, 0.03);
+  });
+
+  it("computeTokenUsage is backward-compatible with old { input, output, total } shape", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, total: 3000 } } },
+    ];
+    const usage = computeTokenUsage(entries);
+    assert.strictEqual(usage.total.input, 1000);
+    assert.strictEqual(usage.total.output, 2000);
+    assert.strictEqual(usage.total.total, 3000);
+    assert.strictEqual(usage.total.cacheRead, 0);
+    assert.strictEqual(usage.total.cost, 0);
   });
 
   it("computes avg tokens per spec from lifecycle_end events", () => {
@@ -349,5 +366,212 @@ describe("Unit 5g: New Analysis Functions", () => {
     assert.ok("timeInState" in summary);
     assert.ok("orchestratorTurnsPerSpec" in summary);
     assert.ok("skillUtilization" in summary);
+    // Spec 17 new fields
+    assert.ok("costAnalysis" in summary);
+    assert.ok("agentDurations" in summary);
+    assert.ok("unitStats" in summary);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 17: Logging Observability Tests
+// ---------------------------------------------------------------------------
+
+describe("Spec 17: Cost Analysis", () => {
+  it("computeCostAnalysis uses usage.cost when available", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", model: "anthropic/claude-sonnet-4", tokenUsage: { input: 1000, output: 2000, cacheRead: 500, cost: 0.05 } } },
+      { timestamp: "2026-05-25T10:01:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.implementor", model: "anthropic/claude-sonnet-4", tokenUsage: { input: 500, output: 1500, cost: 0.03 } } },
+    ];
+    const result = computeCostAnalysis(entries);
+    assert.strictEqual(result.totalCostUsd, 0.08);
+    assert.strictEqual(result.source, "usage_cost");
+    assert.strictEqual(result.perAgent["pi-coder.researcher"].costUsd, 0.05);
+    assert.strictEqual(result.perAgent["pi-coder.researcher"].source, "usage_cost");
+  });
+
+  it("computeCostAnalysis falls back to user pricing when usage.cost is 0", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", model: "anthropic/claude-sonnet-4", tokenUsage: { input: 1000000, output: 2000000, cacheRead: 500000, cost: 0 } } },
+    ];
+    const userPricing = {
+      "anthropic/claude-sonnet-4": {
+        inputPerMillion: 3.0,
+        outputPerMillion: 15.0,
+        cacheReadPerMillion: 0.3,
+        cacheWritePerMillion: 3.75,
+      },
+    };
+    const result = computeCostAnalysis(entries, userPricing);
+    assert.strictEqual(result.source, "user_pricing");
+    // Input: 1M * $3/M = $3, Output: 2M * $15/M = $30, CacheRead: 0.5M * $0.3/M = $0.15
+    const expectedCost = 3.0 + 30.0 + 0.15;
+    assert.strictEqual(result.totalCostUsd, expectedCost);
+  });
+
+  it("computeCostAnalysis returns unavailable when no cost and no user pricing", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, cost: 0 } } },
+    ];
+    const result = computeCostAnalysis(entries);
+    assert.strictEqual(result.source, "unavailable");
+    assert.strictEqual(result.totalCostUsd, 0);
+  });
+
+  it("computeCostAnalysis computes cacheSavingsPercent correctly", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, cacheRead: 4000, cacheWrite: 100, cost: 0.05 } } },
+    ];
+    const result = computeCostAnalysis(entries);
+    assert.ok(result.cacheSavingsPercent !== null);
+    // cacheRead/(input + cacheRead) * 100 = 4000/5000 * 100 = 80%
+    assert.strictEqual(result.cacheSavingsPercent, 80);
+  });
+
+  it("computeCostAnalysis returns null cacheSavingsPercent when no cacheRead", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, cost: 0.02 } } },
+    ];
+    const result = computeCostAnalysis(entries);
+    assert.strictEqual(result.cacheSavingsPercent, null);
+  });
+
+  it("computeCostAnalysis produces correct coverageStats", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "a1", model: "anthropic/claude-sonnet-4", tokenUsage: { input: 1000, output: 2000, cost: 0.05 } } },
+      { timestamp: "2026-05-25T10:01:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "a2", model: "unknown-model", tokenUsage: { input: 500, output: 1500, cost: 0 } } },
+    ];
+    const result = computeCostAnalysis(entries);
+    assert.strictEqual(result.coverageStats.withCost, 1);
+    assert.strictEqual(result.coverageStats.withoutCost, 1);
+    assert.strictEqual(result.coverageStats.total, 2);
+    assert.strictEqual(result.source, "mixed");
+  });
+
+  it("computeCostAnalysis with empty entries returns unavailable", () => {
+    const result = computeCostAnalysis([]);
+    assert.strictEqual(result.source, "unavailable");
+    assert.strictEqual(result.totalCostUsd, 0);
+    assert.strictEqual(result.cacheSavingsPercent, null);
+  });
+});
+
+describe("Spec 17: Agent Durations", () => {
+  it("computeAgentDurations groups by agent and computes stats", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", durationMs: 30000, tokenUsage: {} } },
+      { timestamp: "2026-05-25T10:01:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", durationMs: 60000, tokenUsage: {} } },
+      { timestamp: "2026-05-25T10:02:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.implementor", durationMs: 90000, tokenUsage: {} } },
+    ];
+    const result = computeAgentDurations(entries);
+    assert.ok(result["pi-coder.researcher"]);
+    assert.strictEqual(result["pi-coder.researcher"].avgMs, 45000);
+    assert.strictEqual(result["pi-coder.researcher"].count, 2);
+    assert.strictEqual(result["pi-coder.researcher"].minMs, 30000);
+    assert.strictEqual(result["pi-coder.researcher"].maxMs, 60000);
+    assert.strictEqual(result["pi-coder.implementor"].avgMs, 90000);
+  });
+
+  it("computeAgentDurations handles empty entries", () => {
+    const result = computeAgentDurations([]);
+    assert.deepStrictEqual(result, {});
+  });
+});
+
+describe("Spec 17: Unit Stats", () => {
+  it("computeUnitStats groups by unit name", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "unit_end", payload: { unitName: "signup", specId: "auth", loopCount: 1, outcome: "green_validated" } },
+      { timestamp: "2026-05-25T10:01:00.000Z", sessionId: "s1", type: "unit_end", payload: { unitName: "signup", specId: "auth", loopCount: 3, outcome: "circuit_breaker" } },
+      { timestamp: "2026-05-25T10:02:00.000Z", sessionId: "s1", type: "unit_end", payload: { unitName: "persistence", specId: "auth", loopCount: 0, outcome: "green_validated" } },
+    ];
+    const result = computeUnitStats(entries);
+    assert.strictEqual(result.length, 2);
+    const signup = result.find(u => u.unitName === "signup");
+    assert.ok(signup);
+    assert.strictEqual(signup!.count, 2);
+    assert.strictEqual(signup!.avgLoopCount, 2); // (1+3)/2
+    assert.strictEqual(signup!.outcomes["green_validated"], 1);
+    assert.strictEqual(signup!.outcomes["circuit_breaker"], 1);
+  });
+
+  it("computeUnitStats handles empty entries", () => {
+    const result = computeUnitStats([]);
+    assert.strictEqual(result.length, 0);
+  });
+
+  it("computeUnitStats distinguishes same unit name across different specs", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "unit_end", payload: { unitName: "persistence", specId: "auth", loopCount: 0, outcome: "green_validated" } },
+      { timestamp: "2026-05-25T10:01:00.000Z", sessionId: "s1", type: "unit_end", payload: { unitName: "persistence", specId: "cart", loopCount: 2, outcome: "circuit_breaker" } },
+    ];
+    const result = computeUnitStats(entries);
+    assert.strictEqual(result.length, 2); // Two separate entries, not merged
+    const authPersistence = result.find(u => u.specId === "auth" && u.unitName === "persistence");
+    const cartPersistence = result.find(u => u.specId === "cart" && u.unitName === "persistence");
+    assert.ok(authPersistence);
+    assert.ok(cartPersistence);
+    assert.strictEqual(authPersistence!.outcomes["green_validated"], 1);
+    assert.strictEqual(cartPersistence!.outcomes["circuit_breaker"], 1);
+  });
+});
+
+describe("Spec 17: Format Summary with Cost", () => {
+  it("formatSummary includes cost section when data is available", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", model: "anthropic/claude-sonnet-4", durationMs: 30000, tokenUsage: { input: 1000, output: 2000, cost: 0.05 } } },
+    ];
+    const summary = computeFullSummary(entries);
+    const text = formatSummary(summary);
+    assert.ok(text.includes("💰"));
+    assert.ok(text.includes("$0.05"));
+    assert.ok(text.includes("usage.cost"));
+  });
+
+  it("formatSummary shows no data note when cost is unavailable", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", durationMs: 30000, tokenUsage: { input: 1000, output: 2000, cost: 0 } } },
+    ];
+    const summary = computeFullSummary(entries);
+    const text = formatSummary(summary);
+    // Without cost, the 💰 section should either not appear or say no data
+    const hasCostSection = text.includes("💰");
+    if (hasCostSection) {
+      assert.ok(text.includes("no data") || text.includes("tokenPricing"));
+    }
+  });
+
+  it("formatSummary shows cache stats without false no-data message when cost=0 but cache>0", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, cacheRead: 5000, cacheWrite: 100, cost: 0 } } },
+    ];
+    const summary = computeFullSummary(entries);
+    const text = formatSummary(summary);
+    // Should NOT say "no data available" when cache stats exist
+    const noDataMsg = text.includes("no data available");
+    const hasCache = text.includes("Cache:") || text.includes("cache");
+    // Either there's no misleading "no data" message, or there are cache stats to accompany it
+    assert.ok(!noDataMsg || hasCache, "Should not say 'no data' when cache stats are present");
+  });
+
+  it("formatSummary includes per-agent durations", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", durationMs: 45000, tokenUsage: { input: 0, output: 0, cost: 0 } } },
+      { timestamp: "2026-05-25T10:01:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", durationMs: 78000, tokenUsage: { input: 0, output: 0, cost: 0 } } },
+    ];
+    const summary = computeFullSummary(entries);
+    const text = formatSummary(summary);
+    assert.ok(text.includes("⏱️ Per-agent durations"));
+    assert.ok(text.includes("pi-coder.researcher"));
+    assert.ok(text.includes("61.5s")); // avg of 45s and 78s
+  });
+
+  it("formatSummary includes cache info when cacheRead > 0", () => {
+    const entries: LogEntry[] = [
+      { timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "subagent_end", payload: { agent: "pi-coder.researcher", tokenUsage: { input: 1000, output: 2000, cacheRead: 4000, cacheWrite: 100, cost: 0.05 } } },
+    ];
+    const summary = computeFullSummary(entries);
+    const text = formatSummary(summary);
+    assert.ok(text.includes("Cache:"));
   });
 });

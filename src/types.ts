@@ -163,6 +163,23 @@ export interface NudgeConfig {
 }
 
 /**
+ * Per-model token pricing for cost estimation.
+ * Keys are model identifiers matching the `model` field in subagent_end events.
+ * When pi-subagents provides usage.cost > 0, that takes priority.
+ * This table serves as a fallback for custom providers or when cost is 0.
+ */
+export interface TokenPricing {
+  /** Cost per million input tokens */
+  inputPerMillion: number;
+  /** Cost per million output tokens */
+  outputPerMillion: number;
+  /** Cost per million cache-read tokens (optional — only some providers support this) */
+  cacheReadPerMillion?: number;
+  /** Cost per million cache-creation/write tokens (optional) */
+  cacheWritePerMillion?: number;
+}
+
+/**
  * Configuration for structured interaction logging.
  * Logs are written as JSONL to `.pi-coder/logs/`.
  */
@@ -173,6 +190,11 @@ export interface LoggingConfig {
   level: "minimal" | "standard" | "verbose";
   /** Maximum number of log files to retain (oldest are rotated away) */
   maxLogFiles: number;
+  /** User-configured per-model token pricing for cost estimation.
+   *  Keys are model identifiers matching the `model` field in subagent_end events.
+   *  When pi-subagents provides usage.cost > 0, that takes priority.
+   *  This table serves as a fallback for custom providers or when cost is 0. */
+  tokenPricing?: Record<string, TokenPricing>;
 }
 
 /**

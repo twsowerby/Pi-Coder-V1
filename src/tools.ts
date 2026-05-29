@@ -672,6 +672,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Handle unitName for implementation entry states (TDD and Light mode)
       if (unitName && (targetState === "TDD_RED_WRITE" || targetState === "IMPLEMENTING")) {
         smRef.current.setCurrentUnitName(unitName);
+        deps.logEvent("unit_start", {
+          specId: deps.activeSpecId.current,
+          unitName,
+          loopCount: smRef.current.loopCount,
+          fsmState: targetState,
+        });
       }
 
       // Check if the current unit is a direct unit (reads spec lazily)
@@ -796,6 +802,25 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         // For GREEN_VALIDATE, we DON'T auto-set — the test suite must actually run.
         if (isDirectUnit) {
           smRef.current.setEvidence("test_run_this_state");
+        }
+
+        // Log user_intervention for BLOCKED state resolution and circuit breaker override
+        if (previousState === "BLOCKED") {
+          deps.logEvent("user_intervention", {
+            fsmState: previousState,
+            interventionType: "unblock",
+            targetState,
+            specId: deps.activeSpecId.current,
+          });
+        }
+        if (smRef.current.circuitBreakerTripped()) {
+          deps.logEvent("user_intervention", {
+            fsmState: smRef.current.currentState,
+            interventionType: "circuit_breaker_override",
+            loopCount: smRef.current.loopCount,
+            maxLoops: config.maxLoops,
+            specId: deps.activeSpecId.current,
+          });
         }
 
         // On SPEC_WORK entry: generate spec ID and set active, but delay

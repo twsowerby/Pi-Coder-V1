@@ -424,10 +424,19 @@ let sessionTurnCount = 0;
 /** Track lifecycle start time for wall clock duration. */
 let lifecycleStartTime: number | null = null;
 
+/** Track session start time for session_summary duration. */
+let sessionStartTime: number | null = null;
+
+/** Track spec count attempted in this session. */
+let sessionSpecCount = 0;
+
 /** Track cumulative token usage across a spec lifecycle. */
-let lifecycleTokens = { input: 0, output: 0, total: 0 };
+let lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 
 let globalStatePersistence: GlobalStatePersistence;
+
+/** Track spec approval interview start time for duration calculation. */
+let specApprovalInterviewStartTime: number | null = null;
 
 /** Module-level active spec ID. Set by pi_coder_save_spec, cleared on IDLE/COMPLETE. */
 let activeSpecId: string | null = null;
@@ -482,14 +491,14 @@ export async function persistState(): Promise<void> {
   return ourSave;
 }
 
-/** Log a structured event. Convenience wrapper that adds sessionId, timestamp, and turnCount. */
+/** Log a structured event. Convenience wrapper that adds sessionId, timestamp, turnCount, and mode. */
 function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
   if (!logger) return; // Not initialized yet — no-op
   logger.log({
     timestamp: new Date().toISOString(),
     sessionId,
     type,
-    payload: { ...payload, turnCount: sessionTurnCount },
+    payload: { ...payload, turnCount: sessionTurnCount, mode: piCoderMode },
   });
 }
 
@@ -887,12 +896,22 @@ const DEFAULT_CONFIG: PiCoderConfig = {
 };
 
 /** Validate critical config values, applying fixes and emitting warnings. */
-function validateConfig(cfg: PiCoderConfig): PiCoderConfig {
+/** Result of validating a PiCoderConfig. */
+interface ConfigValidationResult {
+  config: PiCoderConfig;
+  warnings: Array<{ field: string; value: unknown; fix: string }>;
+}
+
+function validateConfig(cfg: PiCoderConfig): ConfigValidationResult {
+  const warnings: Array<{ field: string; value: unknown; fix: string }> = [];
+
   if (typeof cfg.maxLoops !== "number" || cfg.maxLoops < 1) {
+    warnings.push({ field: "maxLoops", value: cfg.maxLoops, fix: "defaulted to 3" });
     console.warn(`⚠️ pi-coder: maxLoops must be a positive integer, got ${cfg.maxLoops} — defaulting to 3`);
     cfg = { ...cfg, maxLoops: 3 };
   }
   if (typeof cfg.testCommand !== "string" || cfg.testCommand.trim() === "") {
+    warnings.push({ field: "testCommand", value: cfg.testCommand, fix: 'defaulted to "npm test"' });
     console.warn(`⚠️ pi-coder: testCommand must be a non-empty string, got ${JSON.stringify(cfg.testCommand)} — defaulting to "npm test"`);
     cfg = { ...cfg, testCommand: "npm test" };
   }
@@ -904,11 +923,13 @@ function validateConfig(cfg: PiCoderConfig): PiCoderConfig {
       if (typeof value !== "string" || value.trim() === "") {
         if (key === "unit" && Object.keys(tc).length === 1) {
           // Only key and it's invalid — fall back to testCommand
+          warnings.push({ field: `testCommands.${key}`, value, fix: "fell back to testCommand" });
           console.warn(`⚠️ pi-coder: testCommands.${key} must be a non-empty string, got ${JSON.stringify(value)} — falling back to testCommand`);
           tc[key] = cfg.testCommand;
           modified = true;
         } else {
           // Remove invalid entries
+          warnings.push({ field: `testCommands.${key}`, value, fix: "removed" });
           console.warn(`⚠️ pi-coder: testCommands.${key} must be a non-empty string if provided, got ${JSON.stringify(value)} — removing`);
           delete tc[key];
           modified = true;
@@ -920,17 +941,19 @@ function validateConfig(cfg: PiCoderConfig): PiCoderConfig {
     }
   }
   if (typeof cfg.interviewTimeout !== "number" || cfg.interviewTimeout < 0) {
+    warnings.push({ field: "interviewTimeout", value: cfg.interviewTimeout, fix: "defaulted to 0" });
     console.warn(`⚠️ pi-coder: interviewTimeout must be ≥ 0, got ${cfg.interviewTimeout} — defaulting to 0`);
     cfg = { ...cfg, interviewTimeout: 0 };
   }
   if (typeof cfg.branchPrefix !== "string" || cfg.branchPrefix.trim() === "") {
+    warnings.push({ field: "branchPrefix", value: cfg.branchPrefix, fix: 'defaulted to "pi-coder/"' });
     console.warn(`⚠️ pi-coder: branchPrefix must be a non-empty string, got ${JSON.stringify(cfg.branchPrefix)} — defaulting to "pi-coder/"`);
     cfg = { ...cfg, branchPrefix: "pi-coder/" };
   }
-  return cfg;
+  return { config: cfg, warnings };
 }
 
-function loadConfig(cwd: string): PiCoderConfig {
+function loadConfig(cwd: string): ConfigValidationResult {
   const configPath = join(cwd, ".pi-coder", "config.json");
   try {
     if (existsSync(configPath)) {
@@ -1058,26 +1081,57 @@ function extractSubagentTarget(input: Record<string, unknown>): string | undefin
 }
 
 /**
- * Extract token usage from a subagent tool result.
- * pi-subagents may include usage metadata with prompt/completion/total tokens.
+ * Extract subagent usage data from a pi-subagents Details tool result.
+ *
+ * pi-subagents provides usage inside `details.results[0].usage` with shape:
+ *   { input, output, cacheRead, cacheWrite, cost, turns }
+ * and model/exitCode/error on `details.results[0]` itself.
+ *
+ * This replaces the old `extractTokenUsage()` which incorrectly read
+ * `details.usage.prompt_tokens` (OpenAI shape) — a path that never exists
+ * on the pi-subagents Details object.
  */
-function extractTokenUsage(result: unknown): { input: number; output: number; total: number } | null {
-  if (!result || typeof result !== "object") return null;
+export interface SubagentUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  turns: number;
+  model: string | null;
+  exitCode: number;
+  error: string | null;
+}
 
-  // Check common shapes: result.usage, result.metadata.usage
-  const r = result as Record<string, unknown>;
-  const usage = (r.usage as Record<string, unknown>) ??
-    ((r.metadata as Record<string, unknown>)?.usage as Record<string, unknown>);
+function extractSubagentUsage(details: unknown): SubagentUsage | null {
+  if (!details || typeof details !== "object") return null;
+  const d = details as { results?: Array<Record<string, unknown>> };
+  const firstResult = d.results?.[0];
+  if (!firstResult) return null;
+
+  const usage = firstResult.usage as {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    cost?: number;
+    turns?: number;
+  } | undefined;
 
   if (!usage) return null;
+  if ((usage.input ?? 0) === 0 && (usage.output ?? 0) === 0 && (usage.cost ?? 0) === 0) return null;
 
-  const input = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0;
-  const output = typeof usage.completion_tokens === "number" ? usage.completion_tokens : 0;
-  const total = typeof usage.total_tokens === "number" ? usage.total_tokens : input + output;
-
-  if (input === 0 && output === 0 && total === 0) return null;
-
-  return { input, output, total };
+  return {
+    input: usage.input ?? 0,
+    output: usage.output ?? 0,
+    cacheRead: usage.cacheRead ?? 0,
+    cacheWrite: usage.cacheWrite ?? 0,
+    cost: usage.cost ?? 0,
+    turns: usage.turns ?? 0,
+    model: typeof firstResult.model === "string" ? firstResult.model : null,
+    exitCode: typeof firstResult.exitCode === "number" ? firstResult.exitCode : 0,
+    error: typeof firstResult.error === "string" ? firstResult.error : null,
+  };
 }
 
 /**
@@ -1239,6 +1293,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     // Reset session state
     sessionTurnCount = 0;
+    sessionStartTime = Date.now();
+    sessionSpecCount = 0;
 
     // --- Child Process Guard ---
     // Pi-coder state machine must only run in the orchestrator process.
@@ -1256,12 +1312,20 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     projectCwd = cwd;
 
     // Load config
-    config = loadConfig(cwd);
+    const configResult = loadConfig(cwd);
+    config = configResult.config;
 
     // Generate session ID and initialize logger
     sessionId = randomUUID();
     const logDir = join(cwd, ".pi-coder", "logs");
     logger = new Logger(logDir, config.logging);
+
+    // Emit config_validation if there were warnings
+    if (configResult.warnings.length > 0) {
+      logEvent("config_validation", {
+        warnings: configResult.warnings,
+      });
+    }
 
     // Load prompt templates (checks for project customization via cache reset)
     resetOrchestratorPromptCache();
@@ -1579,6 +1643,16 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             stateMachine = null;
           }
           specStateCreatedAt = specState.createdAt;
+
+          // Log successful restore
+          if (!modeMismatch && piCoderMode !== "off" && piCoderMode !== "plan") {
+            logEvent("state_restore", {
+              status: "success",
+              specId: savedGlobalState.activeSpecId,
+              fsmState: specState.currentState,
+              mode: piCoderMode,
+            });
+          }
         } else {
           // Spec directory exists but no state.json — corrupted
           logEvent("state_restore", {
@@ -1646,7 +1720,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_end", async () => {
     if (piCoderMode === "off") return;
-    notify("agent_end", "Pi Coder", "Ready for input");
+    notify("agent_end", "Pi Coder \u00b7 Idle", "Waiting for your input");
   });
 
   // -----------------------------------------------------------------------
@@ -1654,6 +1728,16 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("session_shutdown", async () => {
+    // Emit session summary before cleanup — works for all modes
+    logEvent("session_summary", {
+      totalTurns: sessionTurnCount,
+      totalTokens: { ...lifecycleTokens },
+      specsAttempted: sessionSpecCount,
+      finalMode: piCoderMode,
+      finalFsmState: stateMachine?.currentState ?? "N/A",
+      sessionDurationMs: sessionStartTime !== null ? Date.now() - sessionStartTime : null,
+    });
+
     if (subagentWidgetTimer) {
       clearInterval(subagentWidgetTimer);
       subagentWidgetTimer = null;
@@ -1661,6 +1745,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     subagentRunning = false;
     subagentActivity = null;
     sessionTurnCount = 0;
+    sessionStartTime = null;
+    sessionSpecCount = 0;
+    specApprovalInterviewStartTime = null;
     // Persist final state so it survives session restarts
     if (stateMachine) {
       await persistState();
@@ -1848,7 +1935,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Desktop notification on spec approval interview
     if (stateMachine && toolName === "interview" && stateMachine.currentState === "SPEC_WORK") {
-      notify("spec_approval", "Pi Coder", "Spec ready for your approval");
+      notify("spec_approval", "Pi Coder \u00b7 \uD83D\uDCCB Review", `Spec ${activeSpecId ?? "unknown"} ready for your approval`);
+      specApprovalInterviewStartTime = Date.now();
     }
 
     // Determine which tools are allowed based on current mode
@@ -2154,7 +2242,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // This replaces the old lifecycle_start that fired on first subagent completion (too late)
     if (toolName === "pi_coder_advance_fsm" && currentState === "SPEC_WORK" && lifecycleStartTime === null) {
       lifecycleStartTime = Date.now();
-      lifecycleTokens = { input: 0, output: 0, total: 0 };
+      lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+      sessionSpecCount++;
       logEvent("lifecycle_start", {
         specId: activeSpecId ?? "none",
         userRequest: "(spec work initiated)",
@@ -2187,10 +2276,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         if (allApproved) {
           stateMachine!.setEvidence("spec_user_approved");
-          logEvent("spec_approval", { status: "approved", responseCount: responses.length });
+          const interviewDurationMs = specApprovalInterviewStartTime !== null ? Date.now() - specApprovalInterviewStartTime : null;
+          specApprovalInterviewStartTime = null;
+          logEvent("spec_approval", { status: "approved", responseCount: responses.length, durationMs: interviewDurationMs });
         } else {
           // User rejected or requested changes for at least one question
-          logEvent("spec_approval", { status: "rejected", responseCount: responses.length });
+          const interviewDurationMs = specApprovalInterviewStartTime !== null ? Date.now() - specApprovalInterviewStartTime : null;
+          specApprovalInterviewStartTime = null;
+          logEvent("spec_approval", { status: "rejected", responseCount: responses.length, durationMs: interviewDurationMs });
           // Append steer message telling orchestrator to revise
           const rejectionSteer = "\n\n⚠️ Spec not approved — the user requested changes. Review the interview feedback and revise the spec. Re-run the interview after making changes.";
           if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
@@ -2201,7 +2294,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       } else {
         // Interview was cancelled, timed out, or aborted
         const status = interviewDetails?.status ?? "unknown";
-        logEvent("spec_approval", { status: "not_completed", interviewStatus: status });
+        const interviewDurationMs = specApprovalInterviewStartTime !== null ? Date.now() - specApprovalInterviewStartTime : null;
+        specApprovalInterviewStartTime = null;
+        logEvent("spec_approval", { status: "not_completed", interviewStatus: status, durationMs: interviewDurationMs });
         const notCompletedSteer = `\n\n⚠️ Spec approval interview was not completed (status: ${status}). Re-run the interview when ready.`;
         if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
           const textBlock = rawContent[0] as { type: "text"; text: string };
@@ -2279,6 +2374,17 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (validation.valid) {
           // Tests pass — orchestrator decides: next unit or proceed to review
           transitionSteer = "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
+
+          // Log unit_end for the current unit if one is active
+          if (stateMachine!.currentUnitName) {
+            logEvent("unit_end", {
+              specId: activeSpecId,
+              unitName: stateMachine!.currentUnitName,
+              outcome: "green_validated",
+              loopCount: stateMachine!.loopCount,
+              fsmState: stateMachine!.currentState,
+            });
+          }
         } else {
           // Tests still fail → loop back to GREEN
           stateMachine!.transition("TDD_GREEN_WRITE");
@@ -2300,6 +2406,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         logEvent("fsm_transition", {
           from: previousState,
           to: stateMachine!.currentState,
+          trigger: "auto_tdd_validation",
           event: validation.valid ? "validation_passed" : "validation_failed",
           loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
@@ -2312,7 +2419,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
-          notify("circuit_breaker", "Pi Coder", `Circuit breaker: max review loops (${config.maxLoops}) exceeded`);
+          notify("circuit_breaker", "Pi Coder \u00b7 \uD83D\uDD34 Circuit Breaker", `Max review loops (${config.maxLoops}) exceeded on spec ${activeSpecId ?? "unknown"}`);
+
+          // Log unit_end for circuit breaker
+          if (stateMachine!.currentUnitName) {
+            logEvent("unit_end", {
+              specId: activeSpecId,
+              unitName: stateMachine!.currentUnitName,
+              outcome: "circuit_breaker",
+              loopCount: stateMachine!.loopCount,
+              fsmState: stateMachine!.currentState,
+            });
+          }
         }
       }
 
@@ -2337,6 +2455,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         logEvent("fsm_transition", {
           from: "GIT_CHECKPOINT",
           to: nextState,
+          trigger: "auto_git_checkpoint",
           event: "checkpoint_complete",
           loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
@@ -2364,6 +2483,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         logEvent("fsm_transition", {
           from: "MERGING",
           to: "COMPLETE",
+          trigger: "auto_git_merge",
           event: "merge_complete",
           loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
@@ -2374,9 +2494,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           wallClockMs: lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null,
           totalTokens: { ...lifecycleTokens },
         });
-        notify("complete", "Pi Coder", `Spec complete: ${activeSpecId ?? "unknown"}`);
+        notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
         lifecycleStartTime = null;
-        lifecycleTokens = { input: 0, output: 0, total: 0 };
+        lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
         resetNudgeState(stateMachine!.currentState);
         await persistState();
 
@@ -2392,22 +2512,39 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Handle subagent completion results
     if (toolName === "subagent") {
       const previousState = currentState;
+      // Track what caused the FSM transition (if any) for correct trigger logging
+      let transitionTrigger: import("../src/logger.ts").FSMTrigger | null = null;
 
-      // Log subagent end with duration and token usage
+      // Log subagent end with duration and expanded usage from pi-subagents
       const durationMs = subagentStartTime !== null ? Date.now() - subagentStartTime : null;
-      const tokenUsage = extractTokenUsage(details);
+      const subUsage = extractSubagentUsage(details);
 
-      if (tokenUsage) {
-        lifecycleTokens.input += tokenUsage.input;
-        lifecycleTokens.output += tokenUsage.output;
-        lifecycleTokens.total += tokenUsage.total;
+      if (subUsage) {
+        lifecycleTokens.input += subUsage.input;
+        lifecycleTokens.output += subUsage.output;
+        lifecycleTokens.cacheRead += subUsage.cacheRead;
+        lifecycleTokens.cacheWrite += subUsage.cacheWrite;
+        lifecycleTokens.cost += subUsage.cost;
+        lifecycleTokens.turns += subUsage.turns;
       }
 
       logEvent("subagent_end", {
         agent: lastSubagentAgent ?? "unknown",
+        model: subUsage?.model ?? null,
         durationMs,
-        tokenUsage: tokenUsage ?? { input: 0, output: 0, total: 0 },
-        outcome: "success", // If we reach tool_result, the subagent completed
+        tokenUsage: subUsage
+          ? {
+              input: subUsage.input,
+              output: subUsage.output,
+              cacheRead: subUsage.cacheRead,
+              cacheWrite: subUsage.cacheWrite,
+              cost: subUsage.cost,
+            }
+          : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        turns: subUsage?.turns ?? 0,
+        exitCode: subUsage?.exitCode ?? 0,
+        error: subUsage?.error ?? null,
+        outcome: (subUsage?.exitCode ?? 0) === 0 ? "success" : "error",
         specId: activeSpecId,
       });
 
@@ -2498,6 +2635,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // with reason (emergency escape hatch for verdict extraction failures).
           stateMachine!.setEvidence("review_completed");
           stateMachine!.transition(target);
+          transitionTrigger = "auto_review_verdict";
 
           // If reviewer classified fix as non-functional, set evidence
           // This gates the NEEDS_CHANGES → REVIEWING path and implementor delegation
@@ -2584,7 +2722,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         logEvent("fsm_transition", {
           from: previousState,
           to: stateMachine!.currentState,
-          event: "subagent_completed",
+          trigger: transitionTrigger ?? "auto_subagent_complete",
+          event: transitionTrigger === "auto_review_verdict" ? "review_verdict" : "subagent_completed",
           loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
         });
@@ -2598,9 +2737,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
           });
-          notify("complete", "Pi Coder", `Spec complete: ${activeSpecId ?? "unknown"}`);
+          notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
           lifecycleStartTime = null;
-          lifecycleTokens = { input: 0, output: 0, total: 0 };
+          lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
         }
 
         if (stateMachine!.currentState === "BLOCKED" && previousState === "TDD_RED_VALIDATE") {
@@ -2613,14 +2752,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           });
         }
 
-        // Log circuit breaker
+        // Log circuit breaker (subagent handler)
         if (stateMachine!.circuitBreakerTripped()) {
           logEvent("circuit_breaker", {
             loopCount: stateMachine!.loopCount,
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
-          notify("circuit_breaker", "Pi Coder", `Circuit breaker: max review loops (${config.maxLoops}) exceeded`);
+          notify("circuit_breaker", "Pi Coder \u00b7 \uD83D\uDD34 Circuit Breaker", `Max review loops (${config.maxLoops}) exceeded on spec ${activeSpecId ?? "unknown"}`);
         }
       }
 
@@ -3177,6 +3316,83 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   });
 
   // -----------------------------------------------------------------------
+  // Spec 16 Phase 5: Close Spec Command — /pi-coder-close
+  // -----------------------------------------------------------------------
+
+  pi.registerCommand("pi-coder-close", {
+    description: "Close a spec (set CANCELLED status, delete state.json, keep spec.md as audit trail)",
+    handler: async (_args, ctx) => {
+      if (!specManager) {
+        ctx.ui.notify("Pi Coder not initialized. Run /pi-coder-init first.", "error");
+        return;
+      }
+
+      // 1. List all specs and filter to non-COMPLETE/CANCELLED
+      const allSpecIds = await specManager.listSpecs();
+      const openSpecs: Array<{ id: string; status: string }> = [];
+
+      for (const specId of allSpecIds) {
+        const spec = await specManager.readSpec(specId);
+        if (spec && spec.status !== "COMPLETE" && spec.status !== "CANCELLED") {
+          openSpecs.push({ id: specId, status: spec.status });
+        }
+      }
+
+      if (openSpecs.length === 0) {
+        ctx.ui.notify("No open specs to close.", "info");
+        return;
+      }
+
+      // 2. Present selection UI
+      const options = openSpecs.map(s => `${s.id} — ${s.status}`);
+      const selected = await ctx.ui.select(
+        "Close Spec",
+        options,
+      );
+
+      if (selected === undefined) return; // Cancelled
+
+      // Find the selected spec
+      const selectedSpec = openSpecs.find(s => `${s.id} — ${s.status}` === selected);
+      if (!selectedSpec) return;
+
+      const previousStatus = selectedSpec.status;
+
+      // 3. Update spec status to CANCELLED
+      await specManager.updateSpec(selectedSpec.id, { status: "CANCELLED" });
+
+      // 4. Delete state.json
+      await SpecStatePersistence.delete(specManager.specsDir, selectedSpec.id);
+
+      // 5. If this was the active spec, reset FSM and clear active pointer
+      if (activeSpecId === selectedSpec.id) {
+        if (stateMachine) {
+          const previousState = stateMachine.currentState;
+          stateMachine.reset();
+          logEvent("fsm_transition", {
+            from: previousState,
+            to: "IDLE",
+            trigger: "fsm_reset",
+            event: "reset",
+            loopCount: stateMachine.loopCount,
+            specId: activeSpecId,
+          });
+        }
+        activeSpecId = null;
+        resetNudgeState("IDLE");
+      }
+
+      // 6. Persist and refresh
+      await persistState();
+      refreshUI();
+
+      // 7. Confirm and log
+      ctx.ui.notify(`Spec '${selectedSpec.id}' closed (CANCELLED).`, "info");
+      logEvent("command", { command: "close_spec", specId: selectedSpec.id, previousStatus });
+    },
+  });
+
+  // -----------------------------------------------------------------------
   // Spec 14: Logs Command — /pi-coder-logs
   // -----------------------------------------------------------------------
 
@@ -3216,7 +3432,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Compute and display summary using analysis functions
       const { computeFullSummary, formatSummary } = await import("../src/log-analysis.ts");
-      const summary = computeFullSummary(entries as any);
+      const summary = computeFullSummary(entries as any, config.logging.tokenPricing);
       const text = formatSummary(summary);
 
       ctx.ui.notify(text, "info");

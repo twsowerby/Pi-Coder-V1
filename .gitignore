@@ -2,3 +2,5 @@ node_modules/
 .pi-coder/
 package-lock.json
 progress.md
+_dev_docs/
+/_dev_docs

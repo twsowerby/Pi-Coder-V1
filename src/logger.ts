@@ -48,22 +48,27 @@ export type LogEventType =
   | "prompt_size"
   | "spec_approval"
   | "skill_read"
-  | "tool_call";
+  | "tool_call"
+  | "session_summary"
+  | "unit_start"
+  | "unit_end"
+  | "config_validation";
 
 /**
  * Mapping from event type to the minimum log level required.
  * Events at a lower level than the configured level are dropped.
  */
 export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbose"> = {
-  // Minimal: lifecycle + TDD
+  // Minimal: lifecycle + TDD + session summary
   lifecycle_start: "minimal",
   lifecycle_end: "minimal",
   fsm_transition: "minimal",
   tdd_red_validate: "minimal",
   tdd_green_validate: "minimal",
   circuit_breaker: "minimal",
+  session_summary: "minimal",
 
-  // Standard: + subagent + review + user + command
+  // Standard: + subagent + review + user + command + units + config
   subagent_start: "standard",
   subagent_end: "standard",
   tool_call_blocked: "standard",
@@ -80,11 +85,29 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   skill_read: "standard",
   tool_call: "standard",
   spec_approval: "standard",
+  unit_start: "standard",
+  unit_end: "standard",
+  config_validation: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",
   nudge_escalation: "verbose",
 };
+
+/**
+ * Standardized trigger for FSM transitions.
+ * Replaces the free-form `event` string on fsm_transition events.
+ * The `event` field is retained for backward compatibility but deprecated;
+ * new analysis should use `trigger`.
+ */
+export type FSMTrigger =
+  | "auto_tdd_validation"
+  | "auto_git_checkpoint"
+  | "auto_git_merge"
+  | "auto_review_verdict"
+  | "manual_advance_fsm"
+  | "auto_subagent_complete"
+  | "fsm_reset";
 
 /** Level hierarchy: minimal < standard < verbose */
 const LEVEL_ORDER: Record<string, number> = {

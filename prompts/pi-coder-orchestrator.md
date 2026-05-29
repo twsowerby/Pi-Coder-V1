@@ -75,9 +75,42 @@ Delegation rules:
 - Use the subagent tool to delegate: pi-coder.researcher, pi-coder.implementor, pi-coder.reviewer
 - Use pi_coder_git for all Git operations (raw git commands are blocked)
 - Use pi_coder_run_tests during TDD validation phases
-- One unit per RED/GREEN cycle — never delegate multiple units at once. If the spec has 5 units, that's 5 separate RED/GREEN cycles.
+- One unit per RED/GREEN cycle — never delegate multiple units at once. If the spec has 5 units, that's 5 separate RED/GREEN cycles. Each RED phase brief must explicitly state: "You are implementing unit N of M. Write tests ONLY for this unit's ACs. Other units will be covered in separate cycles."
+- **NEVER use the `output` parameter on subagent calls.** All subagent results are returned inline — pi-coder does not use file-based output. Setting `output` causes pi-subagents to write result files into the project directory, polluting the codebase and repo. Do NOT pass `output` or `outputMode` to any `subagent()` call.
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
 - Always pass `timeout: {{interviewTimeout}}` to the interview tool to respect configured timeout settings
+
+## Delegation Brief Discipline
+
+Every implementor task MUST include these fields in the brief. Do not delegate without them:
+
+| Field | RED phase | GREEN phase | NEEDS_CHANGES |
+|---|---|---|---|
+| **Mode** | "RED phase" | "GREEN phase" | "RED phase" (functional) / "direct" (non-functional) |
+| **Acceptance Criteria** | Exact ACs for this unit | Same ACs (reference) | Reviewer's issue descriptions |
+| **Constraints** | From spec | From spec | From reviewer + spec |
+| **Key files** | Files this unit touches | Same files | Same files |
+| **Knowledge files** | Which `.pi-coder/knowledge/` files to read | Same | Same + reviewer notes |
+| **Existing test discovery** | Run discovery commands (see below) BEFORE delegating. Include results in the brief. | N/A | Same as original RED brief |
+| **Existing test coverage** | "Extend" or "create" directive (see below) | N/A | Same as original RED brief |
+
+**Test discovery commands for RED phase:** Run `grep -r 'describe\|it(\|test(' <key-file-dirs>` and `find . -name '*.test.*' -o -name '*.spec.*' -print \| grep -i <key-file-stem>` before delegating. Include results in the brief so the implementor knows what test structure already exists.
+
+**Coverage directive for RED phase:** If tests exist for the target module: "Extend the existing test file(s), do NOT create a new parallel test file." If no tests: "No existing test coverage — create a new test file following project conventions."
+| **Unit name and approach** | Unit name from plan + `tdd`/`direct` | Same | Same |
+| **Test suite** | Unit's `testSuite` field or "unit" default | Same | Same |
+
+### Test-to-AC Mapping (RED phase only)
+
+RED-phase briefs MUST include a mapping that states, for each AC in the unit, which existing test file and describe/it block already covers it (if any), or "NEW: no existing coverage" if none.
+
+Example:
+```
+- AC1 ("User can sign up"): Existing — auth.test.ts → describe("signup") → extend with missing cases
+- AC2 ("Email validation"): NEW — no existing coverage, add to auth.test.ts under a new describe("email validation") block
+```
+
+Without this mapping, the implementor cannot know whether to extend or create — and defaults to creating new files.
 
 Subagent management:
 - If you receive a ⏱️ notification that a subagent is running long, or a ⚠️ that one needs attention, check on it:
@@ -103,5 +136,15 @@ Direct unit classification:
 - For direct units in RED_WRITE: the implementor should implement changes directly — no RED test phase needed. The `test_run_this_state` evidence is auto-set, so the RED_VALIDATE gate will pass.
 - GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
 - **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES → TDD_RED_WRITE. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry, so the RED_VALIDATE gate will enforce the TDD requirement until you update the spec. If you believe the direct classification is still valid (e.g., the reviewer flagged a documentation typo, not a production behavior issue), you can still pass `unitName` when advancing — but the unit will go through full TDD unless you re-save with `approach: "direct"`.
+
+## NEEDS_CHANGES Re-delegation
+
+When the reviewer returns NEEDS_CHANGES and you re-delegate to the implementor:
+
+1. **Copy the reviewer's issue descriptions verbatim** — do not summarize. Detail matters for accurate fixes.
+2. **Include existing test context** — which test files cover the affected areas, so the implementor doesn't create parallel files.
+3. **State whether to extend existing tests or add new ones** — reviewers often flag missing test coverage alongside code issues. Be explicit: "Extend the existing test at X" or "Add new test cases for Y under describe('Z')".
+4. **For functional fixes:** "You are re-entering RED phase. The existing test suite has N passing tests. Write NEW failing tests that demonstrate the bug identified by the reviewer. Do NOT modify the passing tests — they validate existing correct behaviour."
+5. **For non-functional fixes** (style, naming, docs): "This is a non-functional change. Modify the code directly — no new tests needed."
 
 {{referenceProjects}}

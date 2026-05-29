@@ -653,3 +653,172 @@ context
     assert.ok(raw.includes("(suite: component)"), `Should include suite, got: ${raw}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 16 Phase 5: Close Spec (CANCELLED status + state.json deletion)
+// ---------------------------------------------------------------------------
+
+describe("Spec 16 Phase 5: Close Spec", () => {
+  let tmpDir: string;
+  let manager: SpecManager;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-coder-spec16-"));
+    manager = new SpecManager(join(tmpDir, "specs"));
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  it("updateSpec sets status to CANCELLED", async () => {
+    const spec: SpecFile = {
+      id: "close-test",
+      title: "Close Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    await manager.updateSpec("close-test", { status: "CANCELLED" });
+    const updated = await manager.readSpec("close-test");
+    assert.strictEqual(updated!.status, "CANCELLED");
+  });
+
+  it("CANCELLED specs are excluded from open-spec list", async () => {
+    const spec1: SpecFile = {
+      id: "open-spec",
+      title: "Open Spec",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "SPEC_WORK",
+    };
+    const spec2: SpecFile = {
+      id: "cancelled-spec",
+      title: "Cancelled Spec",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "CANCELLED",
+    };
+    const spec3: SpecFile = {
+      id: "complete-spec",
+      title: "Complete Spec",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "COMPLETE",
+    };
+    await manager.createSpec(spec1);
+    await manager.createSpec(spec2);
+    await manager.createSpec(spec3);
+
+    const allIds = await manager.listSpecs();
+    const openSpecs: string[] = [];
+    for (const id of allIds) {
+      const s = await manager.readSpec(id);
+      if (s && s.status !== "COMPLETE" && s.status !== "CANCELLED") {
+        openSpecs.push(id);
+      }
+    }
+
+    assert.deepEqual(openSpecs, ["open-spec"], "Only non-COMPLETE/CANCELLED specs should be listed");
+  });
+
+  it("spec.md is preserved after CANCELLED status update", async () => {
+    const spec: SpecFile = {
+      id: "preserve-test",
+      title: "Preserve Test",
+      acceptanceCriteria: ["AC1", "AC2"],
+      constraints: ["No external deps"],
+      keyFiles: ["src/app.ts"],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "TDD_RED_WRITE",
+    };
+    await manager.createSpec(spec);
+    await manager.updateSpec("preserve-test", { status: "CANCELLED" });
+
+    // spec.md should still exist and be readable
+    const read = await manager.readSpec("preserve-test");
+    assert.ok(read, "spec.md must still be readable after CANCELLED");
+    assert.strictEqual(read!.status, "CANCELLED");
+    assert.strictEqual(read!.title, "Preserve Test");
+    assert.deepEqual(read!.acceptanceCriteria, ["AC1", "AC2"]);
+  });
+
+  it("SpecStatePersistence.delete removes state.json but not spec directory", async () => {
+    const { SpecStatePersistence } = await import("./state-persistence.ts");
+
+    const spec: SpecFile = {
+      id: "delete-state-test",
+      title: "Delete State Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "TDD_RED_WRITE",
+    };
+    await manager.createSpec(spec);
+
+    // Save some state
+    await SpecStatePersistence.save(manager.specsDir, "delete-state-test", {
+      version: 1,
+      currentState: "TDD_RED_WRITE",
+      currentUnitName: null,
+      loopCount: 0,
+      gitRef: null,
+      evidence: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Verify state.json exists
+    const stateBeforeDelete = await SpecStatePersistence.load(manager.specsDir, "delete-state-test");
+    assert.ok(stateBeforeDelete, "state.json should exist before delete");
+
+    // Delete state.json
+    await SpecStatePersistence.delete(manager.specsDir, "delete-state-test");
+
+    // Verify state.json is gone
+    const stateAfterDelete = await SpecStatePersistence.load(manager.specsDir, "delete-state-test");
+    assert.strictEqual(stateAfterDelete, null, "state.json should be deleted");
+
+    // Verify spec directory and spec.md still exist
+    const specAfterDelete = await manager.readSpec("delete-state-test");
+    assert.ok(specAfterDelete, "spec.md should still exist after state.json deletion");
+  });
+
+  it("SpecStatePersistence.delete is a no-op when state.json is missing", async () => {
+    const { SpecStatePersistence } = await import("./state-persistence.ts");
+
+    const spec: SpecFile = {
+      id: "no-state-test",
+      title: "No State Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+
+    // Should not throw even though state.json doesn't exist
+    await assert.doesNotThrow(
+      async () => await SpecStatePersistence.delete(manager.specsDir, "no-state-test"),
+      "delete should be a no-op when state.json is missing",
+    );
+  });
+});

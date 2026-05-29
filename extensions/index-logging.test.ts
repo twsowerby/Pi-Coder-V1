@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { PiCoderConfig, FSMState } from "../src/types.ts";
 import { StateMachine } from "../src/state-machine.ts";
-import { Logger, LOG_LEVEL_MAP } from "../src/logger.ts";
+import { Logger, LOG_LEVEL_MAP, type FSMTrigger } from "../src/logger.ts";
 import type { LogEventType } from "../src/logger.ts";
 
 // ---------------------------------------------------------------------------
@@ -373,24 +373,36 @@ describe("Phase 2: Logging Instrumentation", () => {
     }
   });
 
-  it("token usage extraction works from subagent details shape", () => {
-    // Simulate pi-subagents result metadata
+  it("token usage extraction works from pi-subagents Details shape", () => {
+    // Simulate pi-subagents Details object (the actual shape)
     const details = {
-      usage: {
-        prompt_tokens: 1500,
-        completion_tokens: 3000,
-        total_tokens: 4500,
-      },
+      results: [{
+        usage: {
+          input: 1500,
+          output: 3000,
+          cacheRead: 500,
+          cacheWrite: 100,
+          cost: 0.05,
+          turns: 3,
+        },
+        model: "anthropic/claude-sonnet-4",
+        exitCode: 0,
+        error: null,
+      }],
     };
 
-    const usage = (details as Record<string, unknown>).usage as Record<string, unknown>;
-    const input = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0;
-    const output = typeof usage.completion_tokens === "number" ? usage.completion_tokens : 0;
-    const total = typeof usage.total_tokens === "number" ? usage.total_tokens : input + output;
+    // This is what extractSubagentUsage now does
+    const firstResult = (details as { results: Array<Record<string, unknown>> }).results[0];
+    const usage = firstResult.usage as { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
 
-    assert.strictEqual(input, 1500);
-    assert.strictEqual(output, 3000);
-    assert.strictEqual(total, 4500);
+    assert.strictEqual(usage.input, 1500);
+    assert.strictEqual(usage.output, 3000);
+    assert.strictEqual(usage.cacheRead, 500);
+    assert.strictEqual(usage.cacheWrite, 100);
+    assert.strictEqual(usage.cost, 0.05);
+    assert.strictEqual(usage.turns, 3);
+    assert.strictEqual(firstResult.model, "anthropic/claude-sonnet-4");
+    assert.strictEqual(firstResult.exitCode, 0);
   });
 
   it("review verdict extraction from text content with emoji markers", () => {
@@ -422,22 +434,30 @@ describe("Phase 2: Logging Instrumentation", () => {
     assert.ok(durationMs < 6000); // Reasonable bound
   });
 
-  it("lifecycleTokens accumulate across subagent events", () => {
-    let lifecycleTokens = { input: 0, output: 0, total: 0 };
+  it("lifecycleTokens accumulate across subagent events (new shape)", () => {
+    let lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 
     // First subagent
     lifecycleTokens.input += 1000;
     lifecycleTokens.output += 2000;
-    lifecycleTokens.total += 3000;
+    lifecycleTokens.cacheRead += 500;
+    lifecycleTokens.cacheWrite += 100;
+    lifecycleTokens.cost += 0.05;
+    lifecycleTokens.turns += 3;
 
     // Second subagent
     lifecycleTokens.input += 500;
     lifecycleTokens.output += 1500;
-    lifecycleTokens.total += 2000;
+    lifecycleTokens.cacheRead += 200;
+    lifecycleTokens.cost += 0.03;
+    lifecycleTokens.turns += 2;
 
     assert.strictEqual(lifecycleTokens.input, 1500);
     assert.strictEqual(lifecycleTokens.output, 3500);
-    assert.strictEqual(lifecycleTokens.total, 5000);
+    assert.strictEqual(lifecycleTokens.cacheRead, 700);
+    assert.strictEqual(lifecycleTokens.cacheWrite, 100);
+    assert.strictEqual(lifecycleTokens.cost, 0.08);
+    assert.strictEqual(lifecycleTokens.turns, 5);
   });
 });
 
@@ -643,5 +663,313 @@ describe("Unit 5h: New Logging Events", () => {
     const intInput = { questions: [{ question: "sensitive data" }] };
     // The helper returns { questions: "..." } — no content
     assert.ok(typeof intInput === "object");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 17: Logging Observability
+// ---------------------------------------------------------------------------
+
+describe("Spec 17: New Event Types", () => {
+  it("session_summary, unit_start, unit_end, config_validation exist in LOG_LEVEL_MAP", () => {
+    const newTypes: LogEventType[] = [
+      "session_summary",
+      "unit_start",
+      "unit_end",
+      "config_validation",
+    ];
+    for (const t of newTypes) {
+      assert.ok(t in LOG_LEVEL_MAP, `${t} missing from LOG_LEVEL_MAP`);
+    }
+    assert.strictEqual(LOG_LEVEL_MAP.session_summary, "minimal");
+    assert.strictEqual(LOG_LEVEL_MAP.unit_start, "standard");
+    assert.strictEqual(LOG_LEVEL_MAP.unit_end, "standard");
+    assert.strictEqual(LOG_LEVEL_MAP.config_validation, "standard");
+  });
+
+  it("logger records session_summary event", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-session-summary",
+        type: "session_summary",
+        payload: {
+          totalTurns: 42,
+          totalTokens: { input: 5000, output: 10000, cacheRead: 2000, cacheWrite: 500, cost: 0.15, turns: 10 },
+          specsAttempted: 2,
+          finalMode: "tdd",
+          finalFsmState: "IDLE",
+          sessionDurationMs: 300000,
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0].type, "session_summary");
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.totalTurns, 42);
+      assert.strictEqual(payload.specsAttempted, 2);
+      assert.strictEqual(payload.finalMode, "tdd");
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+
+  it("logger records unit_start event", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-unit-start",
+        type: "unit_start",
+        payload: {
+          specId: "auth",
+          unitName: "User signup",
+          loopCount: 0,
+          fsmState: "TDD_RED_WRITE",
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0].type, "unit_start");
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.unitName, "User signup");
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+
+  it("logger records unit_end event with outcome", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-unit-end",
+        type: "unit_end",
+        payload: {
+          specId: "auth",
+          unitName: "User signup",
+          outcome: "green_validated",
+          loopCount: 1,
+          fsmState: "TDD_GREEN_VALIDATE",
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0].type, "unit_end");
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.outcome, "green_validated");
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+});
+
+describe("Spec 17: Subagent End with Rich Data", () => {
+  it("subagent_end logs model, exitCode, error from pi-subagents", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-subagent-rich",
+        type: "subagent_end",
+        payload: {
+          agent: "pi-coder.researcher",
+          model: "anthropic/claude-sonnet-4",
+          durationMs: 35000,
+          tokenUsage: {
+            input: 1200,
+            output: 3500,
+            cacheRead: 6000,
+            cacheWrite: 1500,
+            cost: 0.07,
+          },
+          turns: 5,
+          exitCode: 0,
+          error: null,
+          outcome: "success",
+          specId: "user-auth",
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      assert.strictEqual(lines.length, 1);
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.model, "anthropic/claude-sonnet-4");
+      assert.strictEqual(payload.exitCode, 0);
+      assert.strictEqual(payload.outcome, "success");
+      assert.strictEqual(payload.turns, 5);
+      const tokenUsage = payload.tokenUsage as Record<string, unknown>;
+      assert.strictEqual(tokenUsage.cacheRead, 6000);
+      assert.strictEqual(tokenUsage.cacheWrite, 1500);
+      assert.strictEqual(tokenUsage.cost, 0.07);
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+
+  it("subagent_end has outcome=error when exitCode is non-zero", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-subagent-err",
+        type: "subagent_end",
+        payload: {
+          agent: "pi-coder.researcher",
+          model: "anthropic/claude-sonnet-4",
+          durationMs: 5000,
+          tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+          turns: 1,
+          exitCode: 1,
+          error: "Agent failed: timeout",
+          outcome: "error",
+          specId: "user-auth",
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.outcome, "error");
+      assert.strictEqual(payload.exitCode, 1);
+      assert.strictEqual(payload.error, "Agent failed: timeout");
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+});
+
+describe("Spec 17: Mode on Every Event", () => {
+  it("mode is included in payload via logEvent wrapper", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-mode-event",
+        type: "fsm_transition",
+        payload: { from: "IDLE", to: "SPEC_WORK", turnCount: 5, mode: "tdd" },
+      });
+
+      const lines = readLogLines(logDir);
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.mode, "tdd");
+      assert.strictEqual(payload.turnCount, 5);
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+});
+
+describe("Spec 17: FSM Trigger", () => {
+  it("fsm_transition events include trigger field", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-trigger",
+        type: "fsm_transition",
+        payload: {
+          from: "TDD_RED_VALIDATE",
+          to: "TDD_GREEN_WRITE",
+          trigger: "auto_tdd_validation",
+          event: "validation_passed",
+          loopCount: 0,
+          specId: "auth",
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.trigger, "auto_tdd_validation");
+      assert.strictEqual(payload.event, "validation_passed"); // Legacy retained
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+
+  it("FSMTrigger type has correct values", () => {
+    const validTriggers: FSMTrigger[] = [
+      "auto_tdd_validation",
+      "auto_git_checkpoint",
+      "auto_git_merge",
+      "auto_review_verdict",
+      "manual_advance_fsm",
+      "auto_subagent_complete",
+      "fsm_reset",
+    ];
+    assert.strictEqual(validTriggers.length, 7);
+  });
+});
+
+describe("Spec 17: Spec Approval Duration", () => {
+  it("spec_approval event includes durationMs", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId: "test-approval-dur",
+        type: "spec_approval",
+        payload: {
+          status: "approved",
+          responseCount: 3,
+          durationMs: 45000,
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      const payload = lines[0].payload as Record<string, unknown>;
+      assert.strictEqual(payload.durationMs, 45000);
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+});
+
+describe("Spec 17: Token Pricing Config", () => {
+  it("LoggingConfig accepts optional tokenPricing field", () => {
+    const configWithPricing = makeConfig({
+      logging: {
+        enabled: true,
+        level: "standard",
+        maxLogFiles: 10,
+        tokenPricing: {
+          "anthropic/claude-sonnet-4": {
+            inputPerMillion: 3.0,
+            outputPerMillion: 15.0,
+            cacheReadPerMillion: 0.3,
+            cacheWritePerMillion: 3.75,
+          },
+        },
+      },
+    });
+    assert.ok(configWithPricing.logging.tokenPricing);
+    assert.strictEqual(configWithPricing.logging.tokenPricing!["anthropic/claude-sonnet-4"].inputPerMillion, 3.0);
   });
 });
