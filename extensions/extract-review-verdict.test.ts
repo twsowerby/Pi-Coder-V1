@@ -7,7 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { extractReviewVerdict } from "./index.ts";
+import { extractReviewVerdict, isIntercomReceipt, extractDetailsDiagnostics } from "./index.ts";
 
 // ---------------------------------------------------------------------------
 // ---VERDICT--- block format (primary)
@@ -391,5 +391,196 @@ describe("extractReviewVerdict — edge cases", () => {
       content: "---VERDICT---\nVERDICT: approved\n---END VERDICT---\n\nNote: See line 42 for the tricky part.",
     });
     assert.equal(result?.verdict, "approved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Intercom receipt fallback (rawContentText parameter)
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — intercom receipt fallback", () => {
+  it("returns null when finalOutput is undefined and no rawContentText provided", () => {
+    // This is the deterministic deadlock scenario — intercom receipt stripped finalOutput
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: undefined }],
+    });
+    assert.equal(result, null);
+  });
+
+  it("extracts verdict from rawContentText when finalOutput is undefined", () => {
+    // Intercom receipt stripped finalOutput, but the verdict is in rawContentText
+    const result = extractReviewVerdict(
+      {
+        mode: "single",
+        results: [{ finalOutput: undefined }],
+      },
+      "Review analysis...\n\n---VERDICT---\nVERDICT: approved\n---END VERDICT---"
+    );
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("extracts needs_changes from rawContentText fallback", () => {
+    const result = extractReviewVerdict(
+      {
+        mode: "single",
+        results: [{ finalOutput: undefined }],
+      },
+      "---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: functional\n---END VERDICT---"
+    );
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+    }
+  });
+
+  it("prefers finalOutput over rawContentText when both exist", () => {
+    // normal path: finalOutput has the verdict, rawContentText is different
+    const result = extractReviewVerdict(
+      {
+        mode: "single",
+        results: [{ finalOutput: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" }],
+      },
+      "Delivered single subagent result via intercom."
+    );
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("uses rawContentText with emoji patterns when no verdict block", () => {
+    const result = extractReviewVerdict(
+      {
+        mode: "single",
+        results: [{ finalOutput: undefined }],
+      },
+      "Review complete. \u2705 Approved — looks good"
+    );
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("returns null when rawContentText is empty string", () => {
+    const result = extractReviewVerdict(
+      {
+        mode: "single",
+        results: [{ finalOutput: undefined }],
+      },
+      ""
+    );
+    assert.equal(result, null);
+  });
+
+  it("happy path unchanged: finalOutput with verdict still works without rawContentText", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" }],
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isIntercomReceipt detection
+// ---------------------------------------------------------------------------
+
+describe("isIntercomReceipt", () => {
+  it("detects single subagent receipt", () => {
+    assert.equal(
+      isIntercomReceipt([{ type: "text", text: "Delivered single subagent result via intercom.\nRun: abc123" }]),
+      true
+    );
+  });
+
+  it("detects parallel subagent receipt", () => {
+    assert.equal(
+      isIntercomReceipt([{ type: "text", text: "Delivered parallel subagent results via intercom.\nRun: abc123" }]),
+      true
+    );
+  });
+
+  it("detects chain subagent receipt", () => {
+    assert.equal(
+      isIntercomReceipt([{ type: "text", text: "Delivered chain subagent results via intercom.\nRun: abc123" }]),
+      true
+    );
+  });
+
+  it("returns false for normal review output", () => {
+    assert.equal(
+      isIntercomReceipt([{ type: "text", text: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" }]),
+      false
+    );
+  });
+
+  it("returns false for non-array input", () => {
+    assert.equal(isIntercomReceipt("Delivered via intercom"), false);
+    assert.equal(isIntercomReceipt(null), false);
+    assert.equal(isIntercomReceipt(undefined), false);
+  });
+
+  it("returns false for empty array", () => {
+    assert.equal(isIntercomReceipt([]), false);
+  });
+
+  it("returns false when no text block found", () => {
+    assert.equal(isIntercomReceipt([{ type: "image", data: "..." }]), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractDetailsDiagnostics
+// ---------------------------------------------------------------------------
+
+describe("extractDetailsDiagnostics", () => {
+  it("returns hasFinalOutput: true when finalOutput is a string", () => {
+    const result = extractDetailsDiagnostics({
+      mode: "single",
+      results: [{ finalOutput: "Review text..." }],
+    });
+    assert.equal(result.hasFinalOutput, true);
+    assert.equal(result.textLength, 14);
+    assert.equal(result.firstHundredChars, "Review text...");
+  });
+
+  it("returns hasFinalOutput: false and textLength: 0 when finalOutput is undefined (intercom receipt)", () => {
+    const result = extractDetailsDiagnostics({
+      mode: "single",
+      results: [{ finalOutput: undefined }],
+    });
+    assert.equal(result.hasFinalOutput, false);
+    assert.equal(result.textLength, 0);
+  });
+
+  it("extracts text from content string", () => {
+    const result = extractDetailsDiagnostics({
+      content: "Review text exceeds expectations",
+    });
+    assert.equal(result.hasFinalOutput, false);
+    assert.equal(result.textLength, 32);
+  });
+
+  it("extracts text from content array", () => {
+    const result = extractDetailsDiagnostics({
+      content: [{ type: "text", text: "Review text" }, { type: "image", data: "..." }],
+    });
+    assert.equal(result.textLength, 11);
+  });
+
+  it("returns zeros for null/undefined input", () => {
+    const nullResult = extractDetailsDiagnostics(null);
+    assert.equal(nullResult.hasFinalOutput, false);
+    assert.equal(nullResult.textLength, 0);
+
+    const undefResult = extractDetailsDiagnostics(undefined);
+    assert.equal(undefResult.hasFinalOutput, false);
+    assert.equal(undefResult.textLength, 0);
+  });
+
+  it("truncates firstHundredChars to 100 chars and escapes newlines", () => {
+    const textWithNewline = "A".repeat(50) + "\n" + "B".repeat(100);
+    const result = extractDetailsDiagnostics({
+      content: textWithNewline,
+    });
+    // Newline at position 50 gets replaced with literal \\n in the output
+    assert.equal(result.firstHundredChars.includes("\\n"), true);
+    assert.ok(result.firstHundredChars.length <= 104); // 100 chars + possible \\n expansion
   });
 });

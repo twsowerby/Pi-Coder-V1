@@ -35,6 +35,8 @@ export type LogEventType =
   | "subagent_end"
   | "review_result"
   | "verdict_extraction_failed"
+  | "review_override"
+  | "review_override_contradiction"
   | "command"
   | "user_intervention"
   | "nudge_fired"
@@ -70,6 +72,8 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   mode_switch: "standard",
   review_result: "standard",
   verdict_extraction_failed: "standard",
+  review_override: "standard",
+  review_override_contradiction: "standard",
   command: "standard",
   user_intervention: "standard",
   prompt_size: "standard",

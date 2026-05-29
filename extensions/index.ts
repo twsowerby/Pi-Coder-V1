@@ -581,7 +581,8 @@ Available tools:
   return planModePromptTemplate!
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList)
-    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
 }
 
 /**
@@ -666,7 +667,8 @@ function buildOrchestratorPrompt(
     .replace("{{maxLoops}}", String(config.maxLoops))
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList)
-    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
 }
 
 /**
@@ -732,7 +734,8 @@ Available tools:
     .replace("{{maxLoops}}", String(config.maxLoops))
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList)
-    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects));
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
 }
 
 /** Reset the cached light mode prompt template. */
@@ -832,6 +835,25 @@ function formatReferenceProjects(referenceProjects: Record<string, string> | und
   return lines.join("\n");
 }
 
+/**
+ * Format testCommands config into a prompt section.
+ * Returns empty string if no testCommands configured.
+ */
+function formatTestSuites(testCommands: TestCommands | undefined): string {
+  if (!testCommands || Object.keys(testCommands).length === 0) {
+    return "";
+  }
+  const lines = ["**Available Test Suites:**"];
+  for (const [name, command] of Object.entries(testCommands)) {
+    lines.push(`- **${name}**: \`${command}\``);
+  }
+  lines.push("");
+  lines.push("Use pi_coder_run_tests with suite parameter to run a specific suite.");
+  lines.push("Default suite is 'unit'. Use suite='all' to run every suite.");
+  lines.push("When a spec unit has testSuite set, pass that suite name when running tests for that unit.");
+  return lines.join("\n");
+}
+
 const DEFAULT_CONFIG: PiCoderConfig = {
   testCommand: "npm test",
   maxLoops: 3,
@@ -876,14 +898,25 @@ function validateConfig(cfg: PiCoderConfig): PiCoderConfig {
   }
   if (cfg.testCommands) {
     const tc = cfg.testCommands;
-    if (typeof tc.unit !== "string" || tc.unit.trim() === "") {
-      console.warn(`⚠️ pi-coder: testCommands.unit must be a non-empty string, got ${JSON.stringify(tc.unit)} — falling back to testCommand`);
-      cfg = { ...cfg, testCommands: { ...tc, unit: cfg.testCommand } };
+    // Validate all values are non-empty strings (testCommands is now Record<string, string>)
+    let modified = false;
+    for (const [key, value] of Object.entries(tc)) {
+      if (typeof value !== "string" || value.trim() === "") {
+        if (key === "unit" && Object.keys(tc).length === 1) {
+          // Only key and it's invalid — fall back to testCommand
+          console.warn(`⚠️ pi-coder: testCommands.${key} must be a non-empty string, got ${JSON.stringify(value)} — falling back to testCommand`);
+          tc[key] = cfg.testCommand;
+          modified = true;
+        } else {
+          // Remove invalid entries
+          console.warn(`⚠️ pi-coder: testCommands.${key} must be a non-empty string if provided, got ${JSON.stringify(value)} — removing`);
+          delete tc[key];
+          modified = true;
+        }
+      }
     }
-    if (tc.e2e !== undefined && (typeof tc.e2e !== "string" || tc.e2e.trim() === "")) {
-      console.warn(`⚠️ pi-coder: testCommands.e2e must be a non-empty string if provided, got ${JSON.stringify(tc.e2e)} — removing`);
-      const { e2e: _, ...rest } = tc;
-      cfg = { ...cfg, testCommands: rest };
+    if (modified) {
+      cfg = { ...cfg, testCommands: { ...tc } };
     }
   }
   if (typeof cfg.interviewTimeout !== "number" || cfg.interviewTimeout < 0) {
@@ -949,6 +982,70 @@ function loadConfig(cwd: string): PiCoderConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Intercom receipt detection and review extraction diagnostics
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect whether the rawContent text is a pi-intercom receipt.
+ * When the intercom receipt path is taken, the tool result's content is
+ * replaced with a receipt string like "Delivered single subagent result via intercom."
+ * and the details.results[*].finalOutput is stripped to undefined.
+ *
+ * Detection: look for "Delivered" + "via intercom" in the text.
+ */
+export function isIntercomReceipt(rawContent: unknown): boolean {
+  if (!Array.isArray(rawContent)) return false;
+  const textBlock = rawContent.find(
+    (c: unknown) => typeof c === "object" && c !== null && (c as Record<string, unknown>).type === "text"
+  );
+  if (!textBlock) return false;
+  const text = (textBlock as { type: string; text?: string }).text ?? "";
+  return /Delivered\s+.*\s+via intercom/i.test(text);
+}
+
+/**
+ * Extract diagnostic text info from details object for logging.
+ * Returns actual content length and preview — not the always-0 values
+ * we were logging before (which checked typeof details === "string").
+ */
+export function extractDetailsDiagnostics(details: unknown): {
+  hasFinalOutput: boolean;
+  textLength: number;
+  firstHundredChars: string;
+} {
+  if (!details || typeof details !== "object") {
+    return { hasFinalOutput: false, textLength: 0, firstHundredChars: "" };
+  }
+  const r = details as Record<string, unknown>;
+  let text = "";
+  let hasFinalOutput = false;
+
+  if (Array.isArray(r.results)) {
+    const firstResult = (r.results as Array<Record<string, unknown>>)[0];
+    if (firstResult) {
+      hasFinalOutput = typeof firstResult.finalOutput === "string";
+      if (hasFinalOutput) {
+        text = firstResult.finalOutput as string;
+      }
+    }
+  } else if (typeof r.content === "string") {
+    text = r.content;
+    hasFinalOutput = false; // Not finalOutput, but there IS text
+  } else if (Array.isArray(r.content)) {
+    text = (r.content as Array<{ type: string; text?: string }>)
+      .filter((c: { type: string }) => c.type === "text")
+      .map((c: { text?: string }) => c.text ?? "")
+      .join("\n");
+  }
+
+  return {
+    hasFinalOutput,
+    textLength: text.length,
+    firstHundredChars: text.slice(0, 100).replace(/\n/g, "\\n"),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Subagent target agent extraction
 // ---------------------------------------------------------------------------
 
@@ -987,11 +1084,19 @@ function extractTokenUsage(result: unknown): { input: number; output: number; to
  * Extract review verdict from a subagent output (reviewer agent).
  * Looks for common verdict patterns in the text output.
  *
- * Tier 1 (highest priority): Emoji verdict markers — uses LAST occurrence
+ * Tier 0 (highest priority): Structured ---VERDICT--- block.
+ * Tier 1 (fallback): Emoji verdict markers — uses LAST occurrence
  * in the text to avoid false positives from emojis in prose.
  * Tier 2 (fallback): Text-based pattern matching on full text.
+ *
+ * @param result - The subagent result (Details object with results array,
+ *   or a content string/array).
+ * @param rawContentText - Optional fallback text source. When pi-intercom
+ *   receipt path strips `finalOutput` from the Details object, the
+ *   verdict may still be present in the raw content. This parameter
+ *   is tried when `finalOutput` is unavailable.
  */
-export function extractReviewVerdict(result: unknown): ReviewVerdict | null {
+export function extractReviewVerdict(result: unknown, rawContentText?: string): ReviewVerdict | null {
   if (!result || typeof result !== "object") return null;
 
   const r = result as Record<string, unknown>;
@@ -999,14 +1104,15 @@ export function extractReviewVerdict(result: unknown): ReviewVerdict | null {
   // Extract text from the pi-subagents Details format:
   // details = { mode, results: [{ finalOutput, messages, ... }], ... }
   // Fallback: raw content blocks (for tests or non-standard formats)
+  // Fallback: rawContentText parameter (when intercom receipt strips finalOutput)
   let text = "";
   if (Array.isArray(r.results)) {
     // pi-subagents Details format — use finalOutput from first result
     const firstResult = (r.results as Array<Record<string, unknown>>)[0];
     if (firstResult) {
-      text = typeof firstResult.finalOutput === "string"
-        ? firstResult.finalOutput
-        : "";
+      if (typeof firstResult.finalOutput === "string") {
+        text = firstResult.finalOutput;
+      }
     }
   } else if (typeof r.content === "string") {
     text = r.content;
@@ -1016,6 +1122,12 @@ export function extractReviewVerdict(result: unknown): ReviewVerdict | null {
       .filter((c: { type: string }) => c.type === "text")
       .map((c: { text?: string }) => c.text ?? "")
       .join("\n");
+  }
+
+  // Fallback: try rawContentText when primary source yielded nothing
+  // (e.g., pi-intercom receipt stripped finalOutput to undefined)
+  if (!text && typeof rawContentText === "string" && rawContentText.length > 0) {
+    text = rawContentText;
   }
 
   if (!text) return null;
@@ -1199,6 +1311,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       knowledgeStore,
       specManager,
       config,
+      logEvent,
+      sessionTurnCount: { get current() { return sessionTurnCount; } },
     });
 
     // Check for pi-subagents availability
@@ -2347,7 +2461,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Check for review result in subagent output (if we're in REVIEWING state)
       if (currentState === "REVIEWING") {
-        const reviewVerdict = extractReviewVerdict(details);
+        // Extract rawContent text for fallback extraction when intercom receipt
+        // strips finalOutput from details
+        const rawContentText = (() => {
+          if (Array.isArray(rawContent)) {
+            return rawContent
+              .filter((c: unknown) => typeof c === "object" && c !== null && (c as Record<string, unknown>).type === "text")
+              .map((c: unknown) => (c as { type: string; text?: string }).text ?? "")
+              .join("\n");
+          }
+          return undefined;
+        })();
+        const reviewVerdict = extractReviewVerdict(details, rawContentText);
         if (reviewVerdict) {
           logEvent("review_result", {
             verdict: reviewVerdict.verdict,
@@ -2404,23 +2529,46 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             (rawContent[0] as { type: "text"; text: string }).text = appendedText;
           }
         } else {
-          // Verdict extraction returned null — log for debugging AND notify orchestrator
+          // Verdict extraction returned null — diagnose and attempt degraded recovery
+          const diagnostics = extractDetailsDiagnostics(details);
+          const receiptDetected = isIntercomReceipt(rawContent);
+
           logEvent("verdict_extraction_failed", {
             fsmState: stateMachine?.currentState ?? "N/A",
             mode: piCoderMode,
-            textLength: typeof details === "string" ? details.length : 0,
-            firstHundredChars: (typeof details === "string" ? details : "").slice(0, 100).replace(/\n/g, "\\n"),
+            hasFinalOutput: diagnostics.hasFinalOutput,
+            textLength: diagnostics.textLength,
+            firstHundredChars: diagnostics.firstHundredChars,
+            intercomReceiptDetected: receiptDetected,
           });
 
-          // Append fallback steer message so the orchestrator knows auto-transition
-          // didn't fire and must manually advance based on its reading of the review
-          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
-            const textBlock = rawContent[0] as { type: "text"; text: string };
-            const appendedText = textBlock.text +
-              "\n\n⚠️ AUTO-TRANSITION FAILED: Could not extract review verdict from subagent output. " +
-              "Re-delegate the reviewer with explicit instructions to use the ---VERDICT--- block format. " +
-              "Do NOT skip review by advancing manually — the REVIEWING → APPROVED guard requires review_completed evidence.";
-            (rawContent[0] as { type: "text"; text: string }).text = appendedText;
+          // Degraded recovery: if the intercom receipt was detected, the reviewer
+          // DID run (the receipt proves delivery) but its output was stripped by
+          // the intercom receipt path. Set review_completed evidence so the guard
+          // doesn't deadlock, and steer the orchestrator to read the review output
+          // from the intercom delivery and advance manually.
+          if (receiptDetected) {
+            stateMachine!.setEvidence("review_completed");
+
+            if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+              const textBlock = rawContent[0] as { type: "text"; text: string };
+              textBlock.text +=
+                "\n\n\u26a0\ufe0f DEGRADED RECOVERY: Verdict extraction failed because the intercom receipt path " +
+                "stripped the reviewer's output (finalOutput is undefined). review_completed evidence has been " +
+                "set because the reviewer DID run (the intercom receipt confirms delivery). " +
+                "READ the reviewer's output above, determine the verdict yourself, and advance to " +
+                "APPROVED or NEEDS_CHANGES with pi_coder_advance_fsm. This recovery is logged.";
+            }
+          } else {
+            // No intercom receipt \u2014 the reviewer may not have actually produced
+            // a recognizable verdict. Append fallback steer message.
+            if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+              const textBlock = rawContent[0] as { type: "text"; text: string };
+              textBlock.text +=
+                "\n\n\u26a0\ufe0f AUTO-TRANSITION FAILED: Could not extract review verdict from subagent output. " +
+                "Re-delegate the reviewer with explicit instructions to use the ---VERDICT--- block format. " +
+                "Do NOT skip review by advancing manually \u2014 the REVIEWING \u2192 APPROVED guard requires review_completed evidence.";
+            }
           }
         }
       }
@@ -2645,7 +2793,10 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   }
 
   /**
-   * Detect structured test commands (unit + optional e2e) from package.json.
+   * Detect structured test commands from package.json.
+   * Returns a Record<string, string> mapping suite names to commands.
+   * Always includes 'unit'. Detects component, integration, e2e, and
+   * other test:* scripts automatically.
    */
   function detectTestCommands(cwd: string): TestCommands {
     const pkgPath = join(cwd, "package.json");
@@ -2654,14 +2805,34 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         const scripts = pkg.scripts ?? {};
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-        const unit = scripts["test:ci"] || scripts.vitest ? "npx vitest run" : scripts.jest ? "npx jest" : scripts.test ? "npm test" : "npm test";
-        const result: TestCommands = { unit };
+        const result: TestCommands = {};
+
+        // Always detect unit test command
+        result.unit = scripts["test:ci"] || scripts.vitest ? "npx vitest run" : scripts.jest ? "npx jest" : scripts.test ? "npm test" : "npm test";
+
+        // Detect component test runners (jsdom/TL)
+        if (deps?.["@testing-library/react"] || scripts["test:component"] || scripts["test:ui"]) {
+          result.component = scripts["test:component"] || scripts["test:ui"] || "npx vitest run --project jsdom";
+        }
+
         // Detect E2E test runners
         if (deps?.playwright || scripts["test:e2e"]) {
           result.e2e = scripts["test:e2e"] || "npx playwright test";
         } else if (deps?.cypress || scripts["test:e2e"]) {
           result.e2e = scripts["test:e2e"] || "npx cypress run";
         }
+
+        // Auto-detect any other test:* scripts from package.json
+        for (const [name, _cmd] of Object.entries(scripts as Record<string, string>)) {
+          if (name.startsWith("test:") && name !== "test:ci" && name !== "test:e2e" && name !== "test:component" && name !== "test:ui") {
+            // Extract suite name from script name (e.g., "test:integration" -> "integration")
+            const suiteName = name.slice(5); // Remove "test:" prefix
+            if (!(suiteName in result)) {
+              result[suiteName] = `npm run ${name}`;
+            }
+          }
+        }
+
         return result;
       }
     } catch {

@@ -322,8 +322,9 @@ function serializeSpec(spec: SpecFile): string {
     for (const unit of spec.implementationPlan) {
       const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
       const approachStr = unit.approach === "direct" ? " (approach: direct)" : ""; // Only serialize 'direct', not 'tdd'
+      const suiteStr = unit.testSuite ? ` (suite: ${unit.testSuite})` : "";
       const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
-      lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${deps}`);
+      lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${suiteStr}${deps}`);
       for (const f of unit.keyFiles) {
         lines.push(`  - \`${f}\``);
       }
@@ -482,6 +483,10 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
       if (approach === "tdd") approach = undefined;
     }
 
+    // Extract testSuite from trailing string
+    const suiteMatch = trailing.match(/\(suite:\s*(\w+)\)/i);
+    const testSuite = suiteMatch ? suiteMatch[1].toLowerCase() : undefined;
+
     // Extract dependsOn from trailing string
     const dependsOnMatch = trailing.match(/\(depends on:\s*(.+?)\)/);
     const dependsOn = dependsOnMatch
@@ -508,6 +513,9 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
     };
     if (approach === "direct") {
       unit.approach = "direct";
+    }
+    if (testSuite) {
+      unit.testSuite = testSuite;
     }
     units.push(unit);
   }

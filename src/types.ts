@@ -204,10 +204,8 @@ export interface NotificationsConfig {
 export type PiCoderMode = "off" | "plan" | "light" | "tdd";
 
 export interface TestCommands {
-  /** Command to run unit/integration tests (e.g. "npx vitest run", "npm test") */
-  unit: string;
-  /** Command to run E2E tests (e.g. "npx playwright test"). Optional */
-  e2e?: string;
+  /** Command to run tests for this suite (e.g. "npx vitest run", "npm test") */
+  [suite: string]: string;
 }
 
 export interface PiCoderConfig {
@@ -301,6 +299,8 @@ export interface ImplementationUnit {
   dependsOn: string[];
   /** Approach classification: "tdd" (default, standard RED/GREEN cycle) or "direct" (skip RED phase) */
   approach?: "tdd" | "direct";
+  /** Which test suite to validate this unit against (must match a key in config.testCommands) */
+  testSuite?: string;
 }
 
 /**

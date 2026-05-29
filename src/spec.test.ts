@@ -540,4 +540,116 @@ describe("Spec approach field serialization", () => {
     const read = await manager.readSpec("case-test");
     assert.strictEqual(read!.implementationPlan[0].approach, "direct", "Should parse uppercase APPROACH: DIRECT as direct");
   });
+
+
+  // --- testSuite field ---
+
+  it("serializes suite: component in markdown", async () => {
+    const spec: SpecFile = {
+      id: "suite-test",
+      title: "Suite Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testSuite: "component" },
+        { name: "Helper", acceptanceCriteriaIndices: [0], keyFiles: ["helper.ts"], dependsOn: [] },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const raw = await manager.readSpecRaw("suite-test");
+    assert.ok(raw.includes("(suite: component)"), `Should include '(suite: component)' in markdown, got: ${raw}`);
+    assert.ok(!raw.includes("(suite:)"), `Should NOT include empty suite, got: ${raw}`);
+  });
+
+  it("parses suite: component from markdown", async () => {
+    const spec: SpecFile = {
+      id: "suite-test",
+      title: "Suite Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testSuite: "component" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("suite-test");
+    assert.strictEqual(read!.implementationPlan[0].testSuite, "component");
+    assert.strictEqual(read!.implementationPlan[0].name, "UI Button");
+  });
+
+  it("round-trips suite field through serialize/parse", async () => {
+    const spec: SpecFile = {
+      id: "suite-test",
+      title: "Suite Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testSuite: "component" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("suite-test");
+    assert.strictEqual(read!.implementationPlan[0].testSuite, "component");
+  });
+
+  it("parses suite case-insensitively", async () => {
+    mkdirSync(join(tmpDir, "suite-case"), { recursive: true });
+    writeFileSync(join(tmpDir, "suite-case", "spec.md"), `---
+id: suite-case
+title: Case Test
+status: SPEC_WORK
+---
+
+## Acceptance Criteria
+1. The component renders
+
+## Constraints
+None
+
+## Key Files
+- \`button.tsx\`
+
+## Implementation Plan
+- **UI Button** [AC1] (Suite: Component)
+  - \`button.tsx\`
+
+## Pruned Context
+context
+`);
+
+    const read = await manager.readSpec("suite-case");
+    assert.strictEqual(read!.implementationPlan[0].testSuite, "component", "Should parse 'Component' as 'component'");
+  });
+
+  it("combines approach and suite in same unit", async () => {
+    const spec: SpecFile = {
+      id: "combo-test",
+      title: "Combo Test",
+      acceptanceCriteria: ["AC1"],
+      constraints: [],
+      keyFiles: [],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], approach: "direct", testSuite: "component" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("combo-test");
+    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
+    assert.strictEqual(read!.implementationPlan[0].testSuite, "component");
+
+    const raw = await manager.readSpecRaw("combo-test");
+    assert.ok(raw.includes("(approach: direct)"), `Should include approach, got: ${raw}`);
+    assert.ok(raw.includes("(suite: component)"), `Should include suite, got: ${raw}`);
+  });
 });

@@ -224,6 +224,7 @@ function setupMocks(config?: PiCoderConfig) {
   const { pi, tools } = createMockPi();
 
   let mockActiveSpecId: string | null = null;
+  const logEvents: Array<{ event: string; data: Record<string, unknown> }> = [];
   const deps: ToolDependencies = {
     stateMachine: { get current() { return sm; } },
     activeSpecId: { get current() { return mockActiveSpecId; } },
@@ -234,6 +235,7 @@ function setupMocks(config?: PiCoderConfig) {
     knowledgeStore: mockKnowledge.knowledgeStore as unknown as import("../knowledge.js").KnowledgeStore,
     specManager: mockSpec.specManager as unknown as import("../spec.js").SpecManager,
     config: cfg,
+    logEvent: (event: string, data: Record<string, unknown>) => { logEvents.push({ event, data }); },
   };
 
   registerTools(pi as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI, deps);
@@ -243,7 +245,7 @@ function setupMocks(config?: PiCoderConfig) {
     mockActiveSpecId = id;
   };
 
-  return { sm, mockGit, mockTdd, mockKnowledge, mockSpec, tools, cfg, setActiveSpec };
+  return { sm, mockGit, mockTdd, mockKnowledge, mockSpec, tools, cfg, setActiveSpec, logEvents };
 }
 
 /** Helper: advance the state machine through transitions to a target state. */
@@ -918,6 +920,93 @@ describe("Phase 5: pi_coder_advance_fsm", () => {
 
     assert.ok(!result.isError, `Should succeed with evidence, got error: ${result.isError}`);
     assert.strictEqual(sm.currentState, "APPROVED", "State should be APPROVED");
+  });
+
+  it("REVIEWING→APPROVED: reviewOverride bypasses guard when in REVIEWING state", async () => {
+    const { tools, sm } = setupMocks();
+    // Walk to REVIEWING
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("REVIEWING");
+
+    // review_completed NOT set — this is the deadlock scenario
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "APPROVED",
+      reviewOverride: {
+        verdict: "approved",
+        justification: "Reviewer output contained ---VERDICT--- block with approved verdict, but extraction pipeline failed due to intercom receipt stripping. I read the output myself and confirmed the verdict.",
+      },
+    });
+
+    assert.ok(!result.isError, `Should succeed with reviewOverride, got error: ${(result.details as Record<string, unknown>)?.error}`);
+    assert.strictEqual(sm.currentState, "APPROVED", "State should be APPROVED");
+  });
+
+  it("REVIEWING→APPROVED: reviewOverride does NOT work from other states", async () => {
+    const { tools, sm } = setupMocks();
+    // Walk to TDD_GREEN_VALIDATE (not REVIEWING)
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+
+    // Try reviewOverride from wrong state
+    const result = await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "APPROVED",
+      reviewOverride: {
+        verdict: "approved",
+        justification: "Should not work from TDD_GREEN_VALIDATE",
+      },
+    });
+
+    assert.ok(result.isError, "reviewOverride should only work from REVIEWING state");
+  });
+
+  it("REVIEWING→APPROVED: reviewOverride requires verdict and justification", async () => {
+    const { tools, sm, logEvents } = setupMocks();
+    // Walk to REVIEWING
+    sm.transition("SPEC_WORK");
+    sm.setEvidence("spec_saved");
+    sm.setEvidence("spec_user_approved");
+    sm.transition("SPEC_APPROVED");
+    sm.transition("GIT_CHECKPOINT");
+    sm.transition("TDD_RED_WRITE");
+    sm.transition("TDD_RED_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("TDD_GREEN_WRITE");
+    sm.transition("TDD_GREEN_VALIDATE");
+    sm.setEvidence("test_run_this_state");
+    sm.transition("REVIEWING");
+
+    await executeTool(tools, "pi_coder_advance_fsm", {
+      targetState: "APPROVED",
+      reviewOverride: {
+        verdict: "approved",
+        justification: "The reviewer clearly approved but extraction failed due to intercom receipt.",
+      },
+    });
+
+    // Verify the review_override event was logged (audit trail)
+    const overrideEvents = logEvents.filter(e => e.event === "review_override");
+    assert.equal(overrideEvents.length, 1, "review_override should be logged once");
+    assert.equal(overrideEvents[0].data.verdict, "approved");
+    assert.equal(typeof overrideEvents[0].data.justification, "string");
+    assert.ok(overrideEvents[0].data.justification.length > 0, "justification should not be empty");
   });
 
   it("includes GREEN_WRITE delegation hint", async () => {

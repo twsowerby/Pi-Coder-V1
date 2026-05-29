@@ -21,6 +21,7 @@ import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 import { SpecManager, generateSpecId } from "./spec.ts";
 import type { IStateMachine } from "./types.ts";
+import type { LogEventType } from "./logger.ts";
 
 /** Dependencies injected from the extension main. */
 export interface StateMachineRef {
@@ -40,6 +41,10 @@ export interface ToolDependencies {
   knowledgeStore: KnowledgeStore;
   specManager: SpecManager;
   config: PiCoderConfig;
+  /** Log an event for audit/diagnostics. */
+  logEvent: (event: LogEventType, data: Record<string, unknown>) => void;
+  /** Getter for the current session turn count (for audit trail). */
+  sessionTurnCount?: { get current(): number };
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +65,7 @@ const PI_CODER_GIT_PARAMS = Type.Object({
 });
 
 const PI_CODER_RUN_TESTS_PARAMS = Type.Object({
-  suite: Type.Optional(StringEnum(["unit", "e2e", "all"] as const, { description: "Which test suite to run. Defaults to 'unit'. Use 'e2e' for Playwright/Cypress, 'all' for both." })),
+  suite: Type.Optional(Type.String({ description: "Which test suite to run. Must match a key from testCommands config (e.g. 'unit', 'component', 'e2e'). Use 'all' to run every suite. Defaults to 'unit'." })),
   command: Type.Optional(Type.String({ description: "Override test command from config" })),
   filter: Type.Optional(Type.String({ description: "Test file/pattern filter" })),
 });
@@ -76,6 +81,10 @@ const ADVANCE_FSM_PARAMS = Type.Object({
   fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
   reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a TDD phase. Explains why the exception is justified. Does NOT bypass evidence gates on REVIEWING → APPROVED — that transition requires review_completed evidence set by the auto-transition handler." })),
   unitName: Type.Optional(Type.String({ description: "Name of the implementation unit. Pass when advancing to TDD_RED_WRITE or IMPLEMENTING so the FSM can track the active unit and auto-set test_run_this_state evidence for direct-approach units. Also pass when re-entering after NEEDS_CHANGES." })),
+  reviewOverride: Type.Optional(Type.Object({
+    verdict: Type.Union([Type.Literal("approved"), Type.Literal("needs_changes")], { description: "The verdict you determined from reading the reviewer's output yourself" }),
+    justification: Type.String({ description: "Why you are overriding. Must explain: what the reviewer said, why extraction failed, and how you determined the verdict. This is audited." }),
+  }, { description: "Override the review_completed guard when auto-transition failed AND degraded recovery didn't fire. ONLY use when you have read the reviewer's output yourself and can confirm the verdict. Requires REVIEWING → APPROVED transition. This is audited — do not use routinely." })),
 });
 
 // ---------------------------------------------------------------------------
@@ -284,27 +293,39 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "Execute the project test suite. Available in any mode and state — running tests is always useful. " +
       "In TDD mode, results from TDD_RED_VALIDATE/TDD_GREEN_VALIDATE states trigger auto-transitions. " +
       "In other states, results are returned without FSM side effects.",
-    promptSnippet: "Run test suite — unit, e2e, or both",
+    promptSnippet: "Run test suite — specify suite name or 'all'",
     promptGuidelines: [
-      "Run unit tests to verify code correctness. Run e2e tests for integration verification.",
+      "Run the test suite matching the current implementation phase. Use 'suite' param to specify which (unit, component, e2e, etc. — whatever is in your testCommands config).",
       "In TDD mode: RED phase expects tests to fail, GREEN phase expects them to pass.",
       "In Light mode: run tests freely to check progress at any time.",
     ],
     parameters: PI_CODER_RUN_TESTS_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const suite = params.suite ?? "unit";
+      // Default suite: "unit" key if present, otherwise first key in testCommands
+      const tc = deps.config.testCommands;
+      const availableSuites = tc ? Object.keys(tc) : [];
+      let suite = params.suite;
+      if (!suite) {
+        suite = tc && "unit" in tc ? "unit" : (availableSuites[0] ?? "unit");
+      }
 
       // Resolve which test command(s) to run
       const commands: string[] = [];
       if (params.command) {
         // Explicit override
         commands.push(params.command);
-      } else if (deps.config.testCommands) {
-        // Structured testCommands from config
-        if (suite === "unit" || suite === "all") commands.push(deps.config.testCommands.unit);
-        if (suite === "e2e" && deps.config.testCommands.e2e) commands.push(deps.config.testCommands.e2e);
-        if (suite === "all" && deps.config.testCommands.e2e) commands.push(deps.config.testCommands.e2e);
+      } else if (tc) {
+        // Structured testCommands from config — dynamic key lookup
+        if (suite === "all") {
+          // Run all suites
+          for (const key of Object.keys(tc)) {
+            commands.push(tc[key]);
+          }
+        } else if (suite in tc) {
+          commands.push(tc[suite]);
+        }
+        // If suite not found in tc, commands stays empty → error below
       } else {
         // Legacy testCommand
         commands.push(deps.config.testCommand);
@@ -470,6 +491,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
         approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct")], { description: "Approach classification: 'tdd' (standard RED/GREEN cycle) or 'direct' (skip RED phase for non-behavioral changes)" })),
+        testSuite: Type.Optional(Type.String({ description: "Which test suite to validate against (must match a key in testCommands config, e.g. 'unit', 'component', 'e2e')" })),
       }), { description: "Ordered list of atomic implementation units" })),
     }),
 
@@ -488,6 +510,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             keyFiles: u.keyFiles,
             dependsOn: u.dependsOn ?? [],
             approach: u.approach,
+            testSuite: u.testSuite,
           })) ?? [],
           status: smRef.current.currentState,
         };
@@ -618,12 +641,12 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "NEEDS_CHANGES → REVIEWING (TDD mode): Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
       "NEEDS_CHANGES → IMPLEMENTING (Light mode): Review requires functional fixes.",
       "NEEDS_CHANGES → REVIEWING (Light mode): Review requires fixes. No evidence gate in Light mode — advance directly after delegating implementor.",
-      "REVIEWING → APPROVED: Requires review_completed evidence (set by auto-transition handler when reviewer returns verdict). If auto-transition failed, re-delegate the reviewer. Do NOT skip review.",
+      "REVIEWING → APPROVED: Requires review_completed evidence (set by auto-transition handler when reviewer returns verdict). If auto-transition failed AND degraded recovery didn't fire, use reviewOverride with the verdict you determined from reading the reviewer's output. This is audited — do not use routinely.",
     ],
     parameters: ADVANCE_FSM_PARAMS,
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { targetState, request, fixType, reason, unitName } = params;
+      const { targetState, request, fixType, reason, unitName, reviewOverride } = params;
       const previousState = smRef.current.currentState;
 
       // No static state validation — each state machine (StateMachine, LightStateMachine)
@@ -715,6 +738,39 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             smRef.current.setEvidence(flag);
           }
           guardError = smRef.current.transition(targetState);
+        }
+
+        // reviewOverride: emergency escape hatch for REVIEWING → APPROVED
+        // when auto-transition failed AND degraded recovery didn't fire.
+        // The orchestrator must have read the reviewer's output themselves.
+        // Only allowed for REVIEWING → APPROVED (cannot bypass other guards).
+        // Audited via logEvent.
+        if (guardError && reviewOverride && smRef.current.currentState === "REVIEWING" && targetState === "APPROVED") {
+          // Log the override — audit trail
+          deps.logEvent("review_override", {
+            verdict: reviewOverride.verdict,
+            justification: reviewOverride.justification,
+            previousState,
+            specId: deps.activeSpecId.current,
+            turnCount: deps.sessionTurnCount?.current ?? 0,
+          });
+
+          // Auto-set the missing evidence and retry
+          for (const flag of guardError.missingEvidence) {
+            smRef.current.setEvidence(flag);
+          }
+          guardError = smRef.current.transition(targetState);
+
+          // If the override verdict is needs_changes, route to NEEDS_CHANGES instead
+          if (!guardError && reviewOverride.verdict === "needs_changes") {
+            // The orchestrator said APPROVED but the reviewer said needs_changes.
+            // This is contradictory — they should have advanced to NEEDS_CHANGES.
+            // Log it and let it proceed (the orchestrator made an explicit decision).
+            deps.logEvent("review_override_contradiction", {
+              targetState: "APPROVED",
+              overrideVerdict: "needs_changes",
+            });
+          }
         }
 
         if (guardError) {
