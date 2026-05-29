@@ -123,6 +123,7 @@ Then present the spec for approval using `interview` with **multiple focused que
 3. **Constraints question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Constraints: [bulleted list]. Anything missing or wrong?"
 4. **Implementation plan question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Implementation plan: [unit names with AC references]. Does this decomposition look right?"
 5. **Direct classification question** (ONLY if any units have `approach: "direct"`): `type: "single"`, options: ["Approve", "Change to TDD"]. "The following units skip the TDD RED phase: [list unit names with brief descriptions]. Approve these direct classifications?"
+  6. **Test suite question** (ONLY if any units have `testSuite` set): `type: "single"`, options: ["Approve", "Change"]. "The following units map to non-default test suites: [list unit names with suite]. Approve these test suite assignments?"
 
 If the user selects "Needs changes" for any question, `spec_user_approved` will NOT be set — review the feedback and revise the spec, then re-present for approval.
 
@@ -159,7 +160,10 @@ When your FSM is in REVIEWING (all implementation units complete):
    - **⚠️ Needs Changes** / **❌ Needs Changes** → The auto-transition handler advances to NEEDS_CHANGES. Both ⚠️ and ❌ map to the same `needs_changes` FSM state — the FSM does not distinguish severity.
      - **Non-functional fix** (test cleanup, comments, naming, assertion additions): Delegate implementor directly in NEEDS_CHANGES to apply the fix, then advance to REVIEWING via `pi_coder_advance_fsm REVIEWING`. In TDD mode, the `non_functional_classified` evidence flag was already set by the auto-transition — the evidence gate is already satisfied. In Light mode, there is no evidence gate. Loop count increments.
      - **Functional fix** (production code changes): Advance to the implementation state (TDD_RED_WRITE or IMPLEMENTING) via `pi_coder_advance_fsm`. A full implementation cycle is needed. Loop count increments.
-     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes (and instead see "⚠️ AUTO-TRANSITION FAILED"), **re-delegate the reviewer**. Do NOT skip review by advancing manually. The REVIEWING → APPROVED transition requires `review_completed` evidence that is set by the auto-transition handler. If extraction consistently fails, advance to BLOCKED and present the issue to the user. The reviewer can also be asked to use the `---VERDICT---` block format explicitly for more reliable extraction.
+     - **Verdict extraction failure recovery**: If you don't see an AUTO-TRANSITION notice after the reviewer completes:
+        1. If you see "⚠️ DEGRADED RECOVERY" — the intercom receipt path stripped the reviewer's output, but `review_completed` evidence was set automatically. Read the reviewer's output above and advance with `pi_coder_advance_fsm` to APPROVED or NEEDS_CHANGES.
+        2. If you see "⚠️ AUTO-TRANSITION FAILED" — extraction failed AND no intercom receipt was detected. Re-delegate the reviewer with instructions to use the `---VERDICT---` block format.
+        3. If re-delegation still fails, use `reviewOverride` on `pi_coder_advance_fsm` with the verdict you determined from reading the output. This is audited — provide a clear justification. Example: `pi_coder_advance_fsm({ targetState: "APPROVED", reviewOverride: { verdict: "approved", justification: "Reviewer clearly approved but extraction pipeline failed." } })`
 
 3. When looping back, **target the specific unit** that needs changes. Do not re-send the entire spec.
 
@@ -324,7 +328,8 @@ Skip areas (do NOT review these):
 - Nitpicks and TODOs
 
 MUST DO before giving verdict:
-- Run the full test suite — both unit/integration AND any E2E tests
+- Run the full test suite — use the suite matching the current unit's `testSuite` field (if set), or the default suite
+- If the project has multiple test suites (unit, component, e2e), use `pi_coder_run_tests` with the `suite` parameter to select the right one
 - If the project requires infrastructure (databases, dev servers) to run tests, start it first
 - Record the test results in your review output
 - Do NOT approve if tests cannot be executed or are failing
