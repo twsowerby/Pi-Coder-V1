@@ -28,6 +28,24 @@ export interface LogEntry {
   payload: Record<string, unknown>;
 }
 
+/** Per-FSM-state token breakdown — aggregated from lifecycle_end.phaseTokens and fsm_state_usage events. */
+export interface PhaseTokenBreakdown {
+  /** Per-state token totals */
+  byState: Record<string, {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: number;
+    turns: number;
+    /** Breakdown by source: orchestrator (main session) vs subagent delegation */
+    source: {
+      orchestrator: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+      subagent: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+    };
+  }>;
+}
+
 /** Summary statistics computed from log entries. */
 export interface LogSummary {
   /** Number of unique session IDs */
@@ -64,6 +82,8 @@ export interface LogSummary {
   orchestratorTurnsPerSpec: Record<string, number>;
   /** Skill utilization: skill_read events grouped by skillName */
   skillUtilization: Record<string, number>;
+  /** Per-FSM-state token breakdown from lifecycle_end phaseTokens and fsm_state_usage events */
+  phaseTokenBreakdown: PhaseTokenBreakdown;
 }
 
 // ---------------------------------------------------------------------------
@@ -660,6 +680,121 @@ export function computeUnitStats(entries: LogEntry[]): UnitStats[] {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Phase Token Breakdown
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute per-FSM-state token breakdown from lifecycle_end.phaseTokens and fsm_state_usage events.
+ *
+ * Aggregates data from two sources:
+ * 1. `lifecycle_end` events with `phaseTokens` — complete snapshot at lifecycle end
+ * 2. `fsm_state_usage` events — incremental per-transition snapshots
+ *
+ * Uses lifecycle_end.phaseTokens as the canonical source (most complete),
+ * falling back to fsm_state_usage for in-progress lifecycles.
+ */
+export function computePhaseTokenBreakdown(entries: LogEntry[]): PhaseTokenBreakdown {
+  const byState: PhaseTokenBreakdown["byState"] = {};
+
+  // Source 1: lifecycle_end.phaseTokens (preferred — complete snapshot)
+  const lifecycleEnds = entries.filter(e => e.type === "lifecycle_end");
+  for (const e of lifecycleEnds) {
+    const phaseTokens = e.payload.phaseTokens as Record<string, {
+      input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number;
+      source?: {
+        orchestrator?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
+        subagent?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
+      };
+    }> | undefined;
+    if (!phaseTokens) continue;
+    for (const [state, bucket] of Object.entries(phaseTokens)) {
+      if (!byState[state]) {
+        byState[state] = {
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
+          source: {
+            orchestrator: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+            subagent: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+          },
+        };
+      }
+      const target = byState[state];
+      target.input += bucket.input ?? 0;
+      target.output += bucket.output ?? 0;
+      target.cacheRead += bucket.cacheRead ?? 0;
+      target.cacheWrite += bucket.cacheWrite ?? 0;
+      target.cost += bucket.cost ?? 0;
+      target.turns += bucket.turns ?? 0;
+      if (bucket.source?.orchestrator) {
+        const o = bucket.source.orchestrator;
+        target.source.orchestrator.input += o.input ?? 0;
+        target.source.orchestrator.output += o.output ?? 0;
+        target.source.orchestrator.cacheRead += o.cacheRead ?? 0;
+        target.source.orchestrator.cacheWrite += o.cacheWrite ?? 0;
+        target.source.orchestrator.cost += o.cost ?? 0;
+        target.source.orchestrator.turns += o.turns ?? 0;
+      }
+      if (bucket.source?.subagent) {
+        const s = bucket.source.subagent;
+        target.source.subagent.input += s.input ?? 0;
+        target.source.subagent.output += s.output ?? 0;
+        target.source.subagent.cacheRead += s.cacheRead ?? 0;
+        target.source.subagent.cacheWrite += s.cacheWrite ?? 0;
+        target.source.subagent.cost += s.cost ?? 0;
+        target.source.subagent.turns += s.turns ?? 0;
+      }
+    }
+  }
+
+  // Source 2: fsm_state_usage events (incremental, for in-progress lifecycles)
+  // Only aggregate if no lifecycle_end.phaseTokens covered this state already
+  const stateUsageEvents = entries.filter(e => e.type === "fsm_state_usage");
+  for (const e of stateUsageEvents) {
+    const state = e.payload.state as string | undefined;
+    if (!state) continue;
+    // Skip if we already have data from lifecycle_end.phaseTokens
+    if (byState[state] && byState[state].input > 0) continue;
+    if (!byState[state]) {
+      byState[state] = {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
+        source: {
+          orchestrator: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+          subagent: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+        },
+      };
+    }
+    const target = byState[state];
+    target.input += (e.payload.input as number) ?? 0;
+    target.output += (e.payload.output as number) ?? 0;
+    target.cacheRead += (e.payload.cacheRead as number) ?? 0;
+    target.cacheWrite += (e.payload.cacheWrite as number) ?? 0;
+    target.cost += (e.payload.cost as number) ?? 0;
+    target.turns += (e.payload.turns as number) ?? 0;
+    const src = e.payload.source as {
+      orchestrator?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
+      subagent?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
+    } | undefined;
+    if (src?.orchestrator) {
+      target.source.orchestrator.input += src.orchestrator.input ?? 0;
+      target.source.orchestrator.output += src.orchestrator.output ?? 0;
+      target.source.orchestrator.cacheRead += src.orchestrator.cacheRead ?? 0;
+      target.source.orchestrator.cacheWrite += src.orchestrator.cacheWrite ?? 0;
+      target.source.orchestrator.cost += src.orchestrator.cost ?? 0;
+      target.source.orchestrator.turns += src.orchestrator.turns ?? 0;
+    }
+    if (src?.subagent) {
+      target.source.subagent.input += src.subagent.input ?? 0;
+      target.source.subagent.output += src.subagent.output ?? 0;
+      target.source.subagent.cacheRead += src.subagent.cacheRead ?? 0;
+      target.source.subagent.cacheWrite += src.subagent.cacheWrite ?? 0;
+      target.source.subagent.cost += src.subagent.cost ?? 0;
+      target.source.subagent.turns += src.subagent.turns ?? 0;
+    }
+  }
+
+  return { byState };
+}
+
 // Full Summary
 // ---------------------------------------------------------------------------
 
@@ -683,6 +818,7 @@ export function computeFullSummary(entries: LogEntry[], userPricing?: Record<str
     timeInState: computeTimeInState(entries),
     orchestratorTurnsPerSpec: computeOrchestratorTurnsPerSpec(entries),
     skillUtilization: computeSkillUtilization(entries),
+    phaseTokenBreakdown: computePhaseTokenBreakdown(entries),
   };
 }
 
@@ -830,6 +966,29 @@ export function formatSummary(summary: LogSummary): string {
     lines.push(`\n📚 Skill utilization:`);
     for (const [skillName, count] of skillEntries.sort((a, b) => b[1] - a[1])) {
       lines.push(`  ${skillName}: ${count} reads`);
+    }
+  }
+
+  // Per-FSM-state token breakdown
+  const phaseBreakdown = summary.phaseTokenBreakdown.byState;
+  const phaseEntries = Object.entries(phaseBreakdown);
+  if (phaseEntries.length > 0) {
+    lines.push(`\n📊 Per-state tokens:`);
+    // Sort by total tokens descending
+    const sorted = phaseEntries.sort((a, b) => {
+      const totalA = a[1].input + a[1].output;
+      const totalB = b[1].input + b[1].output;
+      return totalB - totalA;
+    });
+    for (const [state, data] of sorted) {
+      const totalTokens = data.input + data.output + data.cacheRead + data.cacheWrite;
+      const orchTotal = data.source.orchestrator.input + data.source.orchestrator.output + data.source.orchestrator.cacheRead + data.source.orchestrator.cacheWrite;
+      const subTotal = data.source.subagent.input + data.source.subagent.output + data.source.subagent.cacheRead + data.source.subagent.cacheWrite;
+      const pct = (n: number, d: number) => d > 0 ? `${((n / d) * 100).toFixed(0)}%` : "0%";
+      lines.push(`  ${state}: ${totalTokens.toLocaleString()} tokens (in: ${data.input.toLocaleString()}, out: ${data.output.toLocaleString()}, cacheRead: ${data.cacheRead.toLocaleString()})`);
+      if (orchTotal > 0 || subTotal > 0) {
+        lines.push(`    orchestrator: ${orchTotal.toLocaleString()} (${pct(orchTotal, totalTokens)}), subagent: ${subTotal.toLocaleString()} (${pct(subTotal, totalTokens)})`);
+      }
     }
   }
 

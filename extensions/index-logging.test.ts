@@ -973,3 +973,110 @@ describe("Spec 17: Token Pricing Config", () => {
     assert.strictEqual(configWithPricing.logging.tokenPricing!["anthropic/claude-sonnet-4"].inputPerMillion, 3.0);
   });
 });
+
+describe("Phase Token Breakdown", () => {
+  it("fsm_state_usage is a valid log event type at standard level", () => {
+    assert.ok("fsm_state_usage" in LOG_LEVEL_MAP);
+    assert.strictEqual(LOG_LEVEL_MAP.fsm_state_usage, "standard");
+  });
+
+  it("lifecycle_end can include phaseTokens with source breakdown", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+      const sessionId = "test-phase-tokens";
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId,
+        type: "lifecycle_end",
+        payload: {
+          specId: "test-spec",
+          outcome: "COMPLETE",
+          wallClockMs: 50000,
+          totalTokens: { input: 5000, output: 3000, cacheRead: 2000, cacheWrite: 0, cost: 0.1, turns: 10 },
+          phaseTokens: {
+            SPEC_WORK: {
+              input: 1000, output: 500, cacheRead: 800, cacheWrite: 0, cost: 0.02, turns: 3,
+              source: {
+                orchestrator: { input: 500, output: 200, cacheRead: 300, cacheWrite: 0, cost: 0.01, turns: 3 },
+                subagent: { input: 500, output: 300, cacheRead: 500, cacheWrite: 0, cost: 0.01, turns: 0 },
+              },
+            },
+            TDD_RED_WRITE: {
+              input: 2000, output: 1500, cacheRead: 700, cacheWrite: 0, cost: 0.05, turns: 4,
+              source: {
+                orchestrator: { input: 200, output: 100, cacheRead: 100, cacheWrite: 0, cost: 0.005, turns: 4 },
+                subagent: { input: 1800, output: 1400, cacheRead: 600, cacheWrite: 0, cost: 0.045, turns: 0 },
+              },
+            },
+          },
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      assert.strictEqual(lines.length, 1);
+      const entry = lines[0];
+      assert.strictEqual(entry.type, "lifecycle_end");
+
+      const pt = entry.payload.phaseTokens as Record<string, {
+        input: number; output: number; cacheRead: number; cost: number;
+        source: { orchestrator: { input: number }; subagent: { input: number } };
+      }>;
+      assert.ok(pt, "phaseTokens should exist");
+      assert.ok(pt.SPEC_WORK, "SPEC_WORK phase should exist");
+      assert.strictEqual(pt.SPEC_WORK.input, 1000);
+      assert.strictEqual(pt.SPEC_WORK.source.orchestrator.input, 500);
+      assert.strictEqual(pt.SPEC_WORK.source.subagent.input, 500);
+      assert.strictEqual(pt.TDD_RED_WRITE.input, 2000);
+      assert.strictEqual(pt.TDD_RED_WRITE.source.subagent.input, 1800);
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+
+  it("fsm_state_usage event has correct shape", () => {
+    const logDir = createLogDir();
+    try {
+      const config = makeConfig();
+      const logger = new Logger(logDir, config.logging);
+      const sessionId = "test-state-usage";
+
+      logger.log({
+        timestamp: new Date().toISOString(),
+        sessionId,
+        type: "fsm_state_usage",
+        payload: {
+          state: "SPEC_WORK",
+          input: 1000,
+          output: 500,
+          cacheRead: 800,
+          cacheWrite: 0,
+          cost: 0.02,
+          turns: 3,
+          source: {
+            orchestrator: { input: 500, output: 200, cacheRead: 300, cacheWrite: 0, cost: 0.01, turns: 3 },
+            subagent: { input: 500, output: 300, cacheRead: 500, cacheWrite: 0, cost: 0.01, turns: 0 },
+          },
+          specId: "test-spec",
+          nextState: "SPEC_APPROVED",
+        },
+      });
+
+      const lines = readLogLines(logDir);
+      assert.strictEqual(lines.length, 1);
+      const entry = lines[0];
+      assert.strictEqual(entry.type, "fsm_state_usage");
+      assert.strictEqual(entry.payload.state, "SPEC_WORK");
+      assert.strictEqual(entry.payload.nextState, "SPEC_APPROVED");
+      assert.strictEqual((entry.payload as Record<string, unknown>).input, 1000);
+
+      const src = (entry.payload as Record<string, unknown>).source as { orchestrator: { input: number }; subagent: { input: number } };
+      assert.strictEqual(src.orchestrator.input, 500);
+      assert.strictEqual(src.subagent.input, 500);
+    } finally {
+      cleanupLogDir(logDir);
+    }
+  });
+});

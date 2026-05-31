@@ -433,6 +433,78 @@ let sessionSpecCount = 0;
 /** Track cumulative token usage across a spec lifecycle. */
 let lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 
+/** Token breakdown by source: orchestrator turns vs subagent delegation. */
+interface SourceTokens {
+  /** Tokens from orchestrator (main session) turns */
+  orchestrator: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+  /** Tokens from pi-coder subagent delegations */
+  subagent: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+}
+
+/** Token breakdown per FSM state. Keyed by state name (e.g. "SPEC_WORK", "TDD_RED_WRITE"). */
+let phaseTokens: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number; source: SourceTokens } > = {};
+
+/** The FSM state that is currently accruing tokens. */
+let currentAccrualState: string | null = null;
+
+/** Reset per-lifecycle tracking for a new spec. */
+function resetLifecycleTracking(): void {
+  lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+  phaseTokens = {};
+  currentAccrualState = null;
+}
+
+/** Ensure an accrual bucket exists for the given FSM state. */
+function ensurePhaseBucket(state: string): void {
+  if (!phaseTokens[state]) {
+    phaseTokens[state] = {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
+      source: {
+        orchestrator: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+        subagent: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+      },
+    };
+  }
+}
+
+/** Set the current accrual state (called on FSM transitions and lifecycle start). */
+function setAccrualState(state: string): void {
+  currentAccrualState = state;
+  ensurePhaseBucket(state);
+}
+
+/**
+ * Emit an fsm_state_usage event for the state we're leaving and set the new accrual state.
+ * Call this on every FSM transition to capture per-state token breakdown.
+ *
+ * @param fromState - The FSM state being exited
+ * @param toState - The FSM state being entered
+ * @param logger_ - The logger instance (passed to avoid circular module-level access issues)
+ */
+function emitStateUsageAndTransition(fromState: string, toState: string): void {
+  // Emit usage for the state we're leaving
+  const bucket = phaseTokens[fromState];
+  if (bucket && (bucket.input > 0 || bucket.output > 0 || bucket.cacheRead > 0 || bucket.cacheWrite > 0 || bucket.cost > 0 || bucket.turns > 0)) {
+    logEvent("fsm_state_usage", {
+      state: fromState,
+      input: bucket.input,
+      output: bucket.output,
+      cacheRead: bucket.cacheRead,
+      cacheWrite: bucket.cacheWrite,
+      cost: bucket.cost,
+      turns: bucket.turns,
+      source: {
+        orchestrator: { ...bucket.source.orchestrator },
+        subagent: { ...bucket.source.subagent },
+      },
+      specId: activeSpecId,
+      nextState: toState,
+    });
+  }
+  // Start accruing into the new state
+  setAccrualState(toState);
+}
+
 let globalStatePersistence: GlobalStatePersistence;
 
 /** Track spec approval interview start time for duration calculation. */
@@ -1734,23 +1806,46 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const usage = msg?.usage;
     if (!usage) return;
 
+    const inVal = usage.input ?? 0;
+    const outVal = usage.output ?? 0;
+    const crVal = usage.cacheRead ?? 0;
+    const cwVal = usage.cacheWrite ?? 0;
+    const costVal = usage.cost?.total ?? 0;
+
     // Accumulate into lifecycle tokens (same accumulator as subagent tokens)
-    lifecycleTokens.input += usage.input ?? 0;
-    lifecycleTokens.output += usage.output ?? 0;
-    lifecycleTokens.cacheRead += usage.cacheRead ?? 0;
-    lifecycleTokens.cacheWrite += usage.cacheWrite ?? 0;
-    lifecycleTokens.cost += usage.cost?.total ?? 0;
+    lifecycleTokens.input += inVal;
+    lifecycleTokens.output += outVal;
+    lifecycleTokens.cacheRead += crVal;
+    lifecycleTokens.cacheWrite += cwVal;
+    lifecycleTokens.cost += costVal;
+
+    // Accrue into per-FSM-state bucket (source: orchestrator)
+    const fsmState = stateMachine?.currentState ?? "N/A";
+    if (currentAccrualState) {
+      ensurePhaseBucket(currentAccrualState);
+      const bucket = phaseTokens[currentAccrualState];
+      bucket.input += inVal;
+      bucket.output += outVal;
+      bucket.cacheRead += crVal;
+      bucket.cacheWrite += cwVal;
+      bucket.cost += costVal;
+      bucket.source.orchestrator.input += inVal;
+      bucket.source.orchestrator.output += outVal;
+      bucket.source.orchestrator.cacheRead += crVal;
+      bucket.source.orchestrator.cacheWrite += cwVal;
+      bucket.source.orchestrator.cost += costVal;
+    }
 
     // Log per-turn usage for granular analysis
     logEvent("turn_usage", {
-      input: usage.input ?? 0,
-      output: usage.output ?? 0,
-      cacheRead: usage.cacheRead ?? 0,
-      cacheWrite: usage.cacheWrite ?? 0,
-      cost: usage.cost?.total ?? 0,
+      input: inVal,
+      output: outVal,
+      cacheRead: crVal,
+      cacheWrite: cwVal,
+      cost: costVal,
       model: (event.message as { model?: string }).model ?? null,
       specId: activeSpecId,
-      fsmState: stateMachine?.currentState ?? "N/A",
+      fsmState,
     });
   });
 
@@ -2273,12 +2368,89 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // This replaces the old lifecycle_start that fired on first subagent completion (too late)
     if (toolName === "pi_coder_advance_fsm" && currentState === "SPEC_WORK" && lifecycleStartTime === null) {
       lifecycleStartTime = Date.now();
-      lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+      resetLifecycleTracking();
+      setAccrualState("SPEC_WORK");
       sessionSpecCount++;
       logEvent("lifecycle_start", {
         specId: activeSpecId ?? "none",
         userRequest: "(spec work initiated)",
       });
+    }
+
+    // Track all FSM transitions via pi_coder_advance_fsm
+    // The tool executes the transition inside execute(), so we detect it from the result details.
+    if (toolName === "pi_coder_advance_fsm") {
+      const advDetails = details as { success?: boolean; previousState?: string; newState?: string; error?: string; exceptionTransition?: string; reason?: string } | undefined;
+      if (advDetails?.success === true && advDetails?.previousState && advDetails?.newState && advDetails.previousState !== advDetails.newState) {
+        emitStateUsageAndTransition(advDetails.previousState, advDetails.newState);
+        logEvent("fsm_transition", {
+          from: advDetails.previousState,
+          to: advDetails.newState,
+          trigger: "manual_advance_fsm",
+          event: advDetails.exceptionTransition ? `exception:${advDetails.exceptionTransition}` : "advance",
+          loopCount: stateMachine?.loopCount ?? 0,
+          specId: activeSpecId,
+          ...(advDetails.reason ? { exceptionReason: advDetails.reason } : {}),
+        });
+
+        // Log lifecycle events on terminal transitions via manual advance
+        if (advDetails.newState === "COMPLETE") {
+          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
+          logEvent("lifecycle_end", {
+            specId: activeSpecId,
+            outcome: "COMPLETE",
+            wallClockMs,
+            totalTokens: { ...lifecycleTokens },
+            phaseTokens: Object.fromEntries(
+              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
+                input: bucket.input,
+                output: bucket.output,
+                cacheRead: bucket.cacheRead,
+                cacheWrite: bucket.cacheWrite,
+                cost: bucket.cost,
+                turns: bucket.turns,
+                source: {
+                  orchestrator: { ...bucket.source.orchestrator },
+                  subagent: { ...bucket.source.subagent },
+                },
+              }])
+            ),
+          });
+          notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
+          lifecycleStartTime = null;
+          resetLifecycleTracking();
+        }
+
+        // Log BLOCKED terminal state
+        if (advDetails.newState === "BLOCKED") {
+          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
+          logEvent("lifecycle_end", {
+            specId: activeSpecId,
+            outcome: "BLOCKED",
+            wallClockMs,
+            totalTokens: { ...lifecycleTokens },
+            phaseTokens: Object.fromEntries(
+              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
+                input: bucket.input,
+                output: bucket.output,
+                cacheRead: bucket.cacheRead,
+                cacheWrite: bucket.cacheWrite,
+                cost: bucket.cost,
+                turns: bucket.turns,
+                source: {
+                  orchestrator: { ...bucket.source.orchestrator },
+                  subagent: { ...bucket.source.subagent },
+                },
+              }])
+            ),
+          });
+        }
+
+        // Reset nudge state on transition via advance_fsm
+        if (stateMachine) {
+          resetNudgeState(stateMachine.currentState);
+        }
+      }
     }
 
     // Evidence: interview tool completion in SPEC_WORK → spec_user_approved
@@ -2373,6 +2545,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (validation.valid) {
           // Tests failed as expected → advance to GREEN
           stateMachine!.transition("TDD_GREEN_WRITE");
+          emitStateUsageAndTransition("TDD_RED_VALIDATE", "TDD_GREEN_WRITE");
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           // Tests passed unexpectedly during RED phase
@@ -2419,6 +2592,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         } else {
           // Tests still fail → loop back to GREEN
           stateMachine!.transition("TDD_GREEN_WRITE");
+          emitStateUsageAndTransition("TDD_GREEN_VALIDATE", "TDD_GREEN_WRITE");
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Tests still failing. You are now in TDD_GREEN_WRITE. Delegate to pi-coder.implementor again with clearer instructions. Do NOT call pi_coder_advance_fsm yet.";
         }
       }
@@ -2483,6 +2657,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       if (gitDetails?.success === true && gitDetails?.operation === "checkpoint") {
         const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
         stateMachine!.transition(nextState);
+        emitStateUsageAndTransition("GIT_CHECKPOINT", nextState);
         logEvent("fsm_transition", {
           from: "GIT_CHECKPOINT",
           to: nextState,
@@ -2511,6 +2686,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
       if (gitDetails?.success === true) {
         stateMachine!.transition("COMPLETE");
+        emitStateUsageAndTransition("MERGING", "COMPLETE");
         logEvent("fsm_transition", {
           from: "MERGING",
           to: "COMPLETE",
@@ -2524,10 +2700,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           outcome: "COMPLETE",
           wallClockMs: lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null,
           totalTokens: { ...lifecycleTokens },
+          phaseTokens: Object.fromEntries(
+            Object.entries(phaseTokens).map(([state, bucket]) => [state, {
+              input: bucket.input,
+              output: bucket.output,
+              cacheRead: bucket.cacheRead,
+              cacheWrite: bucket.cacheWrite,
+              cost: bucket.cost,
+              turns: bucket.turns,
+              source: {
+                orchestrator: { ...bucket.source.orchestrator },
+                subagent: { ...bucket.source.subagent },
+              },
+            }])
+          ),
         });
         notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
         lifecycleStartTime = null;
-        lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+        resetLifecycleTracking();
         resetNudgeState(stateMachine!.currentState);
         await persistState();
 
@@ -2557,6 +2747,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         lifecycleTokens.cacheWrite += subUsage.cacheWrite;
         lifecycleTokens.cost += subUsage.cost;
         lifecycleTokens.turns += subUsage.turns;
+
+        // Accrue subagent tokens into per-FSM-state bucket (source: subagent)
+        if (currentAccrualState) {
+          ensurePhaseBucket(currentAccrualState);
+          const bucket = phaseTokens[currentAccrualState];
+          bucket.input += subUsage.input;
+          bucket.output += subUsage.output;
+          bucket.cacheRead += subUsage.cacheRead;
+          bucket.cacheWrite += subUsage.cacheWrite;
+          bucket.cost += subUsage.cost;
+          bucket.turns += subUsage.turns;
+          bucket.source.subagent.input += subUsage.input;
+          bucket.source.subagent.output += subUsage.output;
+          bucket.source.subagent.cacheRead += subUsage.cacheRead;
+          bucket.source.subagent.cacheWrite += subUsage.cacheWrite;
+          bucket.source.subagent.cost += subUsage.cost;
+          bucket.source.subagent.turns += subUsage.turns;
+        }
       }
 
       logEvent("subagent_end", {
@@ -2666,6 +2874,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // with reason (emergency escape hatch for verdict extraction failures).
           stateMachine!.setEvidence("review_completed");
           stateMachine!.transition(target);
+          emitStateUsageAndTransition("REVIEWING", target);
           transitionTrigger = "auto_review_verdict";
 
           // If reviewer classified fix as non-functional, set evidence
@@ -2767,10 +2976,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             outcome: "COMPLETE",
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
+            phaseTokens: Object.fromEntries(
+              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
+                input: bucket.input,
+                output: bucket.output,
+                cacheRead: bucket.cacheRead,
+                cacheWrite: bucket.cacheWrite,
+                cost: bucket.cost,
+                turns: bucket.turns,
+                source: {
+                  orchestrator: { ...bucket.source.orchestrator },
+                  subagent: { ...bucket.source.subagent },
+                },
+              }])
+            ),
           });
           notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
           lifecycleStartTime = null;
-          lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+          resetLifecycleTracking();
         }
 
         if (stateMachine!.currentState === "BLOCKED" && previousState === "TDD_RED_VALIDATE") {
@@ -2780,6 +3003,20 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             outcome: "BLOCKED",
             wallClockMs,
             totalTokens: { ...lifecycleTokens },
+            phaseTokens: Object.fromEntries(
+              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
+                input: bucket.input,
+                output: bucket.output,
+                cacheRead: bucket.cacheRead,
+                cacheWrite: bucket.cacheWrite,
+                cost: bucket.cost,
+                turns: bucket.turns,
+                source: {
+                  orchestrator: { ...bucket.source.orchestrator },
+                  subagent: { ...bucket.source.subagent },
+                },
+              }])
+            ),
           });
         }
 
@@ -3400,6 +3637,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (stateMachine) {
           const previousState = stateMachine.currentState;
           stateMachine.reset();
+          emitStateUsageAndTransition(previousState, "IDLE");
           logEvent("fsm_transition", {
             from: previousState,
             to: "IDLE",

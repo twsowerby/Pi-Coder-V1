@@ -30,6 +30,7 @@ import {
   computeTimeInState,
   computeOrchestratorTurnsPerSpec,
   computeSkillUtilization,
+  computePhaseTokenBreakdown,
   type LogEntry,
 } from "../src/log-analysis.ts";
 
@@ -573,5 +574,127 @@ describe("Spec 17: Format Summary with Cost", () => {
     const summary = computeFullSummary(entries);
     const text = formatSummary(summary);
     assert.ok(text.includes("Cache:"));
+  });
+});
+
+describe("Phase Token Breakdown", () => {
+  it("computePhaseTokenBreakdown from lifecycle_end.phaseTokens", () => {
+    const entries: LogEntry[] = [
+      {
+        timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "lifecycle_end", payload: {
+          specId: "auth", outcome: "COMPLETE", wallClockMs: 50000,
+          totalTokens: { input: 5000, output: 3000, cost: 0.1 },
+          phaseTokens: {
+            SPEC_WORK: {
+              input: 1000, output: 500, cacheRead: 800, cacheWrite: 0, cost: 0.02, turns: 3,
+              source: {
+                orchestrator: { input: 500, output: 200, cacheRead: 300, cacheWrite: 0, cost: 0.01, turns: 3 },
+                subagent: { input: 500, output: 300, cacheRead: 500, cacheWrite: 0, cost: 0.01, turns: 0 },
+              },
+            },
+            TDD_RED_WRITE: {
+              input: 2000, output: 1500, cacheRead: 700, cacheWrite: 0, cost: 0.05, turns: 4,
+              source: {
+                orchestrator: { input: 200, output: 100, cacheRead: 100, cacheWrite: 0, cost: 0.005, turns: 4 },
+                subagent: { input: 1800, output: 1400, cacheRead: 600, cacheWrite: 0, cost: 0.045, turns: 0 },
+              },
+            },
+          },
+        },
+      },
+    ];
+    const result = computePhaseTokenBreakdown(entries);
+    assert.ok(result.byState.SPEC_WORK, "SPEC_WORK should be in breakdown");
+    assert.strictEqual(result.byState.SPEC_WORK.input, 1000);
+    assert.strictEqual(result.byState.SPEC_WORK.source.orchestrator.input, 500);
+    assert.strictEqual(result.byState.SPEC_WORK.source.subagent.input, 500);
+    assert.ok(result.byState.TDD_RED_WRITE, "TDD_RED_WRITE should be in breakdown");
+    assert.strictEqual(result.byState.TDD_RED_WRITE.input, 2000);
+    assert.strictEqual(result.byState.TDD_RED_WRITE.source.subagent.input, 1800);
+  });
+
+  it("computePhaseTokenBreakdown from fsm_state_usage events", () => {
+    const entries: LogEntry[] = [
+      {
+        timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "fsm_state_usage", payload: {
+          state: "REVIEWING",
+          input: 3000, output: 2000, cacheRead: 1500, cacheWrite: 0, cost: 0.08, turns: 5,
+          source: {
+            orchestrator: { input: 1000, output: 500, cacheRead: 500, cacheWrite: 0, cost: 0.02, turns: 5 },
+            subagent: { input: 2000, output: 1500, cacheRead: 1000, cacheWrite: 0, cost: 0.06, turns: 0 },
+          },
+          specId: "auth",
+          nextState: "APPROVED",
+        },
+      },
+    ];
+    const result = computePhaseTokenBreakdown(entries);
+    assert.ok(result.byState.REVIEWING);
+    assert.strictEqual(result.byState.REVIEWING.input, 3000);
+    assert.strictEqual(result.byState.REVIEWING.source.orchestrator.input, 1000);
+    assert.strictEqual(result.byState.REVIEWING.source.subagent.input, 2000);
+  });
+
+  it("computePhaseTokenBreakdown returns empty for no data", () => {
+    const result = computePhaseTokenBreakdown([]);
+    assert.strictEqual(Object.keys(result.byState).length, 0);
+  });
+
+  it("computeFullSummary includes phaseTokenBreakdown", () => {
+    const entries: LogEntry[] = [
+      {
+        timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "lifecycle_end", payload: {
+          specId: "auth", outcome: "COMPLETE", wallClockMs: 30000,
+          totalTokens: { input: 1000, output: 2000, total: 3000 },
+          phaseTokens: {
+            SPEC_WORK: {
+              input: 500, output: 1000, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 2,
+              source: {
+                orchestrator: { input: 250, output: 500, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 2 },
+                subagent: { input: 250, output: 500, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+              },
+            },
+          },
+        },
+      },
+    ];
+    const summary = computeFullSummary(entries);
+    assert.ok(summary.phaseTokenBreakdown);
+    assert.ok(summary.phaseTokenBreakdown.byState.SPEC_WORK);
+    assert.strictEqual(summary.phaseTokenBreakdown.byState.SPEC_WORK.input, 500);
+  });
+
+  it("formatSummary includes per-state token breakdown", () => {
+    const entries: LogEntry[] = [
+      {
+        timestamp: "2026-05-25T10:00:00.000Z", sessionId: "s1", type: "lifecycle_end", payload: {
+          specId: "auth", outcome: "COMPLETE", wallClockMs: 30000,
+          totalTokens: { input: 5000, output: 3000, total: 8000 },
+          phaseTokens: {
+            SPEC_WORK: {
+              input: 1000, output: 500, cacheRead: 800, cacheWrite: 0, cost: 0, turns: 3,
+              source: {
+                orchestrator: { input: 500, output: 200, cacheRead: 300, cacheWrite: 0, cost: 0, turns: 3 },
+                subagent: { input: 500, output: 300, cacheRead: 500, cacheWrite: 0, cost: 0, turns: 0 },
+              },
+            },
+            TDD_RED_WRITE: {
+              input: 4000, output: 2500, cacheRead: 1000, cacheWrite: 0, cost: 0, turns: 7,
+              source: {
+                orchestrator: { input: 200, output: 100, cacheRead: 100, cacheWrite: 0, cost: 0, turns: 7 },
+                subagent: { input: 3800, output: 2400, cacheRead: 900, cacheWrite: 0, cost: 0, turns: 0 },
+              },
+            },
+          },
+        },
+      },
+    ];
+    const summary = computeFullSummary(entries);
+    const text = formatSummary(summary);
+    assert.ok(text.includes("Per-state tokens"), "Should include per-state section");
+    assert.ok(text.includes("SPEC_WORK"), "Should mention SPEC_WORK");
+    assert.ok(text.includes("TDD_RED_WRITE"), "Should mention TDD_RED_WRITE");
+    assert.ok(text.includes("orchestrator:"), "Should include source breakdown");
+    assert.ok(text.includes("subagent:"), "Should include source breakdown");
   });
 });

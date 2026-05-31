@@ -53,7 +53,8 @@ export type LogEventType =
   | "unit_start"
   | "unit_end"
   | "config_validation"
-  | "turn_usage";
+  | "turn_usage"
+  | "fsm_state_usage";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -90,6 +91,7 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   unit_end: "standard",
   config_validation: "standard",
   turn_usage: "standard",
+  fsm_state_usage: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",
