@@ -1,6 +1,5 @@
 # Agent Operational Protocol
 
-
 ## Primary Directives
 Execute the following workflow for all user requests:
 

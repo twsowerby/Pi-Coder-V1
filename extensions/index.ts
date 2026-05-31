@@ -22,66 +22,23 @@ import { KnowledgeStore } from "../src/knowledge.ts";
 import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
-import { registerTools, type StateMachineRef } from "../src/tools.ts";
-import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig, TestCommands, ReviewVerdict } from "../src/types.ts";
+import { registerTools, summarizeToolInput, type StateMachineRef } from "../src/tools.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig, TestCommands } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { sendDesktopNotification } from "../src/desktop-notifier.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
-import { join, dirname, isAbsolute, resolve } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants (imported from constants.ts)
 // ---------------------------------------------------------------------------
 
-/** Tools available when pi-coder TDD mode is active. Exported for Spec 10 commands. */
-export const ORCHESTRATOR_TOOLS = [
-  "ls",
-  "find",
-  "grep",
-  "subagent",
-  "pi_coder_git",
-  "pi_coder_run_tests",
-  "upsert_knowledge",
-  "pi_coder_save_spec",
-  "pi_coder_read_spec",
-"pi_coder_advance_fsm",
-  "interview",
-  "intercom",
-];
+import { ORCHESTRATOR_TOOLS, LIGHT_TOOLS, PLAN_TOOLS, NORMAL_TOOLS, STATE_STYLE, STATE_LABEL, MODE_TOOL_SETS } from "./constants.ts";
 
-/** Tools available in Light mode — spec, implement, review, no TDD phases. */
-export const LIGHT_TOOLS = [
-  "ls",
-  "find",
-  "grep",
-  "subagent",
-  "pi_coder_run_tests",
-  "pi_coder_git",
-  "pi_coder_save_spec",
-  "pi_coder_read_spec",
-"pi_coder_advance_fsm",
-  "upsert_knowledge",
-  "interview",
-  "intercom",
-];
-
-/** Tools available in Plan mode — investigation only, no spec/git/FSM tools. */
-export const PLAN_TOOLS = [
-  "ls",
-  "find",
-  "grep",
-  "subagent",
-  "upsert_knowledge",
-  "interview",
-  "intercom",
-];
-
-/** Tools available when pi-coder is off (normal pi mode). Exported for use by Spec 10 commands. */
-export const NORMAL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-
-
+// Re-export constants that were previously exported from this module
+export { ORCHESTRATOR_TOOLS, LIGHT_TOOLS, PLAN_TOOLS, NORMAL_TOOLS };
 
 // ---------------------------------------------------------------------------
 // Module-scope state
@@ -134,47 +91,8 @@ let subagentWidgetTimer: ReturnType<typeof setInterval> | null = null;
 
 // ---------------------------------------------------------------------------
 // UI Refresh — updates widget, status line, and working indicator
+// (STATE_STYLE and STATE_LABEL now imported from constants.ts)
 // ---------------------------------------------------------------------------
-
-/** Visual styling for each FSM state group. */
-const STATE_STYLE: Record<string, { icon: string; color: "success" | "warning" | "error" | "accent" | "muted" | "dim" }> = {
-  IDLE:               { icon: "○", color: "dim" },
-  SPEC_WORK:          { icon: "●", color: "accent" },
-  SPEC_APPROVED:      { icon: "✓", color: "success" },
-  GIT_CHECKPOINT:     { icon: "⟳", color: "accent" },
-  IMPLEMENTING:       { icon: "●", color: "accent" },
-  TDD_RED_WRITE:      { icon: "●", color: "warning" },
-  TDD_RED_VALIDATE:   { icon: "●", color: "warning" },
-  TDD_GREEN_WRITE:    { icon: "●", color: "accent" },
-  TDD_GREEN_VALIDATE: { icon: "●", color: "accent" },
-  REVIEWING:          { icon: "◎", color: "accent" },
-  APPROVED:           { icon: "✓", color: "success" },
-  NEEDS_CHANGES:      { icon: "✗", color: "error" },
-  FINAL_APPROVAL:     { icon: "✓", color: "success" },
-  MERGING:            { icon: "⟳", color: "accent" },
-  COMPLETE:           { icon: "✓", color: "success" },
-  BLOCKED:            { icon: "⚠", color: "error" },
-};
-
-/** Friendly labels for FSM states. */
-const STATE_LABEL: Record<string, string> = {
-  IDLE:               "Idle",
-  SPEC_WORK:          "Spec Work",
-  SPEC_APPROVED:      "Spec Approved",
-  GIT_CHECKPOINT:     "Checkpoint",
-  IMPLEMENTING:       "Implementing",
-  TDD_RED_WRITE:      "RED",
-  TDD_RED_VALIDATE:   "RED Validate",
-  TDD_GREEN_WRITE:    "GREEN",
-  TDD_GREEN_VALIDATE: "GREEN Validate",
-  REVIEWING:          "Reviewing",
-  APPROVED:           "Approved",
-  NEEDS_CHANGES:      "Needs Changes",
-  FINAL_APPROVAL:     "Final Approval",
-  MERGING:           "Merging",
-  COMPLETE:           "Complete",
-  BLOCKED:            "Blocked",
-};
 
 /** Refresh all pi-coder UI surfaces based on current state. */
 function refreshUI(): void {
@@ -578,34 +496,6 @@ function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
 // Tool Input Summary Helper — for logging tool_call events
 // ---------------------------------------------------------------------------
 
-/**
- * Summarize tool input for logging. Extracts key field names/values
- * without logging sensitive data (file contents, API keys, full interview questions).
- */
-function summarizeToolInput(toolName: string, input: unknown): Record<string, unknown> {
-  const inp = input as Record<string, unknown>;
-  switch (toolName) {
-    case "pi_coder_advance_fsm":
-      return { targetState: inp.targetState, fixType: inp.fixType };
-    case "pi_coder_run_tests":
-      return { suite: inp.suite, filter: inp.filter };
-    case "pi_coder_git":
-      return { action: inp.action };
-    case "pi_coder_save_spec":
-      return { id: inp.id, title: inp.title };
-    case "pi_coder_read_spec":
-      return { id: inp.id };
-    case "subagent":
-      return { agent: inp.agent, task: typeof inp.task === "string" ? inp.task.slice(0, 100) : undefined };
-    case "interview":
-      return { questions: "..." }; // Don't log interview content
-    case "upsert_knowledge":
-      return { filename: inp.filename };
-    default:
-      return {}; // ls, find, grep — no sensitive data, but also not worth logging the pattern
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Orchestrator System Prompt — loaded from .md file
 // ---------------------------------------------------------------------------
@@ -935,425 +825,22 @@ function formatTestSuites(testCommands: TestCommands | undefined): string {
   return lines.join("\n");
 }
 
-const DEFAULT_CONFIG: PiCoderConfig = {
-  testCommand: "npm test",
-  maxLoops: 3,
-  createBranch: true,
-  mergeBranch: "merge",
-  branchPrefix: "pi-coder/",
-  interviewTimeout: 0,
-  nudge: {
-    enabled: true,
-    defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
-    states: {
-      SPEC_WORK: { turnsBeforeNudge: 3 },
-      BLOCKED: { turnsBeforeNudge: 2 },
-      IDLE: { enabled: false },
-      SPEC_APPROVED: { enabled: false },
-      FINAL_APPROVAL: { enabled: false },
-      COMPLETE: { enabled: false },
-    },
-  },
-  logging: {
-    enabled: false,
-    level: "standard",
-    maxLogFiles: 10,
-  },
-  subagentControl: {
-    enabled: true,
-  },
-  notifications: {
-    enabled: false,
-  },
-};
+// Config — imported from src/config.ts
+import { loadConfig, detectTestCommand, detectTestCommands } from "../src/config.ts";
 
-/** Validate critical config values, applying fixes and emitting warnings. */
-/** Result of validating a PiCoderConfig. */
-interface ConfigValidationResult {
-  config: PiCoderConfig;
-  warnings: Array<{ field: string; value: unknown; fix: string }>;
-}
-
-function validateConfig(cfg: PiCoderConfig): ConfigValidationResult {
-  const warnings: Array<{ field: string; value: unknown; fix: string }> = [];
-
-  if (typeof cfg.maxLoops !== "number" || cfg.maxLoops < 1) {
-    warnings.push({ field: "maxLoops", value: cfg.maxLoops, fix: "defaulted to 3" });
-    console.warn(`⚠️ pi-coder: maxLoops must be a positive integer, got ${cfg.maxLoops} — defaulting to 3`);
-    cfg = { ...cfg, maxLoops: 3 };
-  }
-  if (typeof cfg.testCommand !== "string" || cfg.testCommand.trim() === "") {
-    warnings.push({ field: "testCommand", value: cfg.testCommand, fix: 'defaulted to "npm test"' });
-    console.warn(`⚠️ pi-coder: testCommand must be a non-empty string, got ${JSON.stringify(cfg.testCommand)} — defaulting to "npm test"`);
-    cfg = { ...cfg, testCommand: "npm test" };
-  }
-  if (cfg.testCommands) {
-    const tc = cfg.testCommands;
-    // Validate all values are non-empty strings (testCommands is now Record<string, string>)
-    let modified = false;
-    for (const [key, value] of Object.entries(tc)) {
-      if (typeof value !== "string" || value.trim() === "") {
-        if (key === "unit" && Object.keys(tc).length === 1) {
-          // Only key and it's invalid — fall back to testCommand
-          warnings.push({ field: `testCommands.${key}`, value, fix: "fell back to testCommand" });
-          console.warn(`⚠️ pi-coder: testCommands.${key} must be a non-empty string, got ${JSON.stringify(value)} — falling back to testCommand`);
-          tc[key] = cfg.testCommand;
-          modified = true;
-        } else {
-          // Remove invalid entries
-          warnings.push({ field: `testCommands.${key}`, value, fix: "removed" });
-          console.warn(`⚠️ pi-coder: testCommands.${key} must be a non-empty string if provided, got ${JSON.stringify(value)} — removing`);
-          delete tc[key];
-          modified = true;
-        }
-      }
-    }
-    if (modified) {
-      cfg = { ...cfg, testCommands: { ...tc } };
-    }
-  }
-  if (typeof cfg.interviewTimeout !== "number" || cfg.interviewTimeout < 0) {
-    warnings.push({ field: "interviewTimeout", value: cfg.interviewTimeout, fix: "defaulted to 0" });
-    console.warn(`⚠️ pi-coder: interviewTimeout must be ≥ 0, got ${cfg.interviewTimeout} — defaulting to 0`);
-    cfg = { ...cfg, interviewTimeout: 0 };
-  }
-  if (typeof cfg.branchPrefix !== "string" || cfg.branchPrefix.trim() === "") {
-    warnings.push({ field: "branchPrefix", value: cfg.branchPrefix, fix: 'defaulted to "pi-coder/"' });
-    console.warn(`⚠️ pi-coder: branchPrefix must be a non-empty string, got ${JSON.stringify(cfg.branchPrefix)} — defaulting to "pi-coder/"`);
-    cfg = { ...cfg, branchPrefix: "pi-coder/" };
-  }
-  return { config: cfg, warnings };
-}
-
-function loadConfig(cwd: string): ConfigValidationResult {
-  const configPath = join(cwd, ".pi-coder", "config.json");
-  try {
-    if (existsSync(configPath)) {
-      const raw = readFileSync(configPath, "utf-8");
-      const parsed = JSON.parse(raw);
-
-      // Migrate legacy gitStrategy → createBranch + mergeBranch
-      if ("gitStrategy" in parsed && !("createBranch" in parsed) && !("mergeBranch" in parsed)) {
-        if (parsed.gitStrategy === "squash") {
-          parsed.mergeBranch = "squash";
-        } else {
-          parsed.mergeBranch = "merge";
-        }
-        parsed.createBranch = true;
-        delete parsed.gitStrategy;
-      }
-
-      // Resolve and validate referenceProjects paths
-      if (parsed.referenceProjects && typeof parsed.referenceProjects === "object") {
-        const resolved: Record<string, string> = {};
-        for (const [name, rawPath] of Object.entries(parsed.referenceProjects)) {
-          if (typeof rawPath !== "string") continue;
-          // Expand ~ to home directory
-          let expanded = rawPath.startsWith("~/")
-            ? join(process.env.HOME ?? "/tmp", rawPath.slice(2))
-            : rawPath.startsWith("~")
-              ? join(process.env.HOME ?? "/tmp", rawPath.slice(1))
-              : rawPath;
-          // Resolve relative paths against project cwd
-          const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
-          // Validate directory exists
-          if (existsSync(absolute)) {
-            resolved[name] = absolute;
-          } else {
-            console.warn(`⚠️ pi-coder: reference project "${name}" path not found: ${absolute} — skipping`);
-          }
-        }
-        parsed.referenceProjects = Object.keys(resolved).length > 0 ? resolved : undefined;
-      }
-
-      return validateConfig({ ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) } });
-    }
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.warn(`⚠️ pi-coder: failed to load config.json: ${message} — using defaults`);
-    // Fall through to default
-  }
-  return validateConfig({ ...DEFAULT_CONFIG });
-}
 
 // ---------------------------------------------------------------------------
-// Intercom receipt detection and review extraction diagnostics
+// ---------------------------------------------------------------------------
+// Review extraction — re-exported from src/review-extraction.ts
 // ---------------------------------------------------------------------------
 
-/**
- * Detect whether the rawContent text is a pi-intercom receipt.
- * When the intercom receipt path is taken, the tool result's content is
- * replaced with a receipt string like "Delivered single subagent result via intercom."
- * and the details.results[*].finalOutput is stripped to undefined.
- *
- * Detection: look for "Delivered" + "via intercom" in the text.
- */
-export function isIntercomReceipt(rawContent: unknown): boolean {
-  if (!Array.isArray(rawContent)) return false;
-  const textBlock = rawContent.find(
-    (c: unknown) => typeof c === "object" && c !== null && (c as Record<string, unknown>).type === "text"
-  );
-  if (!textBlock) return false;
-  const text = (textBlock as { type: string; text?: string }).text ?? "";
-  return /Delivered\s+.*\s+via intercom/i.test(text);
-}
+// Re-export functions that were previously defined inline in this module
+export { isIntercomReceipt, extractDetailsDiagnostics, extractReviewVerdict } from "../src/review-extraction.ts";
+export type { SubagentUsage } from "../src/review-extraction.ts";
 
-/**
- * Extract diagnostic text info from details object for logging.
- * Returns actual content length and preview — not the always-0 values
- * we were logging before (which checked typeof details === "string").
- */
-export function extractDetailsDiagnostics(details: unknown): {
-  hasFinalOutput: boolean;
-  textLength: number;
-  firstHundredChars: string;
-} {
-  if (!details || typeof details !== "object") {
-    return { hasFinalOutput: false, textLength: 0, firstHundredChars: "" };
-  }
-  const r = details as Record<string, unknown>;
-  let text = "";
-  let hasFinalOutput = false;
+// Private imports for internal use within this module
+import { extractSubagentTarget, extractSubagentUsage, extractReviewVerdict, extractDetailsDiagnostics, isIntercomReceipt } from "../src/review-extraction.ts";
 
-  if (Array.isArray(r.results)) {
-    const firstResult = (r.results as Array<Record<string, unknown>>)[0];
-    if (firstResult) {
-      hasFinalOutput = typeof firstResult.finalOutput === "string";
-      if (hasFinalOutput) {
-        text = firstResult.finalOutput as string;
-      }
-    }
-  } else if (typeof r.content === "string") {
-    text = r.content;
-    hasFinalOutput = false; // Not finalOutput, but there IS text
-  } else if (Array.isArray(r.content)) {
-    text = (r.content as Array<{ type: string; text?: string }>)
-      .filter((c: { type: string }) => c.type === "text")
-      .map((c: { text?: string }) => c.text ?? "")
-      .join("\n");
-  }
-
-  return {
-    hasFinalOutput,
-    textLength: text.length,
-    firstHundredChars: text.slice(0, 100).replace(/\n/g, "\\n"),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Subagent target agent extraction
-// ---------------------------------------------------------------------------
-
-/**
- * Extract the target agent name from a subagent tool call input.
- * Checks common parameter names used by pi-subagents.
- */
-function extractSubagentTarget(input: Record<string, unknown>): string | undefined {
-  return (input.agent as string) ?? (input.name as string) ?? undefined;
-}
-
-/**
- * Extract subagent usage data from a pi-subagents Details tool result.
- *
- * pi-subagents provides usage inside `details.results[0].usage` with shape:
- *   { input, output, cacheRead, cacheWrite, cost, turns }
- * and model/exitCode/error on `details.results[0]` itself.
- *
- * This replaces the old `extractTokenUsage()` which incorrectly read
- * `details.usage.prompt_tokens` (OpenAI shape) — a path that never exists
- * on the pi-subagents Details object.
- */
-export interface SubagentUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-  turns: number;
-  model: string | null;
-  exitCode: number;
-  error: string | null;
-}
-
-function extractSubagentUsage(details: unknown): SubagentUsage | null {
-  if (!details || typeof details !== "object") return null;
-  const d = details as { results?: Array<Record<string, unknown>> };
-  const firstResult = d.results?.[0];
-  if (!firstResult) return null;
-
-  const usage = firstResult.usage as {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    cost?: number;
-    turns?: number;
-  } | undefined;
-
-  if (!usage) return null;
-  if ((usage.input ?? 0) === 0 && (usage.output ?? 0) === 0 && (usage.cost ?? 0) === 0) return null;
-
-  return {
-    input: usage.input ?? 0,
-    output: usage.output ?? 0,
-    cacheRead: usage.cacheRead ?? 0,
-    cacheWrite: usage.cacheWrite ?? 0,
-    cost: usage.cost ?? 0,
-    turns: usage.turns ?? 0,
-    model: typeof firstResult.model === "string" ? firstResult.model : null,
-    exitCode: typeof firstResult.exitCode === "number" ? firstResult.exitCode : 0,
-    error: typeof firstResult.error === "string" ? firstResult.error : null,
-  };
-}
-
-/**
- * Extract review verdict from a subagent output (reviewer agent).
- * Looks for common verdict patterns in the text output.
- *
- * Tier 0 (highest priority): Structured ---VERDICT--- block.
- * Tier 1 (fallback): Emoji verdict markers — uses LAST occurrence
- * in the text to avoid false positives from emojis in prose.
- * Tier 2 (fallback): Text-based pattern matching on full text.
- *
- * @param result - The subagent result (Details object with results array,
- *   or a content string/array).
- * @param rawContentText - Optional fallback text source. When pi-intercom
- *   receipt path strips `finalOutput` from the Details object, the
- *   verdict may still be present in the raw content. This parameter
- *   is tried when `finalOutput` is unavailable.
- */
-export function extractReviewVerdict(result: unknown, rawContentText?: string): ReviewVerdict | null {
-  if (!result || typeof result !== "object") return null;
-
-  const r = result as Record<string, unknown>;
-
-  // Extract text from the pi-subagents Details format:
-  // details = { mode, results: [{ finalOutput, messages, ... }], ... }
-  // Fallback: raw content blocks (for tests or non-standard formats)
-  // Fallback: rawContentText parameter (when intercom receipt strips finalOutput)
-  let text = "";
-  if (Array.isArray(r.results)) {
-    // pi-subagents Details format — use finalOutput from first result
-    const firstResult = (r.results as Array<Record<string, unknown>>)[0];
-    if (firstResult) {
-      if (typeof firstResult.finalOutput === "string") {
-        text = firstResult.finalOutput;
-      }
-    }
-  } else if (typeof r.content === "string") {
-    text = r.content;
-  } else if (Array.isArray(r.content)) {
-    // Tool result content is often an array of content blocks
-    text = (r.content as Array<{ type: string; text?: string }>)
-      .filter((c: { type: string }) => c.type === "text")
-      .map((c: { text?: string }) => c.text ?? "")
-      .join("\n");
-  }
-
-  // Fallback: try rawContentText when primary source yielded nothing
-  // (e.g., pi-intercom receipt stripped finalOutput to undefined)
-  if (!text && typeof rawContentText === "string" && rawContentText.length > 0) {
-    text = rawContentText;
-  }
-
-  if (!text) return null;
-
-  // --- Tier 0: Structured verdict block (highest priority) ---
-  // Parse ---VERDICT--- blocks from the reviewer's output.
-  // This is the primary mechanism; emoji/text patterns are fallback for
-  // reviews that haven't adopted the block format yet.
-  const verdictBlockMatch = text.match(/---VERDICT---\s*\n\s*VERDICT:\s*(approved|needs_changes)\s*\n(?:\s*FIX_TYPE:\s*(functional|non-functional|non_functional)\s*\n)?\s*---END VERDICT---[\s\S]*/i);
-
-  if (verdictBlockMatch) {
-    const blockVerdict = verdictBlockMatch[1].toLowerCase() as "approved" | "needs_changes";
-
-    if (blockVerdict === "approved") {
-      return { verdict: "approved" };
-    }
-
-    // needs_changes: extract fix type from block
-    let fixType: "functional" | "non-functional" = "functional"; // Safe default
-    if (verdictBlockMatch[2]) {
-      const rawFixType = verdictBlockMatch[2].toLowerCase();
-      fixType = rawFixType === "non_functional" || rawFixType === "non-functional" ? "non-functional" : "functional";
-    }
-
-    return {
-      verdict: "needs_changes",
-      fixType,
-      issues: [], // Block format doesn't carry structured issues
-    };
-  }
-
-  // --- Tier 1: Emoji-based verdict extraction (fallback) ---
-  // Use LAST occurrence to avoid false positives from emojis in prose.
-  // The reviewer's verdict appears at the END of the review.
-  const approvedIndex = text.lastIndexOf("✅");
-  const rejectIndex = text.lastIndexOf("❌");
-  const changesIndex = text.lastIndexOf("⚠️");
-
-  let emojiVerdict: "approved" | "needs_changes" | null = null;
-
-  if (approvedIndex !== -1 || rejectIndex !== -1 || changesIndex !== -1) {
-    // Build a list of (verdict, index) pairs for emojis that were found
-    const verdicts: Array<{ verdict: "approved" | "needs_changes"; index: number }> = [];
-
-    if (approvedIndex !== -1) {
-      verdicts.push({ verdict: "approved", index: approvedIndex });
-    }
-    if (rejectIndex !== -1) {
-      verdicts.push({ verdict: "needs_changes", index: rejectIndex });
-    }
-    if (changesIndex !== -1) {
-      verdicts.push({ verdict: "needs_changes", index: changesIndex });
-    }
-
-    // Sort by index descending — the LAST emoji in text wins
-    verdicts.sort((a, b) => b.index - a.index);
-    emojiVerdict = verdicts[0].verdict;
-  }
-
-  // --- Tier 2: Text-based pattern matching (fallback) ---
-  // Search the full text (no 500-char limit) for text-only verdicts.
-  // Only used if Tier 1 didn't find any emoji markers.
-  let textVerdict: "approved" | "needs_changes" | null = null;
-  if (emojiVerdict === null) {
-    if (/\*\*Verdict:\*\*\s*approved/i.test(text)) {
-      textVerdict = "approved";
-    } else if (/\*\*Verdict:\*\*\s*(?:request\s+changes|needs\s+changes)/i.test(text)) {
-      textVerdict = "needs_changes";
-    } else if (/approved/i.test(text)) {
-      textVerdict = "approved";
-    } else if (/needs.?changes|request.?changes/i.test(text)) {
-      textVerdict = "needs_changes";
-    }
-  }
-
-  const verdict = emojiVerdict ?? textVerdict;
-  if (verdict === null) return null;
-
-  // For approved verdicts, no additional data needed
-  if (verdict === "approved") {
-    return { verdict: "approved" };
-  }
-
-  // --- needs_changes: extract fix type and issue counts ---
-
-  // Extract fix type classification from reviewer output
-  let fixType: "functional" | "non-functional" = "functional"; // Safe default
-  const fixTypeMatch = text.match(/fix.?type:\s*(functional|non-functional|non_functional)/i);
-  if (fixTypeMatch) {
-    fixType = fixTypeMatch[1].toLowerCase().replace("_", "-") === "non-functional" ? "non-functional" : "functional";
-  }
-
-  return {
-    verdict: "needs_changes",
-    fixType,
-    issues: [], // Regex extraction cannot produce structured issues
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Extension Factory
 // ---------------------------------------------------------------------------
 
@@ -1772,8 +1259,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Activate mode if subagents are available
     if (subagentsAvailable) {
       if (piCoderMode !== "off") {
-        const toolSet = piCoderMode === "tdd" ? ORCHESTRATOR_TOOLS : (piCoderMode === "light" ? LIGHT_TOOLS : PLAN_TOOLS);
-        pi.setActiveTools(toolSet);
+        pi.setActiveTools(MODE_TOOL_SETS[piCoderMode]);
         refreshUI();
       }
     } else {
@@ -1894,13 +1380,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const { systemPromptOptions } = event;
 
     // Determine which tools and prompt to use based on mode
-    const toolSets: Record<PiCoderMode, string[]> = {
-      off: NORMAL_TOOLS,
-      plan: PLAN_TOOLS,
-      light: LIGHT_TOOLS,
-      tdd: ORCHESTRATOR_TOOLS,
-    };
-    const modeTools = toolSets[piCoderMode];
+    const modeTools = MODE_TOOL_SETS[piCoderMode];
 
     // Filter to mode-appropriate tools only
     const filteredSnippets: Record<string, string> = {};
@@ -2066,13 +1546,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     }
 
     // Determine which tools are allowed based on current mode
-    const toolSets: Record<PiCoderMode, string[]> = {
-      off: NORMAL_TOOLS,
-      plan: PLAN_TOOLS,
-      light: LIGHT_TOOLS,
-      tdd: ORCHESTRATOR_TOOLS,
-    };
-    const allowedTools = toolSets[piCoderMode];
+    const allowedTools = MODE_TOOL_SETS[piCoderMode];
 
     // Default-deny: only mode-appropriate tools are allowed
     if (!allowedTools.includes(toolName)) {
@@ -3130,13 +2604,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       sessionTurnCount = 0;
 
       // Update active tools based on mode
-      const toolSets: Record<PiCoderMode, string[]> = {
-        off: NORMAL_TOOLS,
-        plan: PLAN_TOOLS,
-        light: LIGHT_TOOLS,
-        tdd: ORCHESTRATOR_TOOLS,
-      };
-      pi.setActiveTools(toolSets[piCoderMode]);
+      pi.setActiveTools(MODE_TOOL_SETS[piCoderMode]);
       refreshUI();
 
       // Notify user of mode change
@@ -3178,75 +2646,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
   // Phase 2: Init Command — /pi-coder-init
   // -----------------------------------------------------------------------
-
-  /**
-   * Auto-detect the test command from the project's package.json scripts.
-   * Looks for "vitest", "jest", then "test" scripts, falling back to "npm test".
-   */
-  function detectTestCommand(cwd: string): string {
-    const pkgPath = join(cwd, "package.json");
-    try {
-      if (existsSync(pkgPath)) {
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-        const scripts = pkg.scripts ?? {};
-        if (scripts.vitest) return "npx vitest run";
-        if (scripts.jest) return "npx jest";
-        if (scripts.test) return "npm test";
-      }
-    } catch {
-      // Fall through to default
-    }
-    return "npm test";
-  }
-
-  /**
-   * Detect structured test commands from package.json.
-   * Returns a Record<string, string> mapping suite names to commands.
-   * Always includes 'unit'. Detects component, integration, e2e, and
-   * other test:* scripts automatically.
-   */
-  function detectTestCommands(cwd: string): TestCommands {
-    const pkgPath = join(cwd, "package.json");
-    try {
-      if (existsSync(pkgPath)) {
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-        const scripts = pkg.scripts ?? {};
-        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-        const result: TestCommands = {};
-
-        // Always detect unit test command
-        result.unit = scripts["test:ci"] || scripts.vitest ? "npx vitest run" : scripts.jest ? "npx jest" : scripts.test ? "npm test" : "npm test";
-
-        // Detect component test runners (jsdom/TL)
-        if (deps?.["@testing-library/react"] || scripts["test:component"] || scripts["test:ui"]) {
-          result.component = scripts["test:component"] || scripts["test:ui"] || "npx vitest run --project jsdom";
-        }
-
-        // Detect E2E test runners
-        if (deps?.playwright || scripts["test:e2e"]) {
-          result.e2e = scripts["test:e2e"] || "npx playwright test";
-        } else if (deps?.cypress || scripts["test:e2e"]) {
-          result.e2e = scripts["test:e2e"] || "npx cypress run";
-        }
-
-        // Auto-detect any other test:* scripts from package.json
-        for (const [name, _cmd] of Object.entries(scripts as Record<string, string>)) {
-          if (name.startsWith("test:") && name !== "test:ci" && name !== "test:e2e" && name !== "test:component" && name !== "test:ui") {
-            // Extract suite name from script name (e.g., "test:integration" -> "integration")
-            const suiteName = name.slice(5); // Remove "test:" prefix
-            if (!(suiteName in result)) {
-              result[suiteName] = `npm run ${name}`;
-            }
-          }
-        }
-
-        return result;
-      }
-    } catch {
-      // Fall through
-    }
-    return { unit: "npm test" };
-  }
 
   /**
    * Resolve the package's own agents/ directory path.

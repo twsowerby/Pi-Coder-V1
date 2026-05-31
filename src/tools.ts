@@ -107,6 +107,34 @@ const EXCEPTION_TRANSITIONS: Set<string> = new Set([
  * Each tool is registered with promptSnippet and promptGuidelines
  * for system prompt inclusion.
  */
+/**
+ * Summarize tool input for logging. Extracts key field names/values
+ * without logging sensitive data (file contents, API keys, full interview questions).
+ */
+export function summarizeToolInput(toolName: string, input: unknown): Record<string, unknown> {
+  const inp = input as Record<string, unknown>;
+  switch (toolName) {
+    case "pi_coder_advance_fsm":
+      return { targetState: inp.targetState, fixType: inp.fixType };
+    case "pi_coder_run_tests":
+      return { suite: inp.suite, filter: inp.filter };
+    case "pi_coder_git":
+      return { action: inp.action };
+    case "pi_coder_save_spec":
+      return { id: inp.id, title: inp.title };
+    case "pi_coder_read_spec":
+      return { id: inp.id };
+    case "subagent":
+      return { agent: inp.agent, task: typeof inp.task === "string" ? inp.task.slice(0, 100) : undefined };
+    case "interview":
+      return { questions: "..." }; // Don't log interview content
+    case "upsert_knowledge":
+      return { filename: inp.filename };
+    default:
+      return {}; // ls, find, grep — no sensitive data, but also not worth logging the pattern
+  }
+}
+
 export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
   const { stateMachine: smRef, activeSpecId: activeSpecIdRef, setActiveSpecId, gitOps, tddRunner, knowledgeStore, specManager, config } = deps;
 
