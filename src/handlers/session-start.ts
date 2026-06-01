@@ -20,6 +20,7 @@ import { registerTools, type StateMachineRef } from "../tools.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
 import { loadConfig } from "../config.ts";
 import { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetLightModePromptCache, resetPlanModePromptCache } from "../prompts/prompt-builders.ts";
+import { registerCompactionHandler } from "../compaction.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { FSMState, LightFSMState } from "../types.ts";
 
@@ -73,6 +74,9 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
     } else {
       ctx.stateMachine = null;
     }
+
+    // Register FSM-aware compaction handler (R1)
+    registerCompactionHandler(ctx);
 
     // Initialize module dependencies
     const knowledgeDir = join(cwd, ".pi-coder", "knowledge");
