@@ -724,7 +724,7 @@ describe("Spec 16 Phase 4: Desktop Notification Call-Sites", () => {
   it("agent_end notification uses descriptive title with middle-dot separator", () => {
     const content = readFileSync(extensionPath, "utf-8");
     assert.ok(
-      content.includes('notify("agent_end", "Pi Coder \\u00b7 Idle"'),
+      content.includes('notify(config, "agent_end", "Pi Coder \\u00b7 Idle"')
       "agent_end must use 'Pi Coder · Idle' title",
     );
     assert.ok(
@@ -736,7 +736,7 @@ describe("Spec 16 Phase 4: Desktop Notification Call-Sites", () => {
   it("spec_approval notification uses review emoji and spec ID", () => {
     const content = readFileSync(extensionPath, "utf-8");
     assert.ok(
-      content.includes('notify("spec_approval", "Pi Coder \\u00b7 \\uD83D\\uDCCB Review"'),
+      content.includes('notify(config, "spec_approval", "Pi Coder \\u00b7 \\uD83D\\uDCCB Review"')
       "spec_approval must use 'Pi Coder · 📋 Review' title",
     );
     assert.ok(
@@ -748,7 +748,7 @@ describe("Spec 16 Phase 4: Desktop Notification Call-Sites", () => {
   it("circuit_breaker notification uses red circle emoji and spec ID", () => {
     const content = readFileSync(extensionPath, "utf-8");
     assert.ok(
-      content.includes('notify("circuit_breaker", "Pi Coder \\u00b7 \\uD83D\\uDD34 Circuit Breaker"'),
+      content.includes('notify(config, "circuit_breaker", "Pi Coder \\u00b7 \\uD83D\\uDD34 Circuit Breaker"')
       "circuit_breaker must use 'Pi Coder · 🔴 Circuit Breaker' title",
     );
     assert.ok(
@@ -760,7 +760,7 @@ describe("Spec 16 Phase 4: Desktop Notification Call-Sites", () => {
   it("complete notification uses check emoji and merged successfully body", () => {
     const content = readFileSync(extensionPath, "utf-8");
     assert.ok(
-      content.includes('notify("complete", "Pi Coder \\u00b7 \\u2705 Complete"'),
+      content.includes('notify(config, "complete", "Pi Coder \\u00b7 \\u2705 Complete"')
       "complete must use 'Pi Coder · ✅ Complete' title",
     );
     assert.ok(

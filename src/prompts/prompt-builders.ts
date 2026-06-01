@@ -69,7 +69,7 @@ export function loadOrchestratorPrompt(cwd?: string): string {
 
   // Resolve the package's own agents/ directory relative to this extension file
   const thisDir = dirname(fileURLToPath(import.meta.url));
-  const packageDefaultPath = join(thisDir, "..", "prompts", "pi-coder-orchestrator.md");
+  const packageDefaultPath = join(thisDir, "..", "..", "prompts", "pi-coder-orchestrator.md");
 
   // Check for project-scope customization
   const projectOverridePath = cwd
@@ -109,7 +109,7 @@ export function loadOrchestratorPrompt(cwd?: string): string {
 
 function buildPlanModePrompt(filteredSnippets: Record<string, string>, config: PiCoderConfig): string {
   if (!planModePromptTemplate) {
-    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-plan.md");
+    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts", "pi-coder-plan.md");
     try {
       if (existsSync(promptPath)) {
         planModePromptTemplate = readFileSync(promptPath, "utf-8");
@@ -187,7 +187,7 @@ function buildOrchestratorPrompt(
 function buildLightModePrompt(sm: IStateMachine, filteredSnippets: Record<string, string>, config: PiCoderConfig, activeSpecId: string | null): string {
   if (!lightModePromptTemplate) {
     // Try to load from file
-    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-light.md");
+    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts", "pi-coder-light.md");
     try {
       if (existsSync(promptPath)) {
         lightModePromptTemplate = readFileSync(promptPath, "utf-8");
