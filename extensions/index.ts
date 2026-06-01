@@ -300,8 +300,8 @@ let sessionId: string;
 // Token tracker — imported from src/token-tracker.ts
 import { TokenTracker } from "../src/token-tracker.ts";
 
-/** Shared token tracker instance. */
-const tokenTracker = new TokenTracker();
+/** Shared token tracker instance. Late-binding to logEvent (defined below). */
+const tokenTracker = new TokenTracker((type, payload) => logEvent(type as LogEventType, payload));
 
 let globalStatePersistence: GlobalStatePersistence;
 
@@ -336,8 +336,9 @@ export async function persistState(): Promise<void> {
         version: 1,
         currentState: stateMachine.currentState,
         loopCount: stateMachine.loopCount,
-        gitRef: null,
-        evidence: [],
+        gitRef: stateMachine.gitRef,
+        evidence: stateMachine.getEvidence(),
+        currentUnitName: stateMachine.currentUnitName,
         createdAt: specStateCreatedAt ?? now,
         updatedAt: now,
       };
@@ -1417,7 +1418,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             outcome: "COMPLETE",
             wallClockMs,
             totalTokens: tokenTracker.snapshotLifecycleTokens(),
-            phaseTokens: tokenTracker.snapshotPhaseTokens(),
+          phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
           notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
           tokenTracker.lifecycleStartTime = null;
@@ -1432,7 +1433,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             outcome: "BLOCKED",
             wallClockMs,
             totalTokens: tokenTracker.snapshotLifecycleTokens(),
-            phaseTokens: tokenTracker.snapshotPhaseTokens(),
+          phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
         }
 
@@ -1690,7 +1691,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           outcome: "COMPLETE",
           wallClockMs: tokenTracker.lifecycleStartTime !== null ? Date.now() - tokenTracker.lifecycleStartTime : null,
           totalTokens: tokenTracker.snapshotLifecycleTokens(),
-            phaseTokens: tokenTracker.snapshotPhaseTokens(),
+          phaseTokens: tokenTracker.snapshotPhaseTokens(),
         });
         notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
         tokenTracker.lifecycleStartTime = null;
@@ -1931,7 +1932,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             outcome: "COMPLETE",
             wallClockMs,
             totalTokens: tokenTracker.snapshotLifecycleTokens(),
-            phaseTokens: tokenTracker.snapshotPhaseTokens(),
+          phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
           notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
           tokenTracker.lifecycleStartTime = null;
@@ -1945,7 +1946,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             outcome: "BLOCKED",
             wallClockMs,
             totalTokens: tokenTracker.snapshotLifecycleTokens(),
-            phaseTokens: tokenTracker.snapshotPhaseTokens(),
+          phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
         }
 
