@@ -584,3 +584,90 @@ describe("extractDetailsDiagnostics", () => {
     assert.ok(result.firstHundredChars.length <= 104); // 100 chars + possible \\n expansion
   });
 });
+
+// ---------------------------------------------------------------------------
+// Defensive multi-result handling (results[0] hardening)
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — defensive multi-result handling", () => {
+  it("extracts verdict from first result when results has 1 entry (normal path)", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" }],
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("searches all results when results has multiple entries — verdict in second result", () => {
+    // Simulates an unexpected multi-result shape: [0] has no output, [1] has the review
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [
+        { agent: "pi-coder.implementor", finalOutput: "" },
+        { agent: "pi-coder.reviewer", finalOutput: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" },
+      ],
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("uses first result with substantive finalOutput when results has multiple entries", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [
+        { agent: "pi-coder.implementor", finalOutput: undefined },
+        { agent: "pi-coder.reviewer", finalOutput: "---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: non-functional\n---END VERDICT---" },
+      ],
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "non-functional");
+    }
+  });
+
+  it("returns null when all results have empty or non-string finalOutput", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [
+        { agent: "pi-coder.implementor", finalOutput: "" },
+        { agent: "pi-coder.reviewer", finalOutput: undefined },
+      ],
+    });
+    assert.equal(result, null);
+  });
+
+  it("returns null for empty results array", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [],
+    });
+    assert.equal(result, null);
+  });
+});
+
+describe("extractDetailsDiagnostics — defensive multi-result handling", () => {
+  it("uses results[0] when multiple results exist", () => {
+    const result = extractDetailsDiagnostics({
+      mode: "single",
+      results: [
+        { finalOutput: "First result output" },
+        { finalOutput: "Second result output" },
+      ],
+    });
+    assert.equal(result.hasFinalOutput, true);
+    assert.equal(result.textLength, 19); // "First result output"
+    assert.equal(result.firstHundredChars, "First result output");
+  });
+
+  it("returns hasFinalOutput: false when results[0] has non-string finalOutput", () => {
+    const result = extractDetailsDiagnostics({
+      mode: "single",
+      results: [
+        { finalOutput: undefined },
+        { finalOutput: "This is the actual review" },
+      ],
+    });
+    // extractDetailsDiagnostics intentionally only reads results[0]
+    assert.equal(result.hasFinalOutput, false);
+    assert.equal(result.textLength, 0);
+  });
+});

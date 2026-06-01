@@ -48,7 +48,13 @@ export function extractDetailsDiagnostics(details: unknown): {
   let hasFinalOutput = false;
 
   if (Array.isArray(r.results)) {
-    const firstResult = (r.results as Array<Record<string, unknown>>)[0];
+    const results = r.results as Array<Record<string, unknown>>;
+    if (results.length > 1) {
+      console.warn(
+        `[pi-coder] extractDetailsDiagnostics: details.results has ${results.length} entries — expected 1 (single-agent mode). Using results[0]. This may indicate an unexpected pi-subagents result shape.`
+      );
+    }
+    const firstResult = results[0];
     if (firstResult) {
       hasFinalOutput = typeof firstResult.finalOutput === "string";
       if (hasFinalOutput) {
@@ -114,8 +120,16 @@ export interface SubagentUsage {
 function extractSubagentUsage(details: unknown): SubagentUsage | null {
   if (!details || typeof details !== "object") return null;
   const d = details as { results?: Array<Record<string, unknown>> };
-  const firstResult = d.results?.[0];
-  if (!firstResult) return null;
+  const results = d.results;
+  if (!Array.isArray(results) || results.length === 0) return null;
+
+  if (results.length > 1) {
+    console.warn(
+      `[pi-coder] extractSubagentUsage: details.results has ${results.length} entries — expected 1 (single-agent mode). Using results[0]. This may indicate an unexpected pi-subagents result shape.`
+    );
+  }
+
+  const firstResult = results[0];
 
   const usage = firstResult.usage as {
     input?: number;
@@ -175,11 +189,22 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
   // Fallback: rawContentText parameter (when intercom receipt strips finalOutput)
   let text = "";
   if (Array.isArray(r.results)) {
-    // pi-subagents Details format — use finalOutput from first result
-    const firstResult = (r.results as Array<Record<string, unknown>>)[0];
-    if (firstResult) {
-      if (typeof firstResult.finalOutput === "string") {
-        text = firstResult.finalOutput;
+    const results = r.results as Array<Record<string, unknown>>;
+
+    if (results.length > 1) {
+      console.warn(
+        `[pi-coder] extractReviewVerdict: details.results has ${results.length} entries — expected 1 (single-agent mode). Searching all results for a verdict. This may indicate an unexpected pi-subagents result shape.`
+      );
+    }
+
+    // Search results for a verdict — try results[0] first (standard single-agent path),
+    // then fall back to subsequent results if the first lacks finalOutput or a verdict.
+    // This defensive iteration prevents the FSM from getting stuck if the result
+    // shape is ever unexpected (e.g., parallel mode, pi-subagents API changes).
+    for (const resultEntry of results) {
+      if (typeof resultEntry.finalOutput === "string") {
+        text = resultEntry.finalOutput as string;
+        if (text) break; // Use the first result that has substantive output
       }
     }
   } else if (typeof r.content === "string") {
