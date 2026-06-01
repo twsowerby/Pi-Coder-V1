@@ -23,9 +23,8 @@ import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools, summarizeToolInput, type StateMachineRef } from "../src/tools.ts";
-import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig, TestCommands } from "../src/types.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
-import { sendDesktopNotification } from "../src/desktop-notifier.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -233,22 +232,8 @@ function refreshUI(): void {
 // Subagent Activity Widget — live progress via tool_execution_update
 // ---------------------------------------------------------------------------
 
-/** Format duration from ms to human-readable string. */
-function formatDurationMs(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = secs % 60;
-  return `${mins}m${remSecs}s`;
-}
-
-/** Format token count to human-readable. */
-function formatTokenCount(tokens: number): string {
-  if (tokens < 1000) return `${tokens}`;
-  if (tokens < 1000000) return `${(tokens / 1000).toFixed(1)}k`;
-  return `${(tokens / 1000000).toFixed(1)}M`;
-}
+// UI formatting helpers — imported from src/ui/formatting.ts
+import { formatDurationMs, formatTokenCount } from "../src/ui/formatting.ts";
 
 /** Refresh the pi-coder-subagent widget based on current subagentActivity. */
 function refreshSubagentWidget(): void {
@@ -495,224 +480,12 @@ function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
 // ---------------------------------------------------------------------------
 // Tool Input Summary Helper — for logging tool_call events
 // ---------------------------------------------------------------------------
+// Prompt builders — imported from src/prompts/prompt-builders.ts
+import { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetPlanModePromptCache, resetLightModePromptCache, buildPlanModePrompt, buildOrchestratorPrompt, buildLightModePrompt } from "../src/prompts/prompt-builders.ts";
 
-// ---------------------------------------------------------------------------
-// Orchestrator System Prompt — loaded from .md file
-// ---------------------------------------------------------------------------
+// Re-export for backward compatibility with tests
+export { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetPlanModePromptCache, resetLightModePromptCache } from "../src/prompts/prompt-builders.ts";
 
-/** Cached orchestrator prompt template loaded from .md file. */
-let orchestratorPromptTemplate: string | null = null;
-
-// FSM diagram is now built by BaseStateMachine.buildDiagram() — see Unit 1
-
-/** Plan mode prompt template — cached for the session. */
-let planModePromptTemplate: string | null = null;
-
-/** Reset the cached plan mode prompt template. Called by reset-agents. */
-export function resetPlanModePromptCache(): void {
-  planModePromptTemplate = null;
-}
-
-function buildPlanModePrompt(filteredSnippets: Record<string, string>): string {
-  if (!planModePromptTemplate) {
-    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-plan.md");
-    try {
-      if (existsSync(promptPath)) {
-        planModePromptTemplate = readFileSync(promptPath, "utf-8");
-        const stripped = planModePromptTemplate.replace(/^---\n[\s\S]*?---\n/, "");
-        planModePromptTemplate = stripped.replace(/^\n+/, "");
-      }
-    } catch {
-      // Fall through to built-in
-    }
-
-    if (!planModePromptTemplate) {
-      planModePromptTemplate = `You are the Pi Coder Plan Mode assistant — an investigation and discussion assistant.
-
-You do NOT edit files or implement anything. You investigate, discuss, and plan.
-Only delegate to pi-coder.researcher for investigation — no implementor or reviewer.
-
-Guidelines:
-- Explore the codebase by delegating to pi-coder.researcher
-- Discuss architectural approaches with the user
-- Use interview for structured requirements gathering (timeout: {{interviewTimeout}}s)
-- Save findings to knowledge files with upsert_knowledge for later Light/TDD sessions
-- When you find something worth implementing, suggest switching to Light or TDD mode with /pi-coder
-- No specs, no git, no FSM state machine
-
-Available tools:
-{{toolList}}`;
-    }
-  }
-
-  const toolList = Object.entries(filteredSnippets)
-    .map(([name, snippet]) => `- ${name}: ${snippet}`)
-    .join("\n");
-
-  return planModePromptTemplate!
-    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
-    .replace("{{toolList}}", toolList)
-    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
-    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
-}
-
-/**
- * Load the orchestrator prompt template from the .md file.
- *
- * Checks for a project-scope customization at .pi/agents/pi-coder-orchestrator.md
- * first, falling back to the package default at agents/pi-coder-orchestrator.md.
- *
- * Strips the HTML comment block (template variable documentation) from the top,
- * then caches the template string in module scope.
- */
-export function loadOrchestratorPrompt(cwd?: string): string {
-  if (orchestratorPromptTemplate !== null) {
-    return orchestratorPromptTemplate;
-  }
-
-  // Resolve the package's own agents/ directory relative to this extension file
-  const thisDir = dirname(fileURLToPath(import.meta.url));
-  const packageDefaultPath = join(thisDir, "..", "prompts", "pi-coder-orchestrator.md");
-
-  // Check for project-scope customization
-  const projectOverridePath = cwd
-    ? join(cwd, ".pi", "agents", "pi-coder-orchestrator.md")
-    : null;
-
-  let filePath = packageDefaultPath;
-  if (projectOverridePath && existsSync(projectOverridePath)) {
-    filePath = projectOverridePath;
-  }
-
-  if (!existsSync(filePath)) {
-    // Fallback: if the file doesn't exist anywhere, use a minimal inline prompt
-    // (should never happen in production, but prevents crashes during testing)
-    orchestratorPromptTemplate = "You are the Pi Coder orchestrator. You delegate all implementation to subagents.\n\n{{fsmDiagram}}\n\nCurrent state: {{currentState}}\nActive spec: {{activeSpecId}}\nLoop count: {{loopCount}}/{{maxLoops}}\n\nAvailable tools:\n{{toolList}}";
-    return orchestratorPromptTemplate;
-  }
-
-  let content = readFileSync(filePath, "utf-8");
-
-  // Strip YAML frontmatter (between --- delimiters)
-  content = content.replace(/^---\n[\s\S]*?\n---\n/, "");
-
-  // Strip the HTML comment block (template variable documentation)
-  content = content.replace(/<!--[\s\S]*?-->/, "");
-
-  // Clean up any leading blank lines left after stripping
-  content = content.replace(/^\n+/, "");
-
-  orchestratorPromptTemplate = content;
-  return orchestratorPromptTemplate;
-}
-
-/**
- * Reset the cached orchestrator prompt template.
- * Called when the prompt file may have changed (e.g., after reset-agents).
- * Exported for use by commands and tests.
- */
-export function resetOrchestratorPromptCache(): void {
-  orchestratorPromptTemplate = null;
-}
-
-/**
- * Build the orchestrator system prompt from the loaded template.
- * Substitutes template variables with dynamic values.
- * This replaces the default "expert coding assistant" identity entirely.
- */
-function buildOrchestratorPrompt(
-  sm: IStateMachine,
-  filteredSnippets: Record<string, string>,
-): string {
-  const template = loadOrchestratorPrompt();
-
-  const toolList = Object.entries(filteredSnippets)
-    .map(([name, snippet]) => `- ${name}: ${snippet}`)
-    .join("\n");
-
-  return template
-    .replace("{{fsmDiagram}}", sm.buildDiagram())
-    .replace("{{currentState}}", sm.currentState)
-    .replace("{{activeSpecId}}", activeSpecId ?? "none")
-    .replace("{{loopCount}}", String(sm.loopCount))
-    .replace("{{maxLoops}}", String(config.maxLoops))
-    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
-    .replace("{{toolList}}", toolList)
-    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
-    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
-}
-
-/**
- * Build the light mode system prompt.
- * Simplified: no FSM, no spec workflow, just delegation + tests + knowledge.
- * Reads from prompts/pi-coder-light.md if available, otherwise uses a built-in fallback.
- */
-let lightModePromptTemplate: string | null = null;
-
-function buildLightModePrompt(sm: IStateMachine, filteredSnippets: Record<string, string>): string {
-  if (!lightModePromptTemplate) {
-    // Try to load from file
-    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "pi-coder-light.md");
-    try {
-      if (existsSync(promptPath)) {
-        lightModePromptTemplate = readFileSync(promptPath, "utf-8");
-        // Strip YAML frontmatter if present
-        const stripped = lightModePromptTemplate.replace(/^---\n[\s\S]*?---\n/, "");
-        lightModePromptTemplate = stripped.replace(/^\n+/, "");
-      }
-    } catch {
-      // Fall through to built-in
-    }
-
-    if (!lightModePromptTemplate) {
-      // Built-in fallback — updated for Light FSM
-      lightModePromptTemplate = `You are the Pi Coder assistant — a coding assistant that delegates implementation to specialized subagents. You are in LIGHT mode with a simplified FSM.
-
-You do NOT edit files directly — you delegate all implementation work to subagents.
-
-Current FSM state: {{currentState}}
-Active spec: {{activeSpecId}}
-Loop count: {{loopCount}}/{{maxLoops}}
-
-Follow the FSM lifecycle: spec → implement → review → merge. There are no TDD RED/GREEN phases.
-
-Available subagents:
-- pi-coder.researcher — investigate the codebase, find information, understand patterns
-- pi-coder.implementor — write code, run commands, make changes
-- pi-coder.reviewer — review code, run tests, verify correctness
-
-Guidelines:
-- Run tests freely to check your progress (pi_coder_run_tests) — they're advisory, not gated
-- Use pi_coder_git for version control operations
-- Persist cross-cutting gotchas to knowledge (upsert_knowledge)
-- Follow the FSM — don't skip spec approval or review
-- If a task needs TDD discipline, suggest switching to TDD mode with /pi-coder
-
-Available tools:
-{{toolList}}`;
-    }
-  }
-
-  const toolList = Object.entries(filteredSnippets)
-    .map(([name, snippet]) => `- ${name}: ${snippet}`)
-    .join("\n");
-
-  return lightModePromptTemplate!
-    .replace("{{fsmDiagram}}", sm.buildDiagram())
-    .replace("{{currentState}}", sm.currentState)
-    .replace("{{activeSpecId}}", activeSpecId ?? "none")
-    .replace("{{loopCount}}", String(sm.loopCount))
-    .replace("{{maxLoops}}", String(config.maxLoops))
-    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
-    .replace("{{toolList}}", toolList)
-    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
-    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
-}
-
-/** Reset the cached light mode prompt template. */
-export function resetLightModePromptCache(): void {
-  lightModePromptTemplate = null;
-}
 
 // ---------------------------------------------------------------------------
 // Nudge Helpers
@@ -766,64 +539,8 @@ export function resetNudgeState(newState: string): void {
 // Config helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Check if a notification event should fire based on config.
- * If config.notifications.events is not set, all events are enabled.
- */
-function shouldNotify(event: string): boolean {
-  if (!config.notifications.enabled) return false;
-  const allowed = config.notifications.events;
-  if (!allowed) return true; // default: all events
-  return allowed.includes(event as any);
-}
-
-/**
- * Send a desktop notification if the event is configured.
- */
-function notify(event: string, title: string, body: string): void {
-  if (shouldNotify(event)) {
-    sendDesktopNotification(title, body);
-  }
-}
-
-/**
- * Format referenceProjects config into a prompt section.
- * Returns empty string if no reference projects configured.
- */
-function formatReferenceProjects(referenceProjects: Record<string, string> | undefined): string {
-  if (!referenceProjects || Object.keys(referenceProjects).length === 0) {
-    return "";
-  }
-  const lines = ["**Reference Projects (EXPERIMENTAL):**"];
-  for (const [name, absPath] of Object.entries(referenceProjects)) {
-    lines.push(`- **${name}**: ${absPath}`);
-  }
-  lines.push("");
-  lines.push("When investigating a reference project, delegate to pi-coder.researcher and include the");
-  lines.push("project path in the task. Do NOT pass cwd to the subagent tool — the researcher accesses");
-  lines.push("reference projects by navigating to them via bash (cd, grep, find) and reading files");
-  lines.push("with absolute paths. Reads are allowed; writes are blocked by damage-control.");
-  return lines.join("\n");
-}
-
-/**
- * Format testCommands config into a prompt section.
- * Returns empty string if no testCommands configured.
- */
-function formatTestSuites(testCommands: TestCommands | undefined): string {
-  if (!testCommands || Object.keys(testCommands).length === 0) {
-    return "";
-  }
-  const lines = ["**Available Test Suites:**"];
-  for (const [name, command] of Object.entries(testCommands)) {
-    lines.push(`- **${name}**: \`${command}\``);
-  }
-  lines.push("");
-  lines.push("Use pi_coder_run_tests with suite parameter to run a specific suite.");
-  lines.push("Default suite is 'unit'. Use suite='all' to run every suite.");
-  lines.push("When a spec unit has testSuite set, pass that suite name when running tests for that unit.");
-  return lines.join("\n");
-}
+// Notification helpers — imported from src/notification-manager.ts
+import { notify } from "../src/notification-manager.ts";
 
 // Config — imported from src/config.ts
 import { loadConfig, detectTestCommand, detectTestCommands } from "../src/config.ts";
@@ -1278,7 +995,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_end", async () => {
     if (piCoderMode === "off") return;
-    notify("agent_end", "Pi Coder \u00b7 Idle", "Waiting for your input");
+    notify(config, "agent_end", "Pi Coder \u00b7 Idle", "Waiting for your input");
   });
 
   // -----------------------------------------------------------------------
@@ -1396,11 +1113,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       orchestratorPrompt = buildOrchestratorPrompt(
         stateMachine!,
         filteredSnippets,
+        config,
+        activeSpecId,
       );
     } else if (piCoderMode === "light") {
-      orchestratorPrompt = buildLightModePrompt(stateMachine!, filteredSnippets);
+      orchestratorPrompt = buildLightModePrompt(stateMachine!, filteredSnippets, config, activeSpecId);
     } else { // plan
-      orchestratorPrompt = buildPlanModePrompt(filteredSnippets);
+      orchestratorPrompt = buildPlanModePrompt(filteredSnippets, config);
     }
 
     // (Guidelines from tools are already embedded in orchestratorPrompt via filteredSnippets)
@@ -1541,7 +1260,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Desktop notification on spec approval interview
     if (stateMachine && toolName === "interview" && stateMachine.currentState === "SPEC_WORK") {
-      notify("spec_approval", "Pi Coder \u00b7 \uD83D\uDCCB Review", `Spec ${activeSpecId ?? "unknown"} ready for your approval`);
+      notify(config, "spec_approval", "Pi Coder \u00b7 \uD83D\uDCCB Review", `Spec ${activeSpecId ?? "unknown"} ready for your approval`);
       specApprovalInterviewStartTime = Date.now();
     }
 
@@ -1890,7 +1609,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               }])
             ),
           });
-          notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
+          notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
           lifecycleStartTime = null;
           resetLifecycleTracking();
         }
@@ -2098,7 +1817,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
-          notify("circuit_breaker", "Pi Coder \u00b7 \uD83D\uDD34 Circuit Breaker", `Max review loops (${config.maxLoops}) exceeded on spec ${activeSpecId ?? "unknown"}`);
+          notify(config, "circuit_breaker", "Pi Coder \u00b7 \uD83D\uDD34 Circuit Breaker", `Max review loops (${config.maxLoops}) exceeded on spec ${activeSpecId ?? "unknown"}`);
 
           // Log unit_end for circuit breaker
           if (stateMachine!.currentUnitName) {
@@ -2189,7 +1908,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             }])
           ),
         });
-        notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
+        notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
         lifecycleStartTime = null;
         resetLifecycleTracking();
         resetNudgeState(stateMachine!.currentState);
@@ -2465,7 +2184,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
               }])
             ),
           });
-          notify("complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
+          notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
           lifecycleStartTime = null;
           resetLifecycleTracking();
         }
@@ -2501,7 +2220,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
             maxLoops: config.maxLoops,
             specId: activeSpecId,
           });
-          notify("circuit_breaker", "Pi Coder \u00b7 \uD83D\uDD34 Circuit Breaker", `Max review loops (${config.maxLoops}) exceeded on spec ${activeSpecId ?? "unknown"}`);
+          notify(config, "circuit_breaker", "Pi Coder \u00b7 \uD83D\uDD34 Circuit Breaker", `Max review loops (${config.maxLoops}) exceeded on spec ${activeSpecId ?? "unknown"}`);
         }
       }
 
