@@ -110,14 +110,19 @@ export class TokenTracker {
   /** Ensure an accrual bucket exists for the given FSM state. */
   ensurePhaseBucket(state: string): void {
     if (!this.phaseTokens[state]) {
-      this.phaseTokens[state] = {
-        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
-        source: {
-          orchestrator: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-          subagent: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-        },
-      };
+      this.phaseTokens[state] = TokenTracker.createEmptyBucket();
     }
+  }
+
+  /** Create a fresh zeroed-out phase bucket. */
+  static createEmptyBucket(): PhaseBucket {
+    return {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
+      source: {
+        orchestrator: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+        subagent: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+      },
+    };
   }
 
   /** Set the current accrual state (called on FSM transitions and lifecycle start). */
@@ -137,6 +142,7 @@ export class TokenTracker {
     this.lifecycleTokens.cacheRead += usage.cacheRead;
     this.lifecycleTokens.cacheWrite += usage.cacheWrite;
     this.lifecycleTokens.cost += usage.cost;
+    this.lifecycleTokens.turns += 1;
 
     if (this.currentAccrualState) {
       this.ensurePhaseBucket(this.currentAccrualState);
@@ -146,11 +152,13 @@ export class TokenTracker {
       bucket.cacheRead += usage.cacheRead;
       bucket.cacheWrite += usage.cacheWrite;
       bucket.cost += usage.cost;
+      bucket.turns += 1;
       bucket.source.orchestrator.input += usage.input;
       bucket.source.orchestrator.output += usage.output;
       bucket.source.orchestrator.cacheRead += usage.cacheRead;
       bucket.source.orchestrator.cacheWrite += usage.cacheWrite;
       bucket.source.orchestrator.cost += usage.cost;
+      bucket.source.orchestrator.turns += 1;
     }
   }
 
@@ -188,6 +196,10 @@ export class TokenTracker {
   /**
    * Emit an fsm_state_usage event for the state being exited and set the new accrual state.
    * Call this on every FSM transition to capture per-state token breakdown.
+   *
+   * After emitting, the exiting state's bucket is reset so that re-entering the same
+   * state later (e.g., TDD_RED_WRITE for a subsequent unit) starts with a fresh bucket
+   * instead of continuing to accumulate on top of prior visits.
    */
   emitStateUsageAndTransition(fromState: string, toState: string, activeSpecId: string | null): void {
     // Emit usage for the state we're leaving
@@ -208,6 +220,9 @@ export class TokenTracker {
         specId: activeSpecId,
         nextState: toState,
       });
+      // Reset the bucket so re-entry starts fresh — prevents cumulative stacking
+      // across multiple visits to the same state (e.g., TDD_RED_WRITE units 1-5)
+      this.phaseTokens[fromState] = TokenTracker.createEmptyBucket();
     }
     // Start accruing into the new state
     this.setAccrualState(toState);

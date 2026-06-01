@@ -144,7 +144,8 @@ describe("extractReviewVerdict — emoji fallback patterns", () => {
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
       assert.equal(result.fixType, "non-functional");
-      assert.deepEqual(result.issues, []);
+      // 🟡 in prose is now parsed by parseProseIssues
+      assert.ok(result.issues && result.issues.length > 0, "should parse emoji issues from prose");
     }
   });
 
@@ -156,7 +157,8 @@ describe("extractReviewVerdict — emoji fallback patterns", () => {
     assert.equal(result?.verdict, "needs_changes");
     if (result?.verdict === "needs_changes") {
       assert.equal(result.fixType, "functional");
-      assert.deepEqual(result.issues, []);
+      // 🔴 in prose is now parsed by parseProseIssues
+      assert.ok(result.issues && result.issues.length > 0, "should parse emoji issues from prose");
     }
   });
 
@@ -222,12 +224,13 @@ describe("extractReviewVerdict — text pattern fallbacks", () => {
     assert.equal(result?.verdict, "needs_changes");
   });
 
-  it("finds text-only verdict after 500 chars (no 500-char limit)", () => {
+  it("does NOT match bare 'approved' in prose after 500 chars (tightened Tier 2)", () => {
     const padding = "x".repeat(600);
+    // Bare /approved/i is no longer matched in Tier 2 — requires "Verdict:" prefix
     const result = extractReviewVerdict({
       content: padding + " approved",
     });
-    assert.equal(result?.verdict, "approved");
+    assert.equal(result, null, "bare 'approved' in prose should not match after Tier 2 tightening");
   });
 });
 
@@ -669,5 +672,221 @@ describe("extractDetailsDiagnostics — defensive multi-result handling", () => 
     // extractDetailsDiagnostics intentionally only reads results[0]
     assert.equal(result.hasFinalOutput, false);
     assert.equal(result.textLength, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ISSUES block parsing in ---VERDICT--- blocks
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — ISSUES block parsing", () => {
+  it("parses structured issues from ---VERDICT--- block", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "Review analysis...\n\n---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: functional\nISSUES:\n- SEVERITY: high | FILE: src/auth.ts:42 | PROBLEM: token not refreshed on 401 | FIX: add refresh logic\n- SEVERITY: medium | FILE: src/api.ts:15 | PROBLEM: missing error boundary | FIX: wrap fetch in try/catch\n---END VERDICT---" }],
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.fixType, "functional");
+      assert.ok(result.issues, "issues should be present");
+      assert.equal(result.issues!.length, 2);
+      assert.equal(result.issues![0].severity, "high");
+      assert.equal(result.issues![0].file, "src/auth.ts:42");
+      assert.equal(result.issues![0].problem, "token not refreshed on 401");
+      assert.equal(result.issues![0].suggestedFix, "add refresh logic");
+      assert.equal(result.issues![1].severity, "medium");
+      assert.equal(result.issues![1].file, "src/api.ts:15");
+    }
+  });
+
+  it("returns empty issues when no ISSUES section in ---VERDICT--- block", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: functional\n---END VERDICT---" }],
+    });
+    if (result?.verdict === "needs_changes") {
+      assert.deepEqual(result.issues, []);
+    }
+  });
+
+  it("parses issues with only SEVERITY and PROBLEM fields", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: functional\nISSUES:\n- SEVERITY: low | PROBLEM: minor style issue\n---END VERDICT---" }],
+    });
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.issues!.length, 1);
+      assert.equal(result.issues![0].severity, "low");
+      assert.equal(result.issues![0].problem, "minor style issue");
+      assert.equal(result.issues![0].file, undefined);
+      assert.equal(result.issues![0].suggestedFix, undefined);
+    }
+  });
+
+  it("approved verdict has no issues field", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" }],
+    });
+    assert.deepEqual(result, { verdict: "approved" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prose issue parsing from emoji markers
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — prose issue parsing from emoji markers", () => {
+  it("parses 🔴 emoji issues from prose review", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "## Review\n\n🔴 High: Auth bypass in token validation\nFile: \`src/auth.ts\`\nProblem: Token not refreshed on 401\nSuggested Fix: Add refresh logic in catch block\n\n⚠️ Needs Changes\nFix type: functional" }],
+    });
+    if (result?.verdict === "needs_changes") {
+      assert.ok(result.issues && result.issues.length > 0, "should parse 🔴 emoji issues from prose");
+      const highIssue = result.issues!.find(i => i.severity === "high");
+      assert.ok(highIssue, "should find a high severity issue");
+    }
+  });
+
+  it("parses 🟠 medium issues from prose", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "## Issues\n\n🟠 Medium: Missing error boundary in API\nFile: \`src/api.ts\`\n\n⚠️ Needs Changes\nFix type: non-functional" }],
+    });
+    if (result?.verdict === "needs_changes") {
+      assert.ok(result.issues && result.issues.length > 0);
+      assert.equal(result.issues![0].severity, "medium");
+    }
+  });
+
+  it("does not parse emoji issues inside ---VERDICT--- block", () => {
+    // If the review uses both ISSUES block and emoji prose, the block takes priority
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{ finalOutput: "🔴 External issue\n\n---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: functional\nISSUES:\n- SEVERITY: high | PROBLEM: structured issue\n---END VERDICT---" }],
+    });
+    if (result?.verdict === "needs_changes") {
+      assert.equal(result.issues!.length, 1, "should only have the structured block issue, not the prose one");
+      assert.equal(result.issues![0].problem, "structured issue");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier 2 tightening — bare /approved/i no longer matches
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — Tier 2 tightening", () => {
+  it("rejects bare 'approved' in prose (no longer matches)", () => {
+    const result = extractReviewVerdict({
+      content: "The token is approved for refresh",
+    });
+    assert.equal(result, null, "bare 'approved' in prose should not match");
+  });
+
+  it("rejects 'approved' in middle of sentence", () => {
+    const result = extractReviewVerdict({
+      content: "This approach is approved for production use",
+    });
+    assert.equal(result, null);
+  });
+
+  it("still matches 'Verdict: approved' with prefix", () => {
+    const result = extractReviewVerdict({
+      content: "Verdict: approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("still matches '**Verdict:** approved' with bold prefix", () => {
+    const result = extractReviewVerdict({
+      content: "**Verdict:** Approved",
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("still matches 'needs changes' in text (less false-positive-prone)", () => {
+    const result = extractReviewVerdict({
+      content: "Verdict: Needs Changes — missing input validation",
+    });
+    assert.equal(result?.verdict, "needs_changes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Messages array fallback (intercom receipt path)
+// ---------------------------------------------------------------------------
+
+describe("extractReviewVerdict — messages array fallback", () => {
+  it("extracts verdict from messages array when finalOutput is undefined", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{
+        finalOutput: undefined,
+        messages: [
+          { role: "user", content: "Review this code" },
+          { role: "assistant", content: "Review analysis...\n\n---VERDICT---\nVERDICT: approved\n---END VERDICT---" },
+        ],
+      }],
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("uses LAST assistant message from messages array", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{
+        finalOutput: undefined,
+        messages: [
+          { role: "assistant", content: "Initial thoughts..." },
+          { role: "user", content: "Continue" },
+          { role: "assistant", content: "---VERDICT---\nVERDICT: needs_changes\nFIX_TYPE: functional\n---END VERDICT---" },
+        ],
+      }],
+    });
+    assert.equal(result?.verdict, "needs_changes");
+    assert.equal(result?.fixType, "functional");
+  });
+
+  it("prefers finalOutput over messages when both present", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{
+        finalOutput: "---VERDICT---\nVERDICT: approved\n---END VERDICT---",
+        messages: [
+          { role: "assistant", content: "⚠️ Needs Changes" },
+        ],
+      }],
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("skips non-string assistant messages in messages array", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{
+        finalOutput: undefined,
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "structured content" }] },
+          { role: "assistant", content: "---VERDICT---\nVERDICT: approved\n---END VERDICT---" },
+        ],
+      }],
+    });
+    assert.equal(result?.verdict, "approved");
+  });
+
+  it("returns null when messages array has no usable assistant content", () => {
+    const result = extractReviewVerdict({
+      mode: "single",
+      results: [{
+        finalOutput: undefined,
+        messages: [
+          { role: "user", content: "Review this" },
+          { role: "assistant", content: "" },
+        ],
+      }],
+    });
+    assert.equal(result, null);
   });
 });

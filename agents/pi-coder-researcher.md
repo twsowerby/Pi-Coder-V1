@@ -38,9 +38,12 @@ Return your findings in exactly this structure:
 **Architecture:**
 How the relevant parts of the codebase are structured. Include module boundaries, data flow, and key abstractions. Focus only on what's relevant to the task.
 
-**Key Files:**
+**Key Tables:**
 List each file with its path and a one-line description of its purpose and relevance to the task.
 - `path/to/file.ts` — purpose and relevance
+
+**Database Schema:**
+If you inspected the database, report the relevant table structures here — column names, types, constraints, and defaults. Only include tables relevant to the feature. Do NOT paste entire schema dumps.
 
 **Applied Knowledge:**
 Summary of the rules and conventions found in `.pi-coder/knowledge/` that govern this implementation. Cite the specific knowledge file for each rule.
@@ -56,3 +59,19 @@ Realistic assessment of complexity. If this is harder than it looks, say so. If 
 
 **Recommendations:**
 Specific implementation approach. Not vague advice — concrete steps. If you recommend a particular pattern or library, say why and show where it's already used in the codebase.
+
+## Database Inspection
+
+If your task payload includes database inspection commands, **use them** to understand the current state of the database — schema, constraints, and sample data. Do not rely solely on migration files or ORM type definitions, which may be out of sync with the actual database.
+
+**Typical workflow when DB commands are provided:**
+1. Run the schema inspection command to see the full current schema (tables, columns, constraints, indexes, relationships)
+2. Run the sample data inspection command for tables relevant to the feature (replace `{table}` with actual table names)
+3. Cross-reference the schema with migration files and ORM models — report any discrepancies
+4. Include actual schema details (column types, nullable, defaults, constraints) in your report rather than just listing table names
+
+**Why this matters:** Migration files show intent, not current state. A schema may have been modified manually, or migrations may have run in a different order. The actual database is the source of truth for data shape.
+
+**Never use full schema dump commands** (e.g. `supabase db dump`, `pg_dump`, `mysqldump`). These produce massive DDL output that wastes tokens and buries relevant details. Always use targeted queries instead — inspect only the tables and columns relevant to the feature.
+
+If no DB commands are provided in your task payload, skip this section — investigate the data layer through code and migrations only.

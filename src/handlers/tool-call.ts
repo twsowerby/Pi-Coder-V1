@@ -151,29 +151,14 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
             return { block: true, reason: guidance };
           }
 
-          // TDD mode: implementor in NEEDS_CHANGES requires non_functional_classified evidence
-          if (
-            ctx.piCoderMode === "tdd" &&
-            targetAgent === "pi-coder.implementor" &&
-            ctx.stateMachine!.currentState === "NEEDS_CHANGES" &&
-            !ctx.stateMachine!.hasEvidence("non_functional_classified")
-          ) {
-            ctx.logEvent("tool_call_blocked", {
-              toolName,
-              targetAgent,
-              fsmState: ctx.stateMachine?.currentState ?? "N/A",
-              reason: "missing_non_functional_evidence",
-            });
-            return {
-              block: true,
-              reason:
-                `🛡️ Cannot delegate implementor in NEEDS_CHANGES without reviewer classification. ` +
-                `The reviewer must classify the fix as non-functional (include 'Fix-Type: non-functional' in its verdict) ` +
-                `before the implementor can be delegated here. ` +
-                `If the fix is functional (changes production behavior), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead. ` +
-                `Do not retry this exact call.`,
-            };
-          }
+          // NOTE: The implementor dispatch guard for NEEDS_CHANGES has been removed.
+          // Previously, implementor could only be dispatched in NEEDS_CHANGES if
+          // the reviewer classified the fix as non-functional (non_functional_classified
+          // evidence). This blocked functional fixes from using a shortcut path.
+          // The classification is now enforced at the FSM transition level:
+          // NEEDS_CHANGES → REVIEWING requires non_functional_classified.
+          // NEEDS_CHANGES → TDD_GREEN_WRITE requires review_completed.
+          // NEEDS_CHANGES → TDD_RED_WRITE has no evidence gate.
         }
 
         // Disable pi-subagents control events for foreground runs

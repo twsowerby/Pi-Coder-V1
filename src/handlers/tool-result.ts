@@ -7,10 +7,89 @@
  */
 
 import { extractSubagentUsage, extractReviewVerdict, extractDetailsDiagnostics, isIntercomReceipt } from "../review-extraction.ts";
+import type { IssueDetail } from "../types.ts";
 import { notify } from "../notification-manager.ts";
 import { formatTokenCount, formatDurationMs } from "../ui/formatting.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { FSMTrigger } from "../logger.ts";
+
+/** Maximum consecutive verdict extraction failures before forced re-delegation. */
+const MAX_VERDICT_EXTRACTION_RETRIES = 3;
+
+/**
+ * Capture buffer for subagent output observed during tool_execution_update events.
+ * When a subagent (reviewer) sends its result via pi-intercom, the final
+ * `tool_result` event may have `finalOutput: undefined` and `rawContent`
+ * containing only the intercom receipt. However, during the subagent's
+ * execution, `tool_execution_update` events may contain partial results
+ * with the actual `finalOutput` content BEFORE the intercom delivery strips it.
+ * This buffer captures that content so it can be used as a fallback for
+ * verdict extraction.
+ */
+const subagentOutputCapture = new Map<string, string>();
+
+/**
+ * Register a tool_execution_update listener that captures reviewer subagent
+ * output as a fallback for verdict extraction when the intercom receipt path
+ * strips `finalOutput`.
+ *
+ * Call this once during extension initialization (session_start).
+ */
+export function registerSubagentOutputCapture(ctx: HandlerContext): void {
+  ctx.pi.events.on("tool_execution_update", (data: unknown) => {
+    if (ctx.piCoderMode === "off") return;
+    const event = data as { toolName: string; partialResult: unknown };
+    if (event.toolName !== "subagent") return;
+
+    const result = event.partialResult as {
+      details?: {
+        results?: Array<{
+          agent?: string;
+          finalOutput?: string;
+        }>;
+      };
+    } | null;
+
+    if (!result?.details?.results) return;
+
+    for (const r of result.details.results) {
+      // Capture the last known finalOutput for reviewer agents
+      if (typeof r.finalOutput === "string" && r.finalOutput.length > 0) {
+        const agent = r.agent ?? "";
+        const isReviewer = agent.includes("pi-coder.reviewer") || agent.includes("reviewer");
+        if (isReviewer) {
+          subagentOutputCapture.set(ctx.activeSpecId ?? "_global", r.finalOutput);
+          ctx.logEvent("subagent_output_capture", {
+            specId: ctx.activeSpecId,
+            agent,
+            textLength: r.finalOutput.length,
+          });
+        }
+      }
+    }
+  });
+}
+
+/** Format issues into a steer string for the NEEDS_CHANGES auto-transition. */
+function formatIssuesSteer(issues?: IssueDetail[]): string {
+  if (!issues || issues.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(` Review found ${issues.length} issue${issues.length !== 1 ? "s" : ""}:`);
+  for (const issue of issues.slice(0, 5)) { // Cap at 5 to avoid steer bloat
+    const icon = issue.severity === "high" ? "🔴" : issue.severity === "medium" ? "🟠" : "🟡";
+    const fileRef = issue.file ? ` ${issue.file} —` : "";
+    const fixHint = issue.suggestedFix ? ` (fix: ${issue.suggestedFix})` : "";
+    lines.push(`${icon} ${issue.severity.toUpperCase()}:${fileRef} ${issue.problem}${fixHint}`);
+  }
+  if (issues.length > 5) {
+    lines.push(`... and ${issues.length - 5} more`);
+  }
+  return lines.join("\n");
+}
+
+/** Track consecutive verdict extraction failures per spec. */
+const verdictExtractionFailures = new Map<string, number>();
 
 /** Register the tool_result event handler. */
 export function registerToolResultHandler(ctx: HandlerContext): void {
@@ -39,10 +118,102 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
     }
 
     if (ctx.piCoderMode === "off") return;
-    if (ctx.piCoderMode === "plan") return;
+    const isPlanMode = ctx.piCoderMode === "plan";
 
     const { details } = event;
-    const currentState = ctx.stateMachine!.currentState;
+    // In plan mode, stateMachine may be null. Capture current state only if available.
+    const currentState = ctx.stateMachine?.currentState ?? "IDLE";
+
+    // --- Universal processing (all modes including plan) ---
+
+    // Subagent end logging, usage accrual, and monitor reset should ALWAYS run,
+    // even in plan mode. Previously, the plan-mode early return skipped these,
+    // producing missing subagent_end events, token accrual gaps, and stale monitors.
+    if (toolName === "subagent") {
+      const durationMs = ctx.subagentMonitor.startTime !== null ? Date.now() - ctx.subagentMonitor.startTime : null;
+      const subUsage = extractSubagentUsage(details);
+
+      if (subUsage) {
+        ctx.tokenTracker.accrueSubagent(subUsage);
+      }
+
+      ctx.logEvent("subagent_end", {
+        agent: ctx.subagentMonitor.lastAgent ?? "unknown",
+        model: subUsage?.model ?? null,
+        durationMs,
+        tokenUsage: subUsage
+          ? {
+              input: subUsage.input,
+              output: subUsage.output,
+              cacheRead: subUsage.cacheRead,
+              cacheWrite: subUsage.cacheWrite,
+              cost: subUsage.cost,
+            }
+          : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        turns: subUsage?.turns ?? 0,
+        exitCode: subUsage?.exitCode ?? 0,
+        error: subUsage?.error ?? null,
+        outcome: (subUsage?.exitCode ?? 0) === 0 ? "success" : "error",
+        specId: ctx.activeSpecId,
+      });
+
+      ctx.subagentMonitor.startTime = null;
+      ctx.subagentMonitor.lastAgent = null;
+      ctx.subagentMonitor.running = false;
+      ctx.subagentMonitor.activity = null;
+      if (ctx.subagentMonitor.widgetTimer) {
+        clearInterval(ctx.subagentMonitor.widgetTimer);
+        ctx.subagentMonitor.widgetTimer = null;
+      }
+      ctx.refreshSubagentWidget();
+
+      // Show completion summary notification
+      const subDetails = details as {
+        results?: Array<{
+          agent: string;
+          task: string;
+          exitCode: number;
+          usage?: { turns?: number };
+          progress?: { durationMs?: number; toolCount?: number; tokens?: number; status?: string };
+          progressSummary?: { durationMs?: number; toolCount?: number; tokens?: number };
+        }>;
+        mode?: string;
+      } | null;
+
+      if (subDetails?.results?.length) {
+        for (const r of subDetails.results) {
+          const prog = r.progress ?? r.progressSummary;
+          const duration = prog?.durationMs ?? 0;
+          const toolCount = prog?.toolCount ?? 0;
+          const turns = r.usage?.turns;
+          const tokens = prog?.tokens ?? 0;
+          const statusIcon = r.exitCode === 0 ? "✓" : "✗";
+          const taskBrief = r.task.length > 60 ? `${r.task.slice(0, 60)}…` : r.task;
+
+          const stats: string[] = [];
+          if (toolCount > 0) stats.push(`${toolCount} tool${toolCount !== 1 ? "s" : ""}`);
+          if (turns) stats.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
+          if (tokens > 0) stats.push(`${formatTokenCount(tokens)} tok`);
+          if (duration > 0) stats.push(formatDurationMs(duration));
+
+          const summary = `${statusIcon} ${r.agent} ${stats.length > 0 ? `· ${stats.join(" · ")}` : ""} — ${taskBrief.replace(/\n/g, " ")}`;
+          ctx.sessionCtx?.ui.notify(summary, r.exitCode === 0 ? "info" : "error");
+        }
+      }
+
+      // --- FSM-specific subagent processing continues below after plan-mode check ---
+    }
+
+    // --- Plan-mode exit: skip all FSM-specific processing ---
+    // Universal subagent processing (end logging, usage accrual, monitor reset) has already run above.
+    if (isPlanMode) {
+      await ctx.persistState();
+      ctx.refreshUI();
+      return undefined;
+    }
+
+    // --- FSM-specific processing (TDD and Light modes only) ---
+    // All code below is FSM-specific and should NOT run in plan mode.
 
     // Log lifecycle_start on IDLE → SPEC_WORK transitions
     if (toolName === "pi_coder_advance_fsm" && currentState === "SPEC_WORK" && ctx.tokenTracker.lifecycleStartTime === null) {
@@ -214,8 +385,53 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           }
         } else {
           ctx.stateMachine!.transition("TDD_GREEN_WRITE");
+          const greenRetries = ctx.stateMachine!.getRetryCounter("green_retries");
           ctx.tokenTracker.emitStateUsageAndTransition("TDD_GREEN_VALIDATE", "TDD_GREEN_WRITE", ctx.activeSpecId);
-          transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Tests still failing. You are now in TDD_GREEN_WRITE. Delegate to pi-coder.implementor again with clearer instructions. Do NOT call pi_coder_advance_fsm yet.";
+
+          ctx.logEvent("green_retry", {
+            retryCount: greenRetries,
+            specId: ctx.activeSpecId,
+            unitName: ctx.stateMachine!.currentUnitName,
+          });
+
+          const maxRetries = ctx.config.retryEscalation.maxRetries;
+          const enrichedThreshold = ctx.config.retryEscalation.enrichedSteerThreshold;
+          const replanThreshold = ctx.config.retryEscalation.replanThreshold;
+
+          // Hard block at max retries — force user intervention
+          if (greenRetries >= maxRetries) {
+            ctx.stateMachine!.transition("BLOCKED");
+            ctx.tokenTracker.emitStateUsageAndTransition("TDD_GREEN_WRITE", "BLOCKED", ctx.activeSpecId);
+            ctx.logEvent("green_retry_blocked", {
+              retryCount: greenRetries,
+              maxRetries,
+              specId: ctx.activeSpecId,
+              unitName: ctx.stateMachine!.currentUnitName,
+            });
+            notify(ctx.config, "blocked", "Pi Coder · 🔴 GREEN Retry Limit", `Max GREEN retries (${maxRetries}) exceeded on spec ${ctx.activeSpecId ?? "unknown"} — user intervention required`);
+            transitionSteer = `\n\n🔴 HARD BLOCK: GREEN retry limit reached (${greenRetries} attempts of ${maxRetries} max). The FSM is now in BLOCKED state. The implementor has been unable to make the tests pass after ${greenRetries} attempts. This requires human intervention — review the implementation and test failures, then decide how to proceed.`;
+          } else if (greenRetries >= replanThreshold) {
+            // REPLAN intervention — force strategic analysis
+            ctx.logEvent("green_retry_replan", {
+              retryCount: greenRetries,
+              replanThreshold,
+              specId: ctx.activeSpecId,
+              unitName: ctx.stateMachine!.currentUnitName,
+            });
+            transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Tests still failing (attempt ${greenRetries + 1} of ${maxRetries}). STRATEGY INTERVENTION REQUIRED.\n\nYou have attempted GREEN implementation ${greenRetries + 1} times without success. Blind iteration is not working. BEFORE delegating to pi-coder.implementor again, you MUST:\n\n1. READ the full implementation file(s) and test file(s) related to this unit\n2. ANALYZE why the tests are still failing — articulate the specific gap between the implementation and the test expectations\n3. FORMULATE a fresh strategy — consider whether the approach is fundamentally wrong (e.g., wrong state management pattern, missing hook, incorrect data flow)\n4. ONLY THEN delegate to pi-coder.implementor with the new strategy clearly explained in the brief\n\nDo NOT simply re-delegate with 'clearer instructions' — that has not worked ${greenRetries} times. Change the approach fundamentally.`;
+          } else if (greenRetries >= enrichedThreshold) {
+            // Enriched steer — include failure context
+            ctx.logEvent("green_retry_enriched", {
+              retryCount: greenRetries,
+              enrichedThreshold,
+              specId: ctx.activeSpecId,
+              unitName: ctx.stateMachine!.currentUnitName,
+            });
+            transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Tests still failing (attempt ${greenRetries + 1} of ${maxRetries}). You are now in TDD_GREEN_WRITE.\n\nPrevious attempts have not resolved the failures. When delegating to pi-coder.implementor:\n- Include the SPECIFIC failing test names and assertion errors from the test output above\n- Focus the implementor on ONE failing test at a time\n- If DOM/UI tests are failing, emphasize checking the component tree and data flow before rendering\n- Do NOT repeat the same approach that failed previously`;
+          } else {
+            // Standard steer (current behavior)
+            transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Tests still failing. You are now in TDD_GREEN_WRITE. Delegate to pi-coder.implementor again with clearer instructions. Do NOT call pi_coder_advance_fsm yet.";
+          }
         }
       }
 
@@ -325,49 +541,18 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
       }
     }
 
-    // Handle subagent completion results
+    // Handle subagent completion results (FSM-specific processing)
+    // Universal subagent processing (end logging, usage accrual, monitor reset, completion notification)
+    // is handled above in the universal processing block, BEFORE the plan-mode exit.
+    // This block contains ONLY FSM-specific processing (auto-advance, review verdict extraction, etc.)
     if (toolName === "subagent") {
       const previousState = currentState;
       let transitionTrigger: FSMTrigger | null = null;
+      let autoAdvanced = false;
 
-      const durationMs = ctx.subagentMonitor.startTime !== null ? Date.now() - ctx.subagentMonitor.startTime : null;
+      // Re-extract subagent details for FSM-specific use
+      // (these were extracted in the universal block above but are out of scope here)
       const subUsage = extractSubagentUsage(details);
-
-      if (subUsage) {
-        ctx.tokenTracker.accrueSubagent(subUsage);
-      }
-
-      ctx.logEvent("subagent_end", {
-        agent: ctx.subagentMonitor.lastAgent ?? "unknown",
-        model: subUsage?.model ?? null,
-        durationMs,
-        tokenUsage: subUsage
-          ? {
-              input: subUsage.input,
-              output: subUsage.output,
-              cacheRead: subUsage.cacheRead,
-              cacheWrite: subUsage.cacheWrite,
-              cost: subUsage.cost,
-            }
-          : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-        turns: subUsage?.turns ?? 0,
-        exitCode: subUsage?.exitCode ?? 0,
-        error: subUsage?.error ?? null,
-        outcome: (subUsage?.exitCode ?? 0) === 0 ? "success" : "error",
-        specId: ctx.activeSpecId,
-      });
-
-      ctx.subagentMonitor.startTime = null;
-      ctx.subagentMonitor.lastAgent = null;
-      ctx.subagentMonitor.running = false;
-      ctx.subagentMonitor.activity = null;
-      if (ctx.subagentMonitor.widgetTimer) {
-        clearInterval(ctx.subagentMonitor.widgetTimer);
-        ctx.subagentMonitor.widgetTimer = null;
-      }
-      ctx.refreshSubagentWidget();
-
-      // Show completion summary notification
       const subDetails = details as {
         results?: Array<{
           agent: string;
@@ -376,30 +561,50 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           usage?: { turns?: number };
           progress?: { durationMs?: number; toolCount?: number; tokens?: number; status?: string };
           progressSummary?: { durationMs?: number; toolCount?: number; tokens?: number };
+          finalOutput?: string;
+          messages?: Array<{ role: string; content: string | Array<unknown> }>;
         }>;
         mode?: string;
       } | null;
 
-      if (subDetails?.results?.length) {
-        for (const r of subDetails.results) {
-          const prog = r.progress ?? r.progressSummary;
-          const duration = prog?.durationMs ?? 0;
-          const toolCount = prog?.toolCount ?? 0;
-          const turns = r.usage?.turns;
-          const tokens = prog?.tokens ?? 0;
-          const statusIcon = r.exitCode === 0 ? "✓" : "✗";
-          const taskBrief = r.task.length > 60 ? `${r.task.slice(0, 60)}…` : r.task;
+      // Auto-advance: TDD_RED_WRITE → TDD_RED_VALIDATE after implementor completes successfully.
+      // The only valid transition from TDD_RED_WRITE is TDD_RED_VALIDATE, so there's no ambiguity.
+      // This eliminates the manual advance step where LLMs most commonly make FSM errors.
+      const subAgentName = subDetails?.results?.[0]?.agent ?? "";
+      if (
+        ctx.piCoderMode === "tdd" &&
+        previousState === "TDD_RED_WRITE" &&
+        subAgentName.includes("implementor") &&
+        (subUsage?.exitCode ?? 0) === 0
+      ) {
+        ctx.stateMachine!.transition("TDD_RED_VALIDATE");
+        ctx.tokenTracker.emitStateUsageAndTransition("TDD_RED_WRITE", "TDD_RED_VALIDATE", ctx.activeSpecId);
+        transitionTrigger = "auto_implementor_complete";
+        autoAdvanced = true;
+        ctx.logEvent("fsm_transition", {
+          from: "TDD_RED_WRITE",
+          to: "TDD_RED_VALIDATE",
+          trigger: "auto_implementor_complete",
+          event: "tests_written",
+          loopCount: ctx.stateMachine!.loopCount,
+          specId: ctx.activeSpecId,
+        });
+        ctx.nudgeEngine.reset(ctx.stateMachine!.currentState);
+        await ctx.persistState();
 
-          const stats: string[] = [];
-          if (toolCount > 0) stats.push(`${toolCount} tool${toolCount !== 1 ? "s" : ""}`);
-          if (turns) stats.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
-          if (tokens > 0) stats.push(`${formatTokenCount(tokens)} tok`);
-          if (duration > 0) stats.push(formatDurationMs(duration));
-
-          const summary = `${statusIcon} ${r.agent} ${stats.length > 0 ? `· ${stats.join(" · ")}` : ""} — ${taskBrief.replace(/\n/g, " ")}`;
-          ctx.sessionCtx?.ui.notify(summary, r.exitCode === 0 ? "info" : "error");
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          textBlock.text += "\n\n✅ AUTO-TRANSITION: Implementor completed RED phase. You are now in TDD_RED_VALIDATE. Run tests with pi_coder_run_tests to validate (expect tests to FAIL).";
         }
       }
+
+      // Auto-advance: TDD_GREEN_WRITE after implementor completes (from NEEDS_CHANGES shortcut or regular GREEN phase)
+      // Only auto-advance if the implementor was dispatched from NEEDS_CHANGES → TDD_GREEN_WRITE.
+      // The regular TDD_GREEN_WRITE → TDD_GREEN_VALIDATE path auto-advances on test results, not on implementor completion.
+      // NOTE: We do NOT auto-advance here for regular GREEN because the implementor may run tests
+      // as part of its work and the test result handler already manages GREEN_VALIDATE transitions.
+      // For the NEEDS_CHANGES shortcut, the implementor was dispatched while in TDD_GREEN_WRITE,
+      // so we auto-advance to TDD_GREEN_VALIDATE so the orchestrator runs validation.
 
       // Review result in REVIEWING state
       if (currentState === "REVIEWING") {
@@ -412,8 +617,43 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           }
           return undefined;
         })();
-        const reviewVerdict = extractReviewVerdict(details, rawContentText);
+
+        // Check subagent output capture buffer for intercom-delivered content.
+        // When the reviewer sends its result via pi-intercom, both the
+        // details.results[0].finalOutput and rawContent may be stripped.
+        // The capture buffer stores the last known finalOutput from
+        // tool_execution_update events, which fire BEFORE the intercom
+        // delivery strips it.
+        const specKey = ctx.activeSpecId ?? "_global";
+        const capturedOutput = subagentOutputCapture.get(specKey);
+
+        // Try extraction with primary sources first
+        let reviewVerdict = extractReviewVerdict(details, rawContentText);
+
+        // If primary extraction failed, try the captured output as a last resort
+        // Wrap the captured string in a Details-shaped object so extractReviewVerdict()
+        // can find it via the results[0].finalOutput path
+        if (!reviewVerdict && capturedOutput) {
+          reviewVerdict = extractReviewVerdict({
+            mode: "single",
+            results: [{ finalOutput: capturedOutput }],
+          });
+          if (reviewVerdict) {
+            ctx.logEvent("verdict_extraction_captured", {
+              source: "subagent_output_capture",
+              specId: ctx.activeSpecId,
+              verdict: reviewVerdict.verdict,
+            });
+          }
+          // Clean up capture after use
+          subagentOutputCapture.delete(specKey);
+        }
+
         if (reviewVerdict) {
+          // Reset verdict extraction failure counter on success
+          const specKey = ctx.activeSpecId ?? "_global";
+          verdictExtractionFailures.delete(specKey);
+
           ctx.logEvent("review_result", {
             verdict: reviewVerdict.verdict,
             issues: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issues : undefined,
@@ -438,7 +678,6 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
             ctx.stateMachine!.setEvidence("non_functional_classified");
           }
 
-          const nextState = ctx.piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
           let reclassificationGuidance = "";
           if (ctx.piCoderMode === "tdd" && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
             reclassificationGuidance = " If the reviewer flagged a direct unit as needing TDD, re-save the spec with that unit's approach changed to 'tdd', present the change to the user via interview, and proceed with a full RED/GREEN cycle.";
@@ -446,10 +685,10 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off)."
             : ctx.piCoderMode === "light" && reviewVerdict.verdict === "needs_changes"
-              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}. You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
+              ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
               : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
-                ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix). You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
-                : `\n\n⚠️ AUTO-TRANSITION: Review needs changes. You are now in NEEDS_CHANGES. Advance to ${nextState} for a full implementation cycle.${reclassificationGuidance}`;
+                ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix).${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
+                : `\n\n⚠️ AUTO-TRANSITION: Review needs changes.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Three paths: (1) Non-functional fix → advance to REVIEWING. (2) Functional fix with existing test coverage → advance to TDD_GREEN_WRITE. (3) Functional fix needing new tests → advance to TDD_RED_WRITE.${reclassificationGuidance}`;
 
           if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
             const textBlock = rawContent[0] as { type: "text"; text: string };
@@ -458,6 +697,26 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         } else {
           const diagnostics = extractDetailsDiagnostics(details);
           const receiptDetected = isIntercomReceipt(rawContent);
+          const specKey = ctx.activeSpecId ?? "_global";
+          const failCount = (verdictExtractionFailures.get(specKey) ?? 0) + 1;
+          verdictExtractionFailures.set(specKey, failCount);
+
+          // Diagnostic: log the full details.results[0] shape on the intercom
+          // receipt path. This helps determine whether the `messages` array is
+          // available as a fallback extraction source when finalOutput is stripped.
+          const intercomDebugMeta = receiptDetected ? (() => {
+            const r0 = (details as { results?: Array<Record<string, unknown>> })?.results?.[0];
+            return {
+              resultKeys: r0 ? Object.keys(r0) : [],
+              hasMessages: Array.isArray(r0?.messages),
+              messagesLength: Array.isArray(r0?.messages) ? (r0!.messages as unknown[]).length : 0,
+              hasFinalOutput: typeof r0?.finalOutput === "string",
+              hasProgress: !!r0?.progress,
+              hasUsage: !!r0?.usage,
+              exitCode: typeof r0?.exitCode === "number" ? r0.exitCode : null,
+              error: typeof r0?.error === "string" ? r0.error : null,
+            };
+          })() : undefined;
 
           ctx.logEvent("verdict_extraction_failed", {
             fsmState: ctx.stateMachine?.currentState ?? "N/A",
@@ -466,34 +725,101 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
             textLength: diagnostics.textLength,
             firstHundredChars: diagnostics.firstHundredChars,
             intercomReceiptDetected: receiptDetected,
+            consecutiveFailures: failCount,
+            maxRetries: MAX_VERDICT_EXTRACTION_RETRIES,
+            specId: ctx.activeSpecId,
+            // Additional diagnostic for intercom receipt path
+            intercomDebug: intercomDebugMeta,
           });
 
           if (receiptDetected) {
-            ctx.stateMachine!.setEvidence("review_completed");
+            // 4F: Do NOT set review_completed evidence here — the verdict is unknown.
+            // The intercom receipt confirms delivery but not the verdict content.
+            // Setting review_completed without a valid verdict would allow the
+            // REVIEWING → APPROVED guard to be satisfied without a real review.
+            // Instead, the orchestrator must determine the verdict and advance explicitly.
 
-            if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+            // After MAX_VERDICT_EXTRACTION_RETRIES, set degraded evidence to prevent deadloop
+            if (failCount >= MAX_VERDICT_EXTRACTION_RETRIES) {
+              verdictExtractionFailures.delete(specKey);
+              ctx.stateMachine!.setEvidence("review_completed");
+
+              ctx.logEvent("verdict_extraction_degraded", {
+                consecutiveFailures: failCount,
+                maxRetries: MAX_VERDICT_EXTRACTION_RETRIES,
+                specId: ctx.activeSpecId,
+                receiptPath: true,
+                message: "Max extraction retries reached (receipt path) — setting degraded review_completed",
+              });
+
+              if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+                const textBlock = rawContent[0] as { type: "text"; text: string };
+                textBlock.text +=
+                  `\n\n🔴 DEGRADED VERDICT: Verdict extraction has failed ${failCount} consecutive times (receipt path). ` +
+                  "The review_completed evidence has been set as a degraded fallback. " +
+                  "READ the reviewer's output above carefully, determine the verdict yourself, and " +
+                  "call pi_coder_advance_fsm with APPROVED or NEEDS_CHANGES. This is logged for audit.";
+              }
+            } else if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
               const textBlock = rawContent[0] as { type: "text"; text: string };
               textBlock.text +=
                 "\n\n⚠️ DEGRADED RECOVERY: Verdict extraction failed because the intercom receipt path " +
-                "stripped the reviewer's output (finalOutput is undefined). review_completed evidence has been " +
-                "set because the reviewer DID run (the intercom receipt confirms delivery). " +
-                "READ the reviewer's output above, determine the verdict yourself, and advance to " +
-                "APPROVED or NEEDS_CHANGES with pi_coder_advance_fsm. This recovery is logged.";
+                "stripped the reviewer's output (finalOutput is undefined). " +
+                "READ the reviewer's output above, determine the verdict yourself, and call " +
+                "pi_coder_advance_fsm with APPROVED or NEEDS_CHANGES (include the reviewOverride parameter " +
+                "with your determined verdict and justification). Do NOT skip review.";
             }
           } else {
-            if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
-              const textBlock = rawContent[0] as { type: "text"; text: string };
-              textBlock.text +=
-                "\n\n⚠️ AUTO-TRANSITION FAILED: Could not extract review verdict from subagent output. " +
-                "Re-delegate the reviewer with explicit instructions to use the ---VERDICT--- block format. " +
-                "Do NOT skip review by advancing manually — the REVIEWING → APPROVED guard requires review_completed evidence.";
+            // 4E: Auto-retry with 3-turn counter
+            if (failCount >= MAX_VERDICT_EXTRACTION_RETRIES) {
+              // Max retries reached — set degraded evidence and log
+              verdictExtractionFailures.delete(specKey);
+              ctx.stateMachine!.setEvidence("review_completed");
+
+              ctx.logEvent("verdict_extraction_degraded", {
+                consecutiveFailures: failCount,
+                maxRetries: MAX_VERDICT_EXTRACTION_RETRIES,
+                specId: ctx.activeSpecId,
+                message: "Max extraction retries reached — setting degraded review_completed",
+              });
+
+              if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+                const textBlock = rawContent[0] as { type: "text"; text: string };
+                textBlock.text +=
+                  `\n\n🔴 DEGRADED VERDICT: Verdict extraction has failed ${failCount} consecutive times. ` +
+                  "The review_completed evidence has been set as a degraded fallback. " +
+                  "READ the reviewer's output above carefully, determine the verdict yourself, and " +
+                  "advance to APPROVED or NEEDS_CHANGES with pi_coder_advance_fsm. This is logged for audit.";
+              }
+            } else if (failCount >= 2) {
+              // 2nd failure — stronger prompt telling the reviewer to use the block format
+              if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+                const textBlock = rawContent[0] as { type: "text"; text: string };
+                textBlock.text +=
+                  `\n\n⚠️ VERDICT EXTRACTION FAILED (attempt ${failCount} of ${MAX_VERDICT_EXTRACTION_RETRIES}): ` +
+                  "Could not extract review verdict from subagent output. " +
+                  "Re-delegate the reviewer with EXPLICIT instructions: 'You MUST end your output with a " +
+                  "---VERDICT--- block using exactly this format:\n" +
+                  "---VERDICT---\nVERDICT: approved OR needs_changes\nFIX_TYPE: functional OR non-functional\n" +
+                  "---END VERDICT---\n' " +
+                  "Do NOT skip review by advancing manually.";
+              }
+            } else {
+              // 1st failure — standard guidance
+              if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+                const textBlock = rawContent[0] as { type: "text"; text: string };
+                textBlock.text +=
+                  "\n\n⚠️ AUTO-TRANSITION FAILED: Could not extract review verdict from subagent output. " +
+                  "Re-delegate the reviewer with explicit instructions to use the ---VERDICT--- block format. " +
+                  "Do NOT skip review by advancing manually — the REVIEWING → APPROVED guard requires review_completed evidence.";
+              }
             }
           }
         }
       }
 
-      // Log FSM transition
-      if (ctx.stateMachine!.currentState !== previousState) {
+      // Log FSM transition (skip if auto-advance already logged to avoid duplicate)
+      if (!autoAdvanced && ctx.stateMachine!.currentState !== previousState) {
         ctx.logEvent("fsm_transition", {
           from: previousState,
           to: ctx.stateMachine!.currentState,

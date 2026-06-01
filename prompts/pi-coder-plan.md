@@ -57,3 +57,4 @@ Available tools:
 {{toolList}}
 
 {{referenceProjects}}
+{{dbCommands}}

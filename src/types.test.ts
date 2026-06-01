@@ -120,6 +120,11 @@ describe("PiCoderConfig", () => {
       level: "standard",
       maxLogFiles: 10,
     },
+    retryEscalation: {
+      maxRetries: 10,
+      enrichedSteerThreshold: 4,
+      replanThreshold: 7,
+    },
   };
 
   it("should have a well-formed default config", () => {
@@ -239,6 +244,11 @@ describe("LoggingConfig", () => {
         enabled: true,
         level: "standard",
         maxLogFiles: 10,
+      },
+      retryEscalation: {
+        maxRetries: 10,
+        enrichedSteerThreshold: 4,
+        replanThreshold: 7,
       },
     };
     assert.strictEqual(config.logging.enabled, true);

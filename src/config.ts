@@ -6,7 +6,7 @@
  * and auto-detecting test commands from package.json.
  */
 
-import type { PiCoderConfig, TestCommands } from "./types.ts";
+import type { PiCoderConfig, TestCommands, DbCommandsConfig } from "./types.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join, isAbsolute, resolve } from "node:path";
 
@@ -43,6 +43,11 @@ export const DEFAULT_CONFIG: PiCoderConfig = {
   },
   notifications: {
     enabled: false,
+  },
+  retryEscalation: {
+    maxRetries: 10,
+    enrichedSteerThreshold: 4,
+    replanThreshold: 7,
   },
 };
 
@@ -105,6 +110,18 @@ export function validateConfig(cfg: PiCoderConfig): ConfigValidationResult {
     console.warn(`⚠️ pi-coder: branchPrefix must be a non-empty string, got ${JSON.stringify(cfg.branchPrefix)} — defaulting to "pi-coder/"`);
     cfg = { ...cfg, branchPrefix: "pi-coder/" };
   }
+  // Validate retryEscalation thresholds
+  const re = cfg.retryEscalation;
+  if (
+    typeof re?.maxRetries !== "number" || re.maxRetries < 1 ||
+    typeof re?.enrichedSteerThreshold !== "number" || re.enrichedSteerThreshold < 1 ||
+    typeof re?.replanThreshold !== "number" || re.replanThreshold < 1 ||
+    !(re.enrichedSteerThreshold < re.replanThreshold && re.replanThreshold < re.maxRetries)
+  ) {
+    warnings.push({ field: "retryEscalation", value: re, fix: "defaulted to maxRetries=10, enrichedSteerThreshold=4, replanThreshold=7" });
+    console.warn(`⚠️ pi-coder: retryEscalation thresholds must be positive integers with enrichedSteerThreshold < replanThreshold < maxRetries, got ${JSON.stringify(re)} — using defaults`);
+    cfg = { ...cfg, retryEscalation: { maxRetries: 10, enrichedSteerThreshold: 4, replanThreshold: 7 } };
+  }
   return { config: cfg, warnings };
 }
 
@@ -153,7 +170,7 @@ export function loadConfig(cwd: string): ConfigValidationResult {
         parsed.referenceProjects = Object.keys(resolved).length > 0 ? resolved : undefined;
       }
 
-      return validateConfig({ ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) } });
+      return validateConfig({ ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) }, retryEscalation: { ...DEFAULT_CONFIG.retryEscalation, ...(parsed.retryEscalation ?? {}) } });
     }
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -234,4 +251,52 @@ export function detectTestCommands(cwd: string): TestCommands {
     // Fall through
   }
   return { unit: "npm test" };
+}
+
+// ---------------------------------------------------------------------------
+// DB Stack Detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-detect the database stack and inspection commands from the project's package.json.
+ * Checks for known DB dependencies and returns a DbCommandsConfig with pre-filled
+ * commands for the detected stack, or null if no DB stack is detected.
+ *
+ * Detection checks package.json dependencies AND devDependencies for:
+ * - @supabase/supabase-js → supabase
+ * - @prisma/client → prisma
+ * - drizzle-orm → drizzle
+ * - pg / better-pg / postgres → raw-pg
+ * - mysql2 → raw-mysql
+ * - better-sqlite3 → raw-sqlite
+ */
+export function detectDbStack(cwd: string): DbCommandsConfig | null {
+  const pkgPath = join(cwd, "package.json");
+  try {
+    if (!existsSync(pkgPath)) return null;
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+    if (deps["@supabase/supabase-js"]) {
+      return { stack: "supabase" };
+    }
+    if (deps["@prisma/client"]) {
+      return { stack: "prisma" };
+    }
+    if (deps["drizzle-orm"]) {
+      return { stack: "drizzle" };
+    }
+    if (deps["pg"] || deps["better-pg"] || deps["postgres"]) {
+      return { stack: "raw-pg" };
+    }
+    if (deps["mysql2"]) {
+      return { stack: "raw-mysql" };
+    }
+    if (deps["better-sqlite3"]) {
+      return { stack: "raw-sqlite" };
+    }
+  } catch {
+    // Fall through
+  }
+  return null;
 }

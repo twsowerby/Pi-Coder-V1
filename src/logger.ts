@@ -54,7 +54,15 @@ export type LogEventType =
   | "unit_end"
   | "config_validation"
   | "turn_usage"
-  | "fsm_state_usage";
+  | "fsm_state_usage"
+  | "green_retry"
+  | "green_retry_enriched"
+  | "green_retry_replan"
+  | "green_retry_blocked"
+  | "verdict_extraction_degraded"
+  | "verdict_extraction_captured"
+  | "subagent_output_capture"
+  | "plan_mode_summary";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -93,6 +101,18 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   turn_usage: "standard",
   fsm_state_usage: "standard",
 
+  // P0: GREEN retry escalation events
+  green_retry: "standard",
+  green_retry_enriched: "standard",
+  green_retry_replan: "standard",
+  green_retry_blocked: "minimal",
+
+  // P1: Verdict extraction degraded
+  verdict_extraction_degraded: "standard",
+  verdict_extraction_captured: "standard",
+  subagent_output_capture: "verbose",
+  plan_mode_summary: "standard",
+
   // Verbose: + nudge
   nudge_fired: "verbose",
   nudge_escalation: "verbose",
@@ -109,6 +129,7 @@ export type FSMTrigger =
   | "auto_git_checkpoint"
   | "auto_git_merge"
   | "auto_review_verdict"
+  | "auto_implementor_complete"
   | "manual_advance_fsm"
   | "auto_subagent_complete"
   | "fsm_reset";

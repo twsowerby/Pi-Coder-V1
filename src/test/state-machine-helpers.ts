@@ -38,6 +38,11 @@ export function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
     notifications: {
       enabled: false,
     },
+    retryEscalation: {
+      maxRetries: 10,
+      enrichedSteerThreshold: 4,
+      replanThreshold: 7,
+    },
     ...overrides,
   };
 }

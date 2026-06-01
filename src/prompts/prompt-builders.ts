@@ -8,7 +8,7 @@
  */
 
 import type { PiCoderConfig, IStateMachine } from "../types.ts";
-import { formatReferenceProjects, formatTestSuites } from "./formatters.ts";
+import { formatReferenceProjects, formatTestSuites, formatDbCommands } from "./formatters.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -147,7 +147,8 @@ Available tools:
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
-    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands))
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
 }
 
 /**
@@ -176,11 +177,12 @@ function buildOrchestratorPrompt(
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
-    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands))
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
 }
 
 /**
- * Build the light mode system prompt.
+ * Build the light mode system prompt..
  * Simplified: no FSM, no spec workflow, just delegation + tests + knowledge.
  * Reads from prompts/pi-coder-light.md if available, otherwise uses a built-in fallback.
  */
@@ -241,7 +243,8 @@ Available tools:
     .replace("{{interviewTimeout}}", String(config.interviewTimeout))
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
-    .replace("{{testSuites}}", formatTestSuites(config.testCommands));
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands))
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
 }
 
 // ---------------------------------------------------------------------------

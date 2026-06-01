@@ -5,7 +5,7 @@
  * Switches pi-coder mode (plan/light/tdd/off).
  */
 
-import type { PiCoderMode } from "../types.ts";
+import type { PiCoderMode, FSMState } from "../types.ts";
 import { StateMachine } from "../state-machine.ts";
 import { LightStateMachine } from "../light-state-machine.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
@@ -48,6 +48,19 @@ export function registerModeCommand(ctx: HandlerContext): void {
 
       // Handle mode switch FSM logic
       if (selectedMode !== current) {
+        // When leaving plan mode, log summary
+        if (current === "plan") {
+          const planTokens = ctx.tokenTracker.snapshotLifecycleTokens();
+          ctx.logEvent("plan_mode_summary", {
+            totalTokens: planTokens,
+            phaseTokens: ctx.tokenTracker.snapshotPhaseTokens(),
+            durationMs: ctx.tokenTracker.lifecycleStartTime !== null ? Date.now() - ctx.tokenTracker.lifecycleStartTime : null,
+            specId: ctx.activeSpecId,
+          });
+          // Reset lifecycle tracking for TDD/light
+          ctx.tokenTracker.resetLifecycleTracking();
+        }
+
         // When leaving a mode with an active FSM, pause the spec
         if (ctx.stateMachine && ctx.stateMachine!.currentState !== "IDLE") {
           ctx.logEvent("mode_switch", {
@@ -80,6 +93,13 @@ export function registerModeCommand(ctx: HandlerContext): void {
 
       // Set mode first so downstream code uses the new value
       ctx.piCoderMode = selectedMode;
+
+      // When entering plan mode, initialize lifecycle tracking
+      if (selectedMode === "plan") {
+        ctx.tokenTracker.lifecycleStartTime = Date.now();
+        ctx.tokenTracker.resetLifecycleTracking();
+        ctx.tokenTracker.setAccrualState("PLAN" as FSMState);
+      }
 
       // Reset session state on mode switch
       ctx.tokenTracker.sessionTurnCount = 0;

@@ -37,6 +37,11 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
       level: "standard",
       maxLogFiles: 10,
     },
+    retryEscalation: {
+      maxRetries: 10,
+      enrichedSteerThreshold: 4,
+      replanThreshold: 7,
+    },
     ...overrides,
   };
 }
@@ -139,6 +144,10 @@ function createMockTddRunner() {
       },
       validateGreenPhase(_result: TestRunResult) {
         return greenValidation;
+      },
+      parseFailures(_output: string) {
+        // Best-effort mock — returns empty array by default
+        return [] as import("./types.ts").TestFailure[];
       },
     },
   };
@@ -1435,6 +1444,110 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
     // based on the direct approach when exiting GREEN_VALIDATE
     // We can't check a negative, but the isGreenExit guard ensures
     // the auto-set never fires from this state
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7: Validation output in pi_coder_run_tests (Proposal 2A)
+// ---------------------------------------------------------------------------
+
+describe("Phase 7: pi_coder_run_tests validation output", () => {
+  it("includes test output in GREEN validation response (even on failure)", async () => {
+    const { tools, sm, mockTdd, setActiveSpec } = setupMocks();
+    advanceToState(sm, "TDD_GREEN_VALIDATE");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // Test fails → GREEN validation fails
+    mockTdd.setGreenValidation({ valid: false, reason: "GREEN_FAILED" });
+    mockTdd.setRunTestsResult({ exitCode: 1, output: "FAIL src/auth.test.ts > should login\nError: invalid credentials", passed: 3, failed: 1, timedOut: false });
+
+    const result = await executeTool(tools, "pi_coder_run_tests", {});
+    const content = (result.content as Array<{ text: string }>)[0].text;
+
+    // Must include the validation verdict
+    assert.ok(content.includes("GREEN validation: FAILED"), `Should include validation verdict, got: ${content}`);
+    // Must ALSO include the raw test output so the implementor can see what to fix
+    assert.ok(content.includes("FAIL src/auth.test.ts"), `Should include raw test output, got: ${content}`);
+    assert.ok(content.includes("invalid credentials"), `Should include error details, got: ${content}`);
+  });
+
+  it("includes test output in RED validation response (on tautology)", async () => {
+    const { tools, sm, mockTdd, setActiveSpec } = setupMocks();
+    advanceToState(sm, "TDD_RED_VALIDATE");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // Tests pass unexpectedly → RED tautology
+    mockTdd.setRedValidation({ valid: false, reason: "RED_TAUTOLOGY" });
+    mockTdd.setRunTestsResult({ exitCode: 0, output: "Tests  5 passed", passed: 5, failed: 0, timedOut: false });
+
+    const result = await executeTool(tools, "pi_coder_run_tests", {});
+    const content = (result.content as Array<{ text: string }>)[0].text;
+
+    // Must include the RED tautology verdict
+    assert.ok(content.includes("RED validation: FAILED"), `Should include RED_TAUTOLOGY, got: ${content}`);
+    // Must also include the test output
+    assert.ok(content.includes("Tests  5 passed"), `Should include test output, got: ${content}`);
+  });
+
+  it("includes test output in GREEN validation response (on success)", async () => {
+    const { tools, sm, mockTdd, setActiveSpec } = setupMocks();
+    advanceToState(sm, "TDD_GREEN_VALIDATE");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // Tests pass → GREEN validation passes
+    mockTdd.setGreenValidation({ valid: true });
+    mockTdd.setRunTestsResult({ exitCode: 0, output: "Tests  8 passed", passed: 8, failed: 0, timedOut: false });
+
+    const result = await executeTool(tools, "pi_coder_run_tests", {});
+    const content = (result.content as Array<{ text: string }>)[0].text;
+
+    // Must include the validation verdict
+    assert.ok(content.includes("GREEN validation: PASSED"), `Should include PASS verdict, got: ${content}`);
+    // Must also include the test output
+    assert.ok(content.includes("Tests  8 passed"), `Should include test output, got: ${content}`);
+  });
+
+  it("includes parsedFailures in details when validation fails", async () => {
+    const { tools, sm, mockTdd, setActiveSpec } = setupMocks();
+    advanceToState(sm, "TDD_GREEN_VALIDATE");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // Test fails → GREEN validation fails
+    mockTdd.setGreenValidation({ valid: false, reason: "GREEN_FAILED" });
+    mockTdd.setRunTestsResult({ exitCode: 1, output: "FAIL src/auth.test.ts > should login\nError: invalid credentials", passed: 3, failed: 1, timedOut: false });
+
+    // Override mock to return real failures
+    const originalParseFailures = mockTdd.tddRunner.parseFailures;
+    mockTdd.tddRunner.parseFailures = (_output: string) => {
+      return [{ testFile: "src/auth.test.ts", testName: "should login", errorMessage: "invalid credentials" } as import("./types.ts").TestFailure];
+    };
+
+    const result = await executeTool(tools, "pi_coder_run_tests", {});
+    const details = result.details as Record<string, unknown>;
+
+    // Should include parsedFailures in the details
+    assert.ok(Array.isArray(details.parsedFailures), "Should include parsedFailures array");
+    assert.strictEqual(details.parsedFailures.length, 1, "Should have one parsed failure");
+    assert.strictEqual((details.parsedFailures as Array<{testFile: string}>)[0].testFile, "src/auth.test.ts");
+
+    // Restore
+    mockTdd.tddRunner.parseFailures = originalParseFailures;
+  });
+
+  it("does NOT include parsedFailures when validation passes", async () => {
+    const { tools, sm, mockTdd, setActiveSpec } = setupMocks();
+    advanceToState(sm, "TDD_GREEN_VALIDATE");
+    setActiveSpec("test-spec"); sm.setEvidence("spec_saved"); sm.setEvidence("spec_user_approved");
+
+    // Tests pass → GREEN validation passes
+    mockTdd.setGreenValidation({ valid: true });
+    mockTdd.setRunTestsResult({ exitCode: 0, output: "Tests  5 passed", passed: 5, failed: 0, timedOut: false });
+
+    const result = await executeTool(tools, "pi_coder_run_tests", {});
+    const details = result.details as Record<string, unknown>;
+
+    // Should NOT include parsedFailures when validation passes
+    assert.strictEqual(details.parsedFailures, undefined, "Should not include parsedFailures on success");
   });
 });
 

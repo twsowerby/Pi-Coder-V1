@@ -21,7 +21,7 @@ import { registerCloseCommand } from "../src/commands/close.ts";
 import { registerLogsCommand } from "../src/commands/logs.ts";
 import { registerBeforeAgentStartHandler } from "../src/handlers/before-agent-start.ts";
 import { registerToolCallHandler } from "../src/handlers/tool-call.ts";
-import { registerToolResultHandler } from "../src/handlers/tool-result.ts";
+import { registerToolResultHandler, registerSubagentOutputCapture } from "../src/handlers/tool-result.ts";
 import { registerSessionStartHandler } from "../src/handlers/session-start.ts";
 import { registerModeCommand } from "../src/commands/mode.ts";
 import { registerInitCommand } from "../src/commands/init.ts";
@@ -336,8 +336,12 @@ export async function persistState(): Promise<void> {
     };
     await globalStatePersistence.save(globalState);
 
-    // Also persist per-spec state if a spec is active
-    if (activeSpecId && stateMachine) {
+    // Also persist per-spec state if a spec is active AND spec has been saved.
+    // Fix B: Don't create spec directories (via mkdir in SpecStatePersistence.save)
+    // before spec.md exists — this prevents orphaned timestamp-prefixed directories
+    // when the LLM's short ID later creates a different directory.
+    const hasSpecSaved = stateMachine?.getEvidence().includes("spec_saved") ?? false;
+    if (activeSpecId && stateMachine && hasSpecSaved) {
       const now = new Date().toISOString();
       const specState: SpecState = {
         version: 1,
@@ -347,6 +351,7 @@ export async function persistState(): Promise<void> {
         evidence: stateMachine.getEvidence(),
         currentUnitName: stateMachine.currentUnitName,
         createdAt: specStateCreatedAt ?? now,
+        specId: activeSpecId,
         updatedAt: now,
       };
       await SpecStatePersistence.save(
@@ -554,6 +559,12 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
   // tool_result handler (extracted to src/handlers/tool-result.ts)
   registerToolResultHandler(hctx);
+
+  // Subagent output capture — monitors tool_execution_update events to
+  // capture reviewer finalOutput before pi-intercom strips it.
+  // This is a fallback for verdict extraction when the intercom receipt
+  // path leaves both finalOutput and rawContent empty.
+  registerSubagentOutputCapture(hctx);
 
   // =====================================================================
   // Spec 10: Commands

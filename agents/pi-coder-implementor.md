@@ -42,6 +42,16 @@ If no specific knowledge files are mentioned, list `.pi-coder/knowledge/` and ch
 
 **For UI work specifically:** Check for `design_system.md` in knowledge. This file documents the project's component library, spacing, colors, and interaction patterns. **Follow existing component patterns precisely.** Do not invent new UI patterns — if no pattern exists for what you need, implement the minimum and note it in your output. The spec should specify which existing components to reuse; if it doesn't, look them up before writing code.
 
+## Testing UI Components
+
+When writing tests for UI components (React, Vue, etc.):
+
+- **Test the contract, not the DOM structure.** Verify that given props X, the component renders expected content (text, accessibility labels). Avoid asserting on CSS classes, element ordering, or internal DOM structure — these are implementation details that change on refactoring.
+- **Test interactions, not implementations.** Simulate user events (click, type, submit) and verify the observable outcome (callback fired, state changed, new content rendered).
+- **Extract and test hook logic separately.** If a component uses custom hooks with complex logic, test the hook independently with `renderHook` or equivalent. The component test should focus on rendering + user interaction.
+- **Use accessible queries.** Prefer `getByRole`, `getByLabelText`, `getByText` over `getByTestId` or `getByClassName`. Accessible queries survive refactoring; CSS/test-id queries don't.
+- **Avoid snapshot tests for implementation.** Snapshots of full component trees are brittle — any styling change breaks them. Use snapshots only for stable serializations (e.g., API response shapes).
+
 **For RED phase specifically:**
 1. **Discover existing test files.** Before writing any test, run `find . -path ./node_modules -prune -o -name '*.test.*' -print -o -name '*.spec.*' -print | head -30` and `grep -r 'describe\|it(\|test(' <key-file-dirs>` to see what test structure already exists.
 2. **Read existing test files.** For any test file that tests the same module/area you're targeting, read it first. Understand the describe/it structure, the fixtures, and the patterns used.
@@ -86,3 +96,22 @@ Explain non-obvious choices. Why did you pick approach A over B? What tradeoff d
 
 **Notes:**
 Edge cases you encountered, risks you see, or follow-up items that are out of scope for this task. If you left something incomplete, say so explicitly.
+
+## Database Inspection
+
+If your task payload includes database inspection commands, **use them** to verify your assumptions before writing tests or implementation code. This is especially important when:
+
+- Writing tests that assert on database state (column values, constraints, relationships)
+- Implementing code that reads from or writes to specific tables
+- The task involves schema changes or new columns
+
+**When DB commands are provided:**
+1. **Before RED phase:** Run the schema inspection command to verify the tables and columns your tests will reference actually exist with the expected types and constraints
+2. **Before GREEN phase:** If a test fails unexpectedly, check the actual database state — the issue may be a schema mismatch rather than a logic error
+3. **Use sample data inspection** (replace `{table}` with actual table names) to understand what data exists — this helps write realistic test fixtures and avoid conflicts with existing data
+
+**Never run destructive commands** (DROP, TRUNCATE, DELETE without WHERE, UPDATE without WHERE). The inspection commands in your task payload are read-only by design. If you need to set up test data, use your test framework's fixtures or seed commands.
+
+**Never use full schema dump commands** (e.g. `supabase db dump`, `pg_dump`, `mysqldump`). These produce massive DDL output that wastes tokens and is mostly irrelevant. Always use targeted queries — inspect only the specific tables and columns your tests reference.
+
+If no DB commands are provided in your task payload, skip this section — work with the information available from the spec and existing code.

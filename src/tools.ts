@@ -60,7 +60,7 @@ const GIT_ACTION_ENUM = StringEnum([
 
 const PI_CODER_GIT_PARAMS = Type.Object({
   action: GIT_ACTION_ENUM,
-  branch: Type.Optional(Type.String({ description: "Branch name for checkout_branch" })),
+  branch: Type.Optional(Type.String({ description: "Branch stem name for checkout_branch (without the pi-coder/ prefix — it's added automatically)" })),
   message: Type.Optional(Type.String({ description: "Commit message for checkpoint" })),
 });
 
@@ -121,7 +121,7 @@ export function summarizeToolInput(toolName: string, input: unknown): Record<str
     case "pi_coder_git":
       return { action: inp.action };
     case "pi_coder_save_spec":
-      return { id: inp.id, title: inp.title };
+      return { slug: inp.slug, title: inp.title };
     case "pi_coder_read_spec":
       return { id: inp.id };
     case "subagent":
@@ -398,23 +398,37 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           lines.push(r.validation.valid
             ? `${phase} validation: PASSED — ${phase === "RED" ? "tests fail as expected" : "tests pass as expected"}`
             : `${phase} validation: FAILED — ${r.validation.reason ?? "unknown"}`);
+          // ALWAYS show test output — the orchestrator/implementor needs to see the details
+          // even when validation provides a summary verdict
+          if (r.testResult.output) {
+            lines.push("");
+            lines.push("```");
+            lines.push(r.testResult.output);
+            lines.push("```");
+          }
         } else {
+          // Informational test run (not in a VALIDATE state) — add structured framing
+          // so the LLM knows this is advisory, not a validation gate
           const passed = r.testResult.passed;
           const failed = r.testResult.failed;
+          const allPassed = r.testResult.exitCode === 0;
+
+          lines.push("📋 INFORMATIONAL TEST RUN (not a validation gate — no FSM effect)");
           if (passed !== null && failed !== null) {
-            lines.push(r.testResult.exitCode === 0
-              ? `Tests passed: ${passed} passed, ${failed} failed`
-              : `Tests failed: ${passed} passed, ${failed} failed (exit code ${r.testResult.exitCode})`);
+            lines.push(`Result: ${passed} passed, ${failed} failed (exit code ${r.testResult.exitCode})`);
           } else {
-            // Couldn't parse counts — include the raw output so the LLM can read it
-            lines.push(r.testResult.exitCode === 0
-              ? "Tests passed (exit code 0)"
-              : `Tests failed (exit code ${r.testResult.exitCode})`);
+            lines.push(allPassed
+              ? "Result: All tests passed (exit code 0)"
+              : `Result: Tests failed (exit code ${r.testResult.exitCode})`);
           }
+          lines.push(allPassed
+            ? "Status: ✅ ALL PASSING — ready to advance. Use pi_coder_advance_fsm to move to the next state."
+            : "Status: ❌ TESTS STILL FAILING — delegate to pi-coder.implementor to fix, then advance when ready.");
+
           // Always include test output — the LLM needs to see what failed
           if (r.testResult.output) {
             lines.push("");
-            lines.push("```" );
+            lines.push("```");
             lines.push(r.testResult.output);
             lines.push("```");
           }
@@ -443,6 +457,15 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Include the full test output from the first result
       if (firstResult.testResult.output) {
         details.testResult = firstResult.testResult;
+      }
+
+      // Parse structured failures for failed validation — available for
+      // auto-transition steer enrichment but not LLM-visible (raw output is)
+      if (firstResult.testResult.output && !firstResult.validation?.valid) {
+        const parsedFailures = tddRunner.parseFailures(firstResult.testResult.output);
+        if (parsedFailures.length > 0) {
+          details.parsedFailures = parsedFailures;
+        }
       }
 
       return {
@@ -474,8 +497,37 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // No FSM state check — knowledge can be updated in any state
       try {
         const path = knowledgeStore.upsert(params.filename, params.content);
+
+        // Auto-commit knowledge files when in post-merge states.
+        // After the merge, we're on main — uncommitted knowledge files
+        // would be left dangling. Commit them immediately.
+        const postMergeStates = new Set(["MERGING", "COMPLETE", "FINAL_APPROVAL"]);
+        if (postMergeStates.has(smRef.current.currentState)) {
+          try {
+            const result = await gitOps.commitKnowledge(params.filename);
+            if (result.success) {
+              return {
+                content: [{ type: "text" as const, text: `Knowledge persisted and committed: ${params.filename}\nPath: ${path}${result.ref ? `\nCommit: ${result.ref}` : ""}` }],
+                details: { success: true, path, autoCommitted: true, commitRef: result.ref },
+              };
+            }
+            // Commit failed — still return success for the knowledge save,
+            // but note the uncommitted state.
+            return {
+              content: [{ type: "text" as const, text: `Knowledge persisted: ${params.filename}\nPath: ${path}\n⚠️ Auto-commit failed: ${result.error}. Knowledge file is uncommitted.` }],
+              details: { success: true, path, autoCommitted: false, autoCommitError: result.error },
+            };
+          } catch {
+            // Auto-commit threw — knowledge is still saved, just not committed
+            return {
+              content: [{ type: "text" as const, text: `Knowledge persisted: ${params.filename}\nPath: ${path}\n⚠️ Auto-commit failed. Knowledge file is uncommitted.` }],
+              details: { success: true, path, autoCommitted: false },
+            };
+          }
+        }
+
         return {
-          content: [{ type: "text" as const, text: `Knowledge persisted: ${params.filename}` }],
+          content: [{ type: "text" as const, text: `Knowledge persisted: ${params.filename}\nPath: ${path}` }],
           details: { success: true, path },
         };
       } catch (err) {
@@ -503,11 +555,11 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     promptGuidelines: [
       "Save the spec after synthesizing research findings and before presenting for approval.",
       "Update the spec with the implementation plan before starting the TDD cycle.",
-      "The spec ID becomes the git branch name — keep it short and descriptive (e.g., user-auth).",
+      "The spec ID is automatically generated with a timestamp-prefix. Use the active spec ID shown in your system prompt. The slug parameter provides a descriptive suffix.",
       "Include ALL acceptance criteria, constraints, and key files — implementor only sees what you put here.",
     ],
     parameters: Type.Object({
-      id: Type.String({ description: "Spec ID — short, kebab-case identifier (e.g., user-auth). Becomes the git branch name." }),
+      slug: Type.String({ description: "Descriptive slug for the spec ID suffix (e.g., user-auth). The full spec ID is auto-generated with a timestamp prefix. If an active spec ID is already set (from advancing to SPEC_WORK), that ID is used and this field provides the descriptive suffix only." }),
       title: Type.String({ description: "Human-readable spec title" }),
       acceptanceCriteria: Type.Array(Type.String(), { description: "Specific, testable statements of what done looks like" }),
       constraints: Type.Array(Type.String(), { description: "Hard boundaries the implementation must respect" }),
@@ -525,8 +577,23 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       try {
+        // Fix A: Use the already-set activeSpecId (from generateSpecId on SPEC_WORK)
+        // as the canonical spec ID. Only generate a new one if none is set.
+        let specId: string;
+        if (activeSpecIdRef.current) {
+          // Active spec ID already set by advance_fsm → SPEC_WORK → generateSpecId()
+          // Use it — this preserves the timestamp-prefix naming convention.
+          specId = activeSpecIdRef.current;
+        } else {
+          // No active spec ID set (edge case: save_spec called before advance_fsm)
+          // Generate a proper timestamp-prefixed ID from the slug.
+          const existingSpecs = await specManager.listSpecs();
+          specId = generateSpecId(params.slug, existingSpecs);
+          setActiveSpecId(specId);
+        }
+
         const spec: SpecFile = {
-          id: params.id,
+          id: specId,
           title: params.title,
           acceptanceCriteria: params.acceptanceCriteria,
           constraints: params.constraints,
@@ -545,17 +612,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
         const path = await specManager.createSpec(spec);
 
-        // Set the active spec ID at the module level
-        if (activeSpecIdRef.current !== params.id) {
-          setActiveSpecId(params.id);
-        }
+        // specId is already set as activeSpecId — no need to re-assign
 
         // Set evidence flag — spec is saved
         smRef.current.setEvidence("spec_saved");
 
         return {
-          content: [{ type: "text" as const, text: `Spec saved: ${params.id}\nPath: ${path}\n\nAcceptance Criteria: ${params.acceptanceCriteria.length}\nConstraints: ${params.constraints.length}\nKey Files: ${params.keyFiles.length}${params.implementationPlan ? `\nImplementation Units: ${params.implementationPlan.length}` : ""}` }],
-          details: { success: true, id: params.id, path },
+          content: [{ type: "text" as const, text: `Spec saved: ${specId}\nPath: ${path}\n\nAcceptance Criteria: ${params.acceptanceCriteria.length}\nConstraints: ${params.constraints.length}\nKey Files: ${params.keyFiles.length}${params.implementationPlan ? `\nImplementation Units: ${params.implementationPlan.length}` : ""}` }],
+          details: { success: true, id: specId, path },
         };
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
@@ -583,6 +647,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "Read spec before debriefing the implementor — you need the exact ACs and key files for delegation.",
       "Read spec before review — the reviewer needs to know what was specified.",
       "Only read specs you need — don't read all specs at once.",
+      "Use the full timestamp-prefixed spec ID from your system prompt (e.g., 2026-05-29-1159-user-auth), not the short descriptive slug.",
     ],
     parameters: Type.Object({
       id: Type.String({ description: "Spec ID to read" }),
@@ -665,8 +730,9 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "TDD_GREEN_VALIDATE → TDD_RED_WRITE: Current unit passed. Advance to the next implementation unit's RED phase.",
       "TDD_GREEN_VALIDATE → REVIEWING: All units complete. Proceed to review.",
       "Any state → IDLE: Abort the current cycle. Use this to restart or unwind.",
-      "NEEDS_CHANGES → TDD_RED_WRITE (TDD mode): Review requires functional fixes. Start a new RED/GREEN cycle.",
-      "NEEDS_CHANGES → REVIEWING (TDD mode): Review requires non-functional fixes only (test fixes, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
+      "NEEDS_CHANGES → TDD_RED_WRITE (TDD mode): Functional fix needing new tests. Start a full RED/GREEN cycle to write a failing test first, then implement the fix.",
+      "NEEDS_CHANGES → REVIEWING (TDD mode): Non-functional fixes only (test cleanup, comments, refactoring). The evidence gate is normally satisfied by the auto-transition; if not, pass fixType=\"non-functional\" to manually set the evidence flag.",
+      "NEEDS_CHANGES → TDD_GREEN_WRITE (TDD mode): Functional fix with existing test coverage. The implementor applies the fix AND tightens existing assertions in one dispatch. Bypasses RED — existing tests serve as the regression check. Do NOT use if the fix needs new tests — use TDD_RED_WRITE instead.",
       "NEEDS_CHANGES → IMPLEMENTING (Light mode): Review requires functional fixes.",
       "NEEDS_CHANGES → REVIEWING (Light mode): Review requires fixes. No evidence gate in Light mode — advance directly after delegating implementor.",
       "REVIEWING → APPROVED: Requires review_completed evidence (set by auto-transition handler when reviewer returns verdict). If auto-transition failed AND degraded recovery didn't fire, use reviewOverride with the verdict you determined from reading the reviewer's output. This is audited — do not use routinely.",
@@ -885,7 +951,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           IMPLEMENTING: "Delegate to pi-coder.implementor to implement the spec. Run tests freely with pi_coder_run_tests to check progress.",
           REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
           APPROVED: "Advance to MERGING (if user already approved via interview) or FINAL_APPROVAL (for separate sign-off).",
-          NEEDS_CHANGES: "Delegate implementor for fix, then pi_coder_advance_fsm REVIEWING. Or pi_coder_advance_fsm to TDD_RED_WRITE (TDD) or IMPLEMENTING (Light) for full reimplementation. In TDD mode, if advancing to REVIEWING without evidence, pass fixType=\"non-functional\".",
+          NEEDS_CHANGES: "Delegate implementor to apply the fix. Then advance: (1) REVIEWING for non-functional fixes (pass fixType=\"non-functional\" if evidence gate not met), (2) TDD_GREEN_WRITE for functional fixes with existing test coverage, or (3) TDD_RED_WRITE for functional fixes needing new tests.",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
           MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",

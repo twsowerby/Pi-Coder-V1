@@ -94,6 +94,7 @@ TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE
 (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
 (NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) |
 (TDD_RED_VALIDATE → TDD_GREEN_WRITE | BLOCKED) → user intervention
+(GREEN retry limit: TDD_GREEN_WRITE → BLOCKED) → user intervention
 ```
 
 In Light mode, the FSM is simpler — IMPLEMENTING replaces all four TDD states:
@@ -443,6 +444,7 @@ The FSM **enforces invariants**, not just the orchestrator prompt. Before allowi
 | SPEC_WORK → SPEC_APPROVED | `spec_saved` + `spec_user_approved` | Cannot implement without a saved, user-approved spec |
 | TDD_RED_VALIDATE → TDD_GREEN_WRITE | `test_run_this_state` | Cannot skip RED validation — must actually run tests |
 | TDD_GREEN_VALIDATE → exits | `test_run_this_state` | Cannot skip GREEN validation — must actually run tests |
+| TDD_GREEN_WRITE → BLOCKED | (automatic on retry limit) | GREEN retry escalation prevents infinite loops |
 | NEEDS_CHANGES → REVIEWING (non-functional) | `non_functional_classified` | Cannot shortcut to re-review without reviewer classification |
 
 This prevents the LLM from shortcutting through validation states without executing tests, or advancing to implementation without user spec approval, or claiming a fix is non-functional without the reviewer's independent classification. The FSM is the single source of truth for process invariants.
@@ -459,6 +461,17 @@ When tests pass during the RED phase (RED tautology), the FSM no longer auto-tra
 2. **Block and recover** (`pi_coder_advance_fsm BLOCKED`) — the tests passing is genuinely problematic (tests are tautological or wrong). In BLOCKED, the orchestrator presents recovery options.
 
 The key insight: the invariant is "all behavior is tested," NOT "every test must fail before it passes." A verification test that passes immediately is still a valid test.
+
+### GREEN Retry Escalation
+
+When tests fail during GREEN validation (`TDD_GREEN_VALIDATE`), the FSM auto-transitions back to `TDD_GREEN_WRITE` so the implementor can try again. Previously, this loop could continue indefinitely with the same vague steer ("Tests still failing. Delegate again with clearer instructions."). Now, the retry counter triggers escalating intervention:
+
+1. **Standard** (retries 1–3) — Normal steer: delegate again with clearer instructions.
+2. **Enriched** (retries 4+) — Specific guidance: include failing test names and assertion errors from the output, focus on ONE test at a time, don't repeat failed approaches.
+3. **REPLAN** (retries 7+) — Forces strategic analysis: the orchestrator must READ the code, ANALYZE the gap, and FORMULATE a fresh approach before retrying. Blind iteration is explicitly blocked.
+4. **Hard block** (retries 10+) — FSM transitions to `BLOCKED`. Human intervention is required.
+
+Test output is now **always included** in validation responses — both the verdict (e.g. `GREEN validation: FAILED`) and the raw test output showing what specifically failed. Previously, the validation branch suppressed the raw output, leaving the implementor blind to what actually went wrong.
 
 ## Commands
 
@@ -550,6 +563,11 @@ All configuration lives in `.pi-coder/config.json` (created by `/pi-coder-init`)
     "e2e": "npx playwright test"
   },
   "maxLoops": 3,
+  "retryEscalation": {
+    "maxRetries": 10,
+    "enrichedSteerThreshold": 4,
+    "replanThreshold": 7
+  },
   "createBranch": true,
   "mergeBranch": "merge",
   "branchPrefix": "pi-coder/",
@@ -610,9 +628,68 @@ Structured test commands — separate `unit` and optional `e2e` suites. The `pi_
 
 When `testCommands` is present, it's used instead of `testCommand`. The `suite` parameter defaults to `"unit"`. Auto-detected during init based on `package.json` dependencies (Playwright, Cypress).
 
+### `dbCommands`
+
+Database stack configuration — when configured, the orchestrator tells the researcher and implementor to inspect the actual database rather than relying solely on migration files or ORM types. The agents already know SQL and know how to use each stack's CLI tools — they just need to know *which* stack to use.
+
+```json
+{
+  "dbCommands": {
+    "stack": "supabase"
+  }
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `stack` | `string` | Yes | DB stack identifier. Known values: `supabase`, `prisma`, `drizzle`, `raw-pg`, `raw-mysql`, `raw-sqlite`. Custom strings allowed for unsupported stacks. |
+
+**When `dbCommands` is null or absent**, no DB inspection instructions are injected — agents work from code and migrations only.
+
+**Auto-detection:** `/pi-coder-init` detects the DB stack from `package.json` dependencies (`@supabase/supabase-js`, `@prisma/client`, `drizzle-orm`, `pg`, `mysql2`, `better-sqlite3`) and sets `dbCommands.stack` automatically. The generated `.pi-coder/knowledge/database.md` also documents the stack.
+
+**Effect on agents:** When configured, the researcher inspects actual schema and sample data before reporting, and the implementor verifies assumptions against the live database before writing tests or code. This catches schema drift and missing constraints that migration files alone won't reveal. Agents use targeted queries (e.g. `supabase db query`, `psql -c`) — never full schema dumps like `supabase db dump` or `pg_dump`.
+
 ### `maxLoops`
 
 Maximum number of review cycles before the circuit breaker halts the spec. Both functional (NEEDS_CHANGES → TDD_RED_WRITE) and non-functional (NEEDS_CHANGES → REVIEWING) fix cycles count toward the limit. When tripped, the orchestrator pauses and presents options to the user. Default: `3`.
+
+### `retryEscalation`
+
+Per-state retry counters with escalating intervention for the GREEN phase. When tests keep failing during `TDD_GREEN_VALIDATE`, the counter tracks how many times the FSM loops back to `TDD_GREEN_WRITE`. At each threshold, the steering message becomes progressively more forceful:
+
+| Retry Count | Intervention | Behavior |
+|---|---|---|
+| 1–3 | **Standard** | Current behavior — tells the orchestrator to delegate again with clearer instructions |
+| 4–6 | **Enriched steer** | Includes specific guidance: focus on ONE failing test, include assertion errors, don't repeat the same approach |
+| 7–9 | **REPLAN** | Forces strategic analysis — the orchestrator must READ the code, ANALYZE the gap, and FORMULATE a fresh strategy before retrying |
+| ≥ 10 | **Hard block** | Transitions to `BLOCKED` — requires human intervention |
+
+```json
+{
+  "retryEscalation": {
+    "maxRetries": 10,
+    "enrichedSteerThreshold": 4,
+    "replanThreshold": 7
+  }
+}
+```
+
+- **`maxRetries`** — Maximum GREEN retries before hard-blocking (FSM → BLOCKED). Default: `10`.
+- **`enrichedSteerThreshold`** — Retry count at which enriched steers begin. Default: `4`.
+- **`replanThreshold`** — Retry count at which REPLAN intervention begins. Default: `7`.
+
+Thresholds must be ordered: `enrichedSteerThreshold < replanThreshold < maxRetries`. Invalid values are silently rejected and the defaults are used. Partial overrides work — only specify the keys you want to change:
+
+```json
+{
+  "retryEscalation": { "maxRetries": 15 }
+}
+```
+
+All retry escalation events are logged (`green_retry`, `green_retry_enriched`, `green_retry_replan`, `green_retry_blocked`) so you can analyze retry patterns across runs.
 
 ### `createBranch`
 
@@ -808,6 +885,10 @@ Each log entry is a JSON object with dual timestamps:
 | `subagent_control` | standard | event, runId, agent |
 | `nudge_fired` | verbose | state, level, turnsInState |
 | `nudge_escalation` | verbose | state, level, turnsInState |
+| `green_retry` | standard | retryCount, specId, unitName |
+| `green_retry_enriched` | standard | retryCount, enrichedThreshold, specId, unitName |
+| `green_retry_replan` | standard | retryCount, replanThreshold, specId, unitName |
+| `green_retry_blocked` | standard | retryCount, maxRetries, specId, unitName |
 
 **Bold** fields are new in the current version. The `trigger` field on `fsm_transition` uses typed values (`auto_tdd_validation`, `auto_git_checkpoint`, `auto_git_merge`, `auto_review_verdict`, `auto_subagent_complete`, `manual_advance_fsm`, `fsm_reset`) alongside the legacy `event` string for backward compatibility.
 
@@ -976,6 +1057,7 @@ All three mode prompt files (TDD, Light, Plan) contain template variables that a
 | `{{toolList}}` | Filtered tool list with descriptions | All |
 | `{{interviewTimeout}}` | Configured interview timeout (0 = no timeout) | All |
 | `{{referenceProjects}}` | Configured reference project names + paths | All |
+| `{{dbCommands}}` | Database inspection commands for delegation briefs | All |
 
 #### Project-scope overrides
 
@@ -1025,7 +1107,9 @@ tools: read, bash, grep, find, ls, mcp:supabase/query
 
 ### Per-Agent Model Selection
 
-Each subagent can run on a different model. Set `model` and `fallbackModels` in the agent frontmatter to control which model handles each role:
+Each subagent can run on a different model. There are two ways to control which model handles each role:
+
+#### Option 1: Agent Frontmatter (agent-level default)
 
 Edit `.pi/agents/pi-coder-reviewer.md`:
 
@@ -1039,6 +1123,48 @@ model: anthropic/claude-sonnet-4
 fallbackModels: openai/gpt-5-mini, anthropic/claude-haiku-4-5
 ---
 ```
+
+#### Option 2: settings.json Overrides (project-wide or user-global)
+
+Create or edit `.pi/settings.json` in your project root:
+
+```json
+{
+  "subagents": {
+    "disableBuiltins": true,
+    "agentOverrides": {
+      "pi-coder.researcher": {
+        "model": "anthropic/claude-haiku-4-5"
+      },
+      "pi-coder.implementor": {
+        "model": "anthropic/claude-sonnet-4",
+        "thinking": "high"
+      },
+      "pi-coder.reviewer": {
+        "model": "anthropic/claude-sonnet-4",
+        "fallbackModels": ["openai/gpt-5-mini"]
+      }
+    }
+  }
+}
+```
+
+**Available override fields** (all optional — only include what you want to change):
+
+| Field | Type | Description |
+|---|---|---|
+| `model` | `string \| false` | Override the model selection. `false` explicitly unsets a lower-priority value. |
+| `fallbackModels` | `string[] \| false` | Models tried in order on provider failures. |
+| `thinking` | `string \| false` | Thinking budget (e.g. `"high"`). |
+| `systemPromptMode` | `"append" \| "replace"` | How `systemPrompt` is applied. |
+| `systemPrompt` | `string` | Append or replace the agent's system prompt. |
+| `inheritProjectContext` | `boolean` | Whether the subagent inherits the parent's project context. |
+| `inheritSkills` | `boolean` | Whether the subagent inherits the parent's skills. |
+| `defaultContext` | `"fresh" \| "fork" \| false` | Subagent context mode — fresh session or fork from parent. |
+| `disabled` | `boolean` | Hide the agent from the subagent list. |
+| `completionGuard` | `boolean` | Wait for subagent completion before returning. |
+| `skills` | `string[] \| false` | Skills to inject into the subagent. |
+| `tools` | `string[] \| false` | Tools available to the subagent. |
 
 **Model ID formats:**
 

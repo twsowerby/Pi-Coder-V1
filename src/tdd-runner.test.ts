@@ -32,6 +32,11 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
       level: "standard",
       maxLogFiles: 10,
     },
+    retryEscalation: {
+      maxRetries: 10,
+      enrichedSteerThreshold: 4,
+      replanThreshold: 7,
+    },
     ...overrides,
   };
 }
@@ -508,5 +513,181 @@ describe("TddRunner - Phase 3: Phase Validation", () => {
 
       assert.strictEqual(result.exitCode, 0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4: Smart Truncation
+// ---------------------------------------------------------------------------
+
+describe("TddRunner - Phase 4: Smart Truncation", () => {
+  it("preserves failure lines when truncating long output", async () => {
+    const config = makeConfig();
+    // Build output with failure indicators in the middle and a summary at the end
+    const lines: string[] = [];
+    lines.push("Running tests...");
+    for (let i = 0; i < 200; i++) {
+      lines.push(`passing test ${i} ok`);
+    }
+    lines.push("FAIL src/auth.test.ts > should validate token");
+    lines.push("AssertionError: expected true, received false");
+    lines.push("Expected: true");
+    lines.push("Received: false");
+    for (let i = 0; i < 200; i++) {
+      lines.push(`more passing test ${i} ok`);
+    }
+    lines.push("Tests  3 passed, 1 failed");
+    lines.push("");
+    const longOutput = lines.join("\n");
+
+    const { fn: execMock } = makeMockExec([{ stdout: longOutput, code: 1 }]);
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    // The output should contain the failure line
+    assert.ok(result.output.includes("FAIL src/auth.test.ts"), `Should include FAIL line, output starts: ${result.output.slice(0, 200)}`);
+    assert.ok(result.output.includes("AssertionError"), `Should include AssertionError, output starts: ${result.output.slice(0, 200)}`);
+    // The summary should also be present
+    assert.ok(result.output.includes("Tests  3 passed, 1 failed"), `Should include summary`);
+    // Output should be within budget
+    assert.ok(result.output.length <= 5001, `Output should be within budget, got ${result.output.length}`);
+  });
+
+  it("falls back to tail truncation when important lines exceed budget", async () => {
+    const config = makeConfig();
+    // Build a massive output of mostly Error lines that would exceed budget even with smart truncation
+    const lines: string[] = [];
+    for (let i = 0; i < 2000; i++) {
+      lines.push(`Error: failure ${i} with a long description that takes up space`);
+    }
+    const longOutput = lines.join("\n");
+
+    const { fn: execMock } = makeMockExec([{ stdout: longOutput, code: 1 }]);
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    // Should still produce valid output within budget
+    assert.strictEqual(result.output.length, 5000, "Should be exactly 5000 chars after tail fallback");
+    assert.ok(result.output.startsWith("[truncated]"), "Should have truncation marker");
+  });
+
+  it("does not truncate output under 5000 characters", async () => {
+    const config = makeConfig();
+    const shortOutput = "Tests  5 passed";
+    const { fn: execMock } = makeMockExec([{ stdout: shortOutput, code: 0 }]);
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+    assert.strictEqual(result.output, shortOutput, "Short output should not be truncated");
+  });
+
+  it("preserves head and tail of output with gap markers", async () => {
+    const config = makeConfig();
+    const lines: string[] = [];
+    lines.push("Test suite: my-suite");  // head line
+    for (let i = 0; i < 300; i++) {
+      lines.push(`regular output line ${i}`);
+    }
+    lines.push("Tests  5 passed");  // tail line
+    const longOutput = lines.join("\n");
+
+    const { fn: execMock } = makeMockExec([{ stdout: longOutput, code: 0 }]);
+    const runner = new TddRunner(config, execMock as any);
+    const result = await runner.runTests();
+
+    // Head should be preserved
+    assert.ok(result.output.includes("Test suite: my-suite"), "Head should be preserved");
+    // Tail should be preserved
+    assert.ok(result.output.includes("Tests  5 passed"), "Tail should be preserved");
+    // Should have gap markers for the omitted middle
+    assert.ok(result.output.includes("..."), "Should have gap markers");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: parseFailures
+// ---------------------------------------------------------------------------
+
+describe("TddRunner - Phase 5: parseFailures", () => {
+  it("parses vitest FAIL format with file and test name", () => {
+    const runner = new TddRunner(makeConfig());
+    const output = [
+      "FAIL src/auth.test.ts > should validate JWT token",
+      "AssertionError: expected true, received false",
+      "- Expected: true",
+      "+ Received: false",
+    ].join("\n");
+
+    const failures = runner.parseFailures(output);
+    assert.strictEqual(failures.length, 1);
+    assert.strictEqual(failures[0].testFile, "src/auth.test.ts");
+    assert.strictEqual(failures[0].testName, "should validate JWT token");
+    assert.ok(failures[0].errorMessage.length > 0, "Should have an error message");
+  });
+
+  it("parses multiple vitest FAIL entries", () => {
+    const runner = new TddRunner(makeConfig());
+    const output = [
+      "FAIL src/auth.test.ts > test 1",
+      "AssertionError: bad",
+      "FAIL src/utils.test.ts > test 2",
+      "Error: something broke",
+    ].join("\n");
+
+    const failures = runner.parseFailures(output);
+    assert.strictEqual(failures.length, 2);
+    assert.strictEqual(failures[0].testFile, "src/auth.test.ts");
+    assert.strictEqual(failures[1].testFile, "src/utils.test.ts");
+  });
+
+  it("extracts assertion diff from vitest output", () => {
+    const runner = new TddRunner(makeConfig());
+    const output = [
+      "FAIL src/auth.test.ts > should work",
+      "AssertionError: mismatch",
+      "- Expected: 42",
+      "+ Received: 7",
+    ].join("\n");
+
+    const failures = runner.parseFailures(output);
+    assert.strictEqual(failures.length, 1);
+    assert.ok(failures[0].assertionDiff, "Should have assertion diff");
+    assert.ok(failures[0].assertionDiff!.includes("Expected"), "Diff should mention Expected");
+    assert.ok(failures[0].assertionDiff!.includes("Received"), "Diff should mention Received");
+  });
+
+  it("falls back to generic ✕ format when no vitest FAIL patterns", () => {
+    const runner = new TddRunner(makeConfig());
+    const output = [
+      "✕ should validate the form (15ms)",
+      "✕ should handle errors (8ms)",
+    ].join("\n");
+
+    const failures = runner.parseFailures(output);
+    assert.strictEqual(failures.length, 2);
+    assert.strictEqual(failures[0].testName, "should validate the form");
+    assert.strictEqual(failures[1].testName, "should handle errors");
+    assert.strictEqual(failures[0].errorMessage, "Test failed");
+  });
+
+  it("returns empty array for passing test output", () => {
+    const runner = new TddRunner(makeConfig());
+    const output = "Tests  5 passed";
+    const failures = runner.parseFailures(output);
+    assert.strictEqual(failures.length, 0);
+  });
+
+  it("returns empty array for unparseable output", () => {
+    const runner = new TddRunner(makeConfig());
+    const output = "Some random text without failure patterns";
+    const failures = runner.parseFailures(output);
+    assert.strictEqual(failures.length, 0);
+  });
+
+  it("never throws — returns empty array on malformed input", () => {
+    const runner = new TddRunner(makeConfig());
+    // Various edge cases that should not throw
+    assert.deepStrictEqual(runner.parseFailures(""), []);
+    assert.deepStrictEqual(runner.parseFailures("FAIL "), []);
+    assert.deepStrictEqual(runner.parseFailures("null"), []);
   });
 });

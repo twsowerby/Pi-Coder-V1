@@ -79,15 +79,8 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
   ],
 
   actionRules: [
-    {
-      toolPattern: "pi_coder_run_tests",
-      // Tests available in ANY state — advisory, no gates
-      allowedStates: new Set([
-        "IDLE", "SPEC_WORK", "SPEC_APPROVED", "GIT_CHECKPOINT",
-        "IMPLEMENTING", "REVIEWING", "APPROVED", "NEEDS_CHANGES",
-        "FINAL_APPROVAL", "MERGING", "COMPLETE", "BLOCKED",
-      ]),
-    },
+    // pi_coder_run_tests removed from actionRules — it's in alwaysAllowed
+    // (the tool description says "Available in any mode and state")
     {
       toolPattern: "subagent",
       agents: ["pi-coder.researcher"],
@@ -111,7 +104,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
 
   alwaysAllowed: [
     "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec",
-    "intercom", "ls", "find", "grep", "pi_coder_advance_fsm",
+    "intercom", "ls", "find", "grep", "pi_coder_advance_fsm", "pi_coder_run_tests",
   ],
 
   persistentEvidence: ["spec_saved", "spec_user_approved", "review_completed"],
@@ -143,6 +136,7 @@ export interface LightStateMachineJSON {
   gitRef: string | null;
   currentUnitName: string | null;
   evidence: EvidenceFlag[];
+  retryCounters?: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------

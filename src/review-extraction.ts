@@ -5,7 +5,7 @@
  * These functions have no dependency on pi-coder module-level state.
  */
 
-import type { ReviewVerdict } from "./types.ts";
+import type { IssueDetail, ReviewVerdict } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Intercom receipt detection
@@ -159,6 +159,141 @@ function extractSubagentUsage(details: unknown): SubagentUsage | null {
 export { extractSubagentUsage, extractSubagentTarget };
 
 // ---------------------------------------------------------------------------
+// Issues parsing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse structured ISSUES block from a ---VERDICT--- block.
+ * Format:
+ *   ISSUES:
+ *   - SEVERITY: high | FILE: src/auth.ts:42 | PROBLEM: token not refreshed | FIX: add refresh logic
+ *   - SEVERITY: medium | FILE: src/api.ts | PROBLEM: missing error boundary | FIX: wrap in try/catch
+ *
+ * Best-effort — returns empty array if parsing fails.
+ */
+function parseIssuesBlock(blockText: string): IssueDetail[] {
+  if (!blockText || !/ISSUES:/i.test(blockText)) return [];
+
+  const issues: IssueDetail[] = [];
+
+  // Split into lines after the ISSUES: header
+  const lines = blockText.split("\n");
+  let inIssuesSection = false;
+
+  for (const line of lines) {
+    if (/^\s*ISSUES:\s*/i.test(line)) {
+      inIssuesSection = true;
+      continue;
+    }
+    if (inIssuesSection && /^\s*---END VERDICT---/i.test(line)) break;
+    if (inIssuesSection && /^\s*-\s/.test(line)) {
+      // Parse a single issue entry: - SEVERITY: ... | FILE: ... | PROBLEM: ... | FIX: ...
+      const entry = line.replace(/^\s*-\s*/, "");
+
+      // Use named-field extraction instead of naive split to handle pipes inside values
+      let severity: "high" | "medium" | "low" = "medium";
+      let file: string | undefined;
+      let problem = "Issue found";
+      let suggestedFix: string | undefined;
+      let title = "";
+
+      const severityMatch = entry.match(/SEVERITY:\s*(high|medium|low)/i);
+      if (severityMatch) {
+        severity = severityMatch[1].toLowerCase() as "high" | "medium" | "low";
+      }
+      const fileMatch = entry.match(/FILE:\s*([^|]+)/i);
+      if (fileMatch) {
+        file = fileMatch[1].trim();
+      }
+      const problemMatch = entry.match(/PROBLEM:\s*([^|]+(?:\|[^|]*)*?)(?=\s*\|\s*FIX:|$)/i);
+      if (problemMatch) {
+        problem = problemMatch[1].trim();
+        title = problem.length > 80 ? problem.slice(0, 77) + "..." : problem;
+      }
+      const fixMatch = entry.match(/FIX:\s*(.+)/i);
+      if (fixMatch) {
+        suggestedFix = fixMatch[1].trim();
+      }
+
+      // Only add if we got at least a problem or severity
+      if (problem !== "Issue found" || severity !== "medium" || file || suggestedFix) {
+        if (!title) title = problem;
+        issues.push({ title, severity, file, problem, suggestedFix });
+      }
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Parse issues from review prose (emoji-based severity markers).
+ * Looks for patterns like:
+ *   🔴 High: Title — or — 🔴 [Title]
+ *   🟠 Medium: Title
+ *   🟡 Low: Title
+ * Prefixed with 🔴/🟠/🟡 and followed by structured fields (file, problem, suggestedFix).
+ *
+ * Best-effort — returns empty array if parsing fails.
+ */
+function parseProseIssues(text: string): IssueDetail[] {
+  const issues: IssueDetail[] = [];
+
+  // Match emoji-severity markers followed by content
+  // Use alternation instead of character class for multi-byte emoji
+  const issueRegex = /(🔴|🟠|🟡)\s*(?:High|Medium|Low)?\s*:?\s*([^\n]+)/g;
+  let match;
+
+  while ((match = issueRegex.exec(text)) !== null) {
+    const emoji = match[1];
+    const body = match[2].trim();
+
+    // Skip if this is inside a ---VERDICT--- block (those are parsed by parseIssuesBlock)
+    const matchStart = match.index;
+    const verdictStart = text.indexOf("---VERDICT---");
+    const verdictEnd = text.indexOf("---END VERDICT---");
+    if (verdictStart !== -1 && verdictEnd !== -1 && matchStart > verdictStart && matchStart < verdictEnd) {
+      continue;
+    }
+
+    let severity: "high" | "medium" | "low" = "medium";
+    if (emoji === "🔴") severity = "high";
+    else if (emoji === "🟡") severity = "low";
+
+    // Try to extract structured fields from the body
+    let file: string | undefined;
+    let problem = body;
+    let suggestedFix: string | undefined;
+    let title = body.slice(0, 80);
+
+    // Look for File: or file: pattern
+    const fileMatch = body.match(/(?:File|file):\s*`?([^`\n]+)`?/i);
+    if (fileMatch) {
+      file = fileMatch[1].trim();
+    }
+
+    // Look for Problem: or problem: pattern
+    const problemMatch = body.match(/(?:Problem|problem):\s*(.+?)(?:\n|Suggested|Fix|$)/i);
+    if (problemMatch) {
+      problem = problemMatch[1].trim();
+      title = problem.length > 80 ? problem.slice(0, 77) + "..." : problem;
+    }
+
+    // Look for Suggested Fix: or Fix: pattern
+    const fixMatch = body.match(/(?:Suggested\s*Fix|Fix|fix):\s*(.+?)(?:\n(?:🔴|🟠|🟡)|$)/i);
+    if (fixMatch) {
+      suggestedFix = fixMatch[1].trim();
+    }
+
+    issues.push({ title, severity, file, problem, suggestedFix });
+  }
+
+  return issues;
+}
+
+export { parseIssuesBlock, parseProseIssues };
+
+// ---------------------------------------------------------------------------
 // Review verdict extraction
 // ---------------------------------------------------------------------------
 
@@ -207,6 +342,21 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
         if (text) break; // Use the first result that has substantive output
       }
     }
+
+    // Fallback: try messages array when finalOutput is undefined
+    // (pi-intercom receipt path strips finalOutput but may leave messages intact)
+    if (!text) {
+      for (const resultEntry of results) {
+        if (Array.isArray(resultEntry.messages)) {
+          const assistantMessages = (resultEntry.messages as Array<{ role: string; content: string }>)
+            .filter(m => m.role === "assistant" && typeof m.content === "string" && m.content.length > 0);
+          if (assistantMessages.length > 0) {
+            text = assistantMessages[assistantMessages.length - 1].content;
+            if (text) break;
+          }
+        }
+      }
+    }
   } else if (typeof r.content === "string") {
     text = r.content;
   } else if (Array.isArray(r.content)) {
@@ -229,7 +379,7 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
   // Parse ---VERDICT--- blocks from the reviewer's output.
   // This is the primary mechanism; emoji/text patterns are fallback for
   // reviews that haven't adopted the block format yet.
-  const verdictBlockMatch = text.match(/---VERDICT---\s*\n\s*VERDICT:\s*(approved|needs_changes)\s*\n(?:\s*FIX_TYPE:\s*(functional|non-functional|non_functional)\s*\n)?\s*---END VERDICT---[\s\S]*/i);
+  const verdictBlockMatch = text.match(/---VERDICT---\s*\n\s*VERDICT:\s*(approved|needs_changes)\s*\n(?:\s*FIX_TYPE:\s*(functional|non-functional|non_functional)\s*\n)?((?:\s*ISSUES:\s*\n(?:[\s\S]*?))?\s*)---END VERDICT---/i);
 
   if (verdictBlockMatch) {
     const blockVerdict = verdictBlockMatch[1].toLowerCase() as "approved" | "needs_changes";
@@ -245,10 +395,13 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
       fixType = rawFixType === "non_functional" || rawFixType === "non-functional" ? "non-functional" : "functional";
     }
 
+    // Parse ISSUES block from verdict block (group 3)
+    const issues = parseIssuesBlock(verdictBlockMatch[3] ?? "");
+
     return {
       verdict: "needs_changes",
       fixType,
-      issues: [], // Block format doesn't carry structured issues
+      issues,
     };
   }
 
@@ -290,7 +443,7 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
       textVerdict = "approved";
     } else if (/\*\*Verdict:\*\*\s*(?:request\s+changes|needs\s+changes)/i.test(text)) {
       textVerdict = "needs_changes";
-    } else if (/approved/i.test(text)) {
+    } else if (/^\s*\*{0,2}Verdict:?\s*approved/im.test(text)) {
       textVerdict = "approved";
     } else if (/needs.?changes|request.?changes/i.test(text)) {
       textVerdict = "needs_changes";
@@ -305,7 +458,7 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
     return { verdict: "approved" };
   }
 
-  // --- needs_changes: extract fix type and issue counts ---
+  // --- needs_changes: extract fix type and issues ---
 
   // Extract fix type classification from reviewer output
   let fixType: "functional" | "non-functional" = "functional"; // Safe default
@@ -314,9 +467,12 @@ export function extractReviewVerdict(result: unknown, rawContentText?: string): 
     fixType = fixTypeMatch[1].toLowerCase().replace("_", "-") === "non-functional" ? "non-functional" : "functional";
   }
 
+  // Parse issues from the review prose (emoji-based severity markers)
+  const issues = parseProseIssues(text);
+
   return {
     verdict: "needs_changes",
     fixType,
-    issues: [], // Regex extraction cannot produce structured issues
+    issues,
   };
 }

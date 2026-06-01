@@ -52,6 +52,11 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
     notifications: {
       enabled: false,
     },
+    retryEscalation: {
+      maxRetries: 10,
+      enrichedSteerThreshold: 4,
+      replanThreshold: 7,
+    },
     ...overrides,
   };
 }
@@ -169,10 +174,12 @@ TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →
 // ---------------------------------------------------------------------------
 
 describe("Phase 3: FSM Event Guards", () => {
-  it("isActionAllowed blocks pi_coder_run_tests outside validation states", () => {
+  it("isActionAllowed allows pi_coder_run_tests in all states (alwaysAllowed)", () => {
     const sm = new StateMachine(makeConfig());
-    // IDLE — not allowed
-    assert.strictEqual(sm.isActionAllowed("pi_coder_run_tests"), false);
+    // pi_coder_run_tests is in alwaysAllowed — allowed in ALL states
+    assert.strictEqual(sm.isActionAllowed("pi_coder_run_tests"), true, "Allowed in IDLE");
+    forceTransition(sm, "SPEC_WORK");
+    assert.strictEqual(sm.isActionAllowed("pi_coder_run_tests"), true, "Allowed in SPEC_WORK");
   });
 
   it("isActionAllowed allows pi_coder_run_tests in TDD_RED_VALIDATE", () => {

@@ -109,7 +109,9 @@ export class GlobalStatePersistence {
 
   /**
    * Verify global state against the filesystem.
-   * Checks: does the spec directory exist when activeSpecId is set?
+   * Checks: does the spec directory exist with at least state.json when activeSpecId is set?
+   * Accepts both spec.md (normal) and state.json-only (SPEC_WORK before save_spec)
+   * as valid spec directories. This enables crash recovery from SPEC_WORK.
    */
   async checkIntegrity(state: GlobalState): Promise<IntegrityCheckResult> {
     const warnings: string[] = [];
@@ -119,10 +121,19 @@ export class GlobalStatePersistence {
       const specDirPath = join(this.specsDir, state.activeSpecId);
       try {
         await readFile(join(specDirPath, "spec.md"), "utf-8");
+        // spec.md exists — fully valid spec directory
       } catch {
-        errors.push(
-          `Spec directory missing or incomplete: .pi-coder/specs/${state.activeSpecId}/`,
-        );
+        // spec.md doesn't exist — check if state.json exists (SPEC_WORK before save_spec)
+        try {
+          await readFile(join(specDirPath, "state.json"), "utf-8");
+          warnings.push(
+            `Spec directory exists but has no spec.md: .pi-coder/specs/${state.activeSpecId}/ — spec was in SPEC_WORK when last persisted`,
+          );
+        } catch {
+          errors.push(
+            `Spec directory missing or incomplete: .pi-coder/specs/${state.activeSpecId}/`,
+          );
+        }
       }
     }
 
@@ -216,6 +227,8 @@ function isValidSpecState(value: unknown): value is SpecState {
   if (obj.gitRef !== null && typeof obj.gitRef !== "string") return false;
   if (obj.currentUnitName !== undefined && obj.currentUnitName !== null && typeof obj.currentUnitName !== "string") return false;
   if (!Array.isArray(obj.evidence)) return false;
+  if (obj.retryCounters !== undefined && typeof obj.retryCounters !== 'object') return false;
+  if (obj.specId !== undefined && typeof obj.specId !== 'string') return false;
   if (typeof obj.createdAt !== "string") return false;
   if (typeof obj.updatedAt !== "string") return false;
 

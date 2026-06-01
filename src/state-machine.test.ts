@@ -127,11 +127,12 @@ describe("Phase 1: State & Transition Table", () => {
       assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
     });
 
-    it("should list TDD_RED_WRITE and REVIEWING from NEEDS_CHANGES", () => {
+    it("should list TDD_RED_WRITE, TDD_GREEN_WRITE, and REVIEWING from NEEDS_CHANGES", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "NEEDS_CHANGES");
       const valid = sm.getValidTransitions();
-      assert.ok(valid.includes("TDD_RED_WRITE"), "Should include TDD_RED_WRITE (functional fix)");
+      assert.ok(valid.includes("TDD_RED_WRITE"), "Should include TDD_RED_WRITE (functional fix needing new tests)");
+      assert.ok(valid.includes("TDD_GREEN_WRITE"), "Should include TDD_GREEN_WRITE (functional fix with existing tests)");
       assert.ok(valid.includes("REVIEWING"), "Should include REVIEWING (non-functional fix)");
       assert.ok(valid.includes("IDLE"), "Should include IDLE (abort)");
     });
@@ -329,21 +330,23 @@ describe("Phase 3: Action Guards", () => {
       assert.equal(sm.isActionAllowed("pi_coder_run_tests"), true);
     });
 
-    it("should NOT be allowed in IDLE", () => {
+    // pi_coder_run_tests is in alwaysAllowed — it's allowed in ALL states
+    // (the tool description says "Available in any mode and state")
+    it("should be allowed in IDLE (alwaysAllowed)", () => {
       const sm = new StateMachine(makeConfig());
-      assert.equal(sm.isActionAllowed("pi_coder_run_tests"), false);
+      assert.equal(sm.isActionAllowed("pi_coder_run_tests"), true);
     });
 
-    it("should NOT be allowed in TDD_RED_WRITE", () => {
+    it("should be allowed in TDD_RED_WRITE (alwaysAllowed)", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "TDD_RED_WRITE");
-      assert.equal(sm.isActionAllowed("pi_coder_run_tests"), false);
+      assert.equal(sm.isActionAllowed("pi_coder_run_tests"), true);
     });
 
-    it("should NOT be allowed in REVIEWING", () => {
+    it("should be allowed in REVIEWING (alwaysAllowed)", () => {
       const sm = new StateMachine(makeConfig());
       walkToState(sm, "REVIEWING");
-      assert.equal(sm.isActionAllowed("pi_coder_run_tests"), false);
+      assert.equal(sm.isActionAllowed("pi_coder_run_tests"), true);
     });
   });
 
@@ -877,29 +880,40 @@ describe("RED tautology acknowledge", () => {
 // ---------------------------------------------------------------------------
 
 describe("Unit 1: buildDiagram", () => {
-  it("TDD mode diagram contains RED_VALIDATE triple exit", () => {
+  it("TDD mode diagram is a markdown table with all key transitions", () => {
     const sm = new StateMachine(makeConfig());
     const diagram = sm.buildDiagram();
-    assert.ok(diagram.includes("TDD_RED_WRITE → TDD_RED_VALIDATE"));
-    assert.ok(diagram.includes("RED tautology"));
-    assert.ok(diagram.includes("BLOCKED (genuinely problematic)"));
-    assert.ok(diagram.includes("TDD_GREEN_WRITE (acknowledge tautology)"));
-    assert.ok(diagram.includes("FSM States & Transitions:"));
-    // TDD mode should NOT have Any → BLOCKED wildcard
-    assert.ok(!diagram.includes("Any → BLOCKED (emergency"));
-    // TDD mode has manual advance for RED_VALIDATE → BLOCKED
-    assert.ok(diagram.includes("TDD_RED_VALIDATE → BLOCKED"));
+    // Header row
+    assert.ok(diagram.includes("| Current State | Valid Target | When |"), "Should have table header");
+    // RED_VALIDATE triple exit
+    assert.ok(diagram.includes("TDD_RED_VALIDATE"), "Should mention RED_VALIDATE");
+    assert.ok(diagram.includes("RED tautology"), "Should mention RED tautology");
+    assert.ok(diagram.includes("BLOCKED"), "Should mention BLOCKED");
+    // TDD mode title
+    assert.ok(diagram.includes("FSM State Transitions (TDD Mode)"), "Should have TDD mode title");
+    // TDD mode should NOT have Any → BLOCKED wildcard (it has specific entries)
+    assert.ok(!diagram.includes("Any | BLOCKED"), "TDD mode should not have Any→BLOCKED wildcard");
+    // Completeness warning
+    assert.ok(diagram.includes("COMPLETE. No other transitions are valid"), "Should have completeness warning");
+    // NEEDS_CHANGES three paths
+    assert.ok(diagram.includes("TDD_RED_WRITE | Functional fix needing new tests"), "Should have NEEDS_CHANGES→TDD_RED_WRITE");
+    assert.ok(diagram.includes("TDD_GREEN_WRITE | Functional fix with existing test coverage"), "Should have NEEDS_CHANGES→TDD_GREEN_WRITE");
+    assert.ok(diagram.includes("REVIEWING | Non-functional fix only"), "Should have NEEDS_CHANGES→REVIEWING");
   });
 
-  it("Light mode diagram contains Any → BLOCKED wildcard", () => {
+  it("Light mode diagram is a markdown table with Any → BLOCKED wildcard", () => {
     const sm = new LightStateMachine(makeConfig());
     const diagram = sm.buildDiagram();
-    assert.ok(diagram.includes("IMPLEMENTING"));
-    assert.ok(diagram.includes("FSM States & Transitions (Light Mode"));
-    assert.ok(diagram.includes("Any → BLOCKED (emergency override"));
+    // Header row
+    assert.ok(diagram.includes("| Current State | Valid Target | When |"), "Should have table header");
+    assert.ok(diagram.includes("IMPLEMENTING"), "Should mention IMPLEMENTING");
+    assert.ok(diagram.includes("FSM State Transitions (Light Mode)"), "Should have Light mode title");
+    assert.ok(diagram.includes("Any | BLOCKED"), "Should have Any→BLOCKED wildcard");
     // Light mode should NOT have TDD references
-    assert.ok(!diagram.includes("TDD_RED"));
-    assert.ok(!diagram.includes("RED tautology"));
+    assert.ok(!diagram.includes("TDD_RED"), "Light mode should not have TDD_RED");
+    assert.ok(!diagram.includes("RED tautology"), "Light mode should not have RED tautology");
+    // Completeness warning
+    assert.ok(diagram.includes("COMPLETE. No other transitions are valid"), "Should have completeness warning");
   });
 });
 
@@ -996,5 +1010,252 @@ describe("Unit 2: currentUnitName state tracking", () => {
     assert.strictEqual(json.currentUnitName, "Config update");
     const restored = LightStateMachine.fromJSON(json, makeConfig());
     assert.strictEqual(restored.currentUnitName, "Config update");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit 3: Retry Counters
+// ---------------------------------------------------------------------------
+
+describe("Unit 3: Retry Counters", () => {
+  describe("basic operations", () => {
+    it("should start at 0 for any key", () => {
+      const sm = new StateMachine(makeConfig());
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0);
+      assert.strictEqual(sm.getRetryCounter("red_retries"), 0);
+      assert.strictEqual(sm.getRetryCounter("any_key"), 0);
+    });
+
+    it("should increment a retry counter", () => {
+      const sm = new StateMachine(makeConfig());
+      sm.incrementRetryCounter("green_retries");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1);
+      sm.incrementRetryCounter("green_retries");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 2);
+    });
+
+    it("should reset a specific retry counter", () => {
+      const sm = new StateMachine(makeConfig());
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("green_retries");
+      sm.resetRetryCounter("green_retries");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0);
+    });
+
+    it("should reset all retry counters", () => {
+      const sm = new StateMachine(makeConfig());
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("red_retries");
+      sm.resetAllRetryCounters();
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0);
+      assert.strictEqual(sm.getRetryCounter("red_retries"), 0);
+    });
+  });
+
+  describe("GREEN retry counter side effects", () => {
+    it("should increment green_retries on GREEN_VALIDATE → GREEN_WRITE", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0);
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1);
+    });
+
+    it("should increment green_retries on each GREEN loop", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1);
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 2);
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 3);
+    });
+
+    it("should reset green_retries on GREEN_VALIDATE → REVIEWING (unit complete)", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1, "Should have 1 retry after going around once");
+      forceTransition(sm, "REVIEWING");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0, "Should reset on transition to REVIEWING");
+    });
+
+    it("should reset green_retries on GREEN_VALIDATE → TDD_RED_WRITE (next unit)", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1);
+      forceTransition(sm, "TDD_RED_WRITE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0, "Should reset on next unit transition");
+    });
+
+    it("should reset all retry counters on IDLE entry", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1);
+      forceTransition(sm, "IDLE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0, "Should reset on IDLE entry");
+    });
+  });
+
+  describe("GREEN_VALIDATE → GREEN_WRITE → BLOCKED (hard retry limit)", () => {
+    it("should allow TDD_GREEN_WRITE → BLOCKED transition", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_WRITE");
+      // TDD_GREEN_WRITE → BLOCKED is in legalTransitions
+      const result = sm.transition("BLOCKED");
+      assert.strictEqual(result, undefined, "Transition should succeed");
+      assert.strictEqual(sm.currentState, "BLOCKED");
+    });
+  });
+
+  describe("persistence", () => {
+    it("should include retryCounters in toJSON", () => {
+      const sm = new StateMachine(makeConfig());
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("red_retries");
+      const json = sm.toJSON();
+      assert.deepStrictEqual(json.retryCounters, { green_retries: 2, red_retries: 1 });
+    });
+
+    it("should include empty retryCounters in toJSON when none set", () => {
+      const sm = new StateMachine(makeConfig());
+      const json = sm.toJSON();
+      assert.deepStrictEqual(json.retryCounters, {});
+    });
+
+    it("should restore retryCounters from fromJSON", () => {
+      const sm = new StateMachine(makeConfig());
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("red_retries");
+      const json = sm.toJSON();
+      const restored = StateMachine.fromJSON(json, makeConfig());
+      assert.strictEqual(restored.getRetryCounter("green_retries"), 2);
+      assert.strictEqual(restored.getRetryCounter("red_retries"), 1);
+    });
+
+    it("should round-trip retryCounters through JSON", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToState(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "TDD_GREEN_WRITE");
+      // green_retries should be 2 at this point
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 2);
+      const json = sm.toJSON();
+      const restored = StateMachine.fromJSON(json, makeConfig());
+      assert.strictEqual(restored.getRetryCounter("green_retries"), 2);
+      // Restored machine should continue incrementing from the restored value
+      forceTransition(restored, "TDD_GREEN_VALIDATE");
+      forceTransition(restored, "TDD_GREEN_WRITE");
+      assert.strictEqual(restored.getRetryCounter("green_retries"), 3);
+    });
+
+    it("should clear retry counters on reset()", () => {
+      const sm = new StateMachine(makeConfig());
+      sm.incrementRetryCounter("green_retries");
+      sm.incrementRetryCounter("green_retries");
+      sm.reset();
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0);
+    });
+  });
+
+  describe("LightStateMachine retry counters", () => {
+    it("should support retry counter operations on LightStateMachine", () => {
+      const sm = new LightStateMachine(makeConfig());
+      assert.strictEqual(sm.getRetryCounter("any_key"), 0);
+      sm.incrementRetryCounter("any_key");
+      assert.strictEqual(sm.getRetryCounter("any_key"), 1);
+      sm.resetRetryCounter("any_key");
+      assert.strictEqual(sm.getRetryCounter("any_key"), 0);
+    });
+
+    it("should include retryCounters in LightStateMachine toJSON", () => {
+      const sm = new LightStateMachine(makeConfig());
+      sm.incrementRetryCounter("test_key");
+      const json = sm.toJSON();
+      assert.deepStrictEqual(json.retryCounters, { test_key: 1 });
+    });
+
+    it("should restore retryCounters in LightStateMachine fromJSON", () => {
+      const sm = new LightStateMachine(makeConfig());
+      sm.incrementRetryCounter("test_key");
+      const json = sm.toJSON();
+      const restored = LightStateMachine.fromJSON(json, makeConfig());
+      assert.strictEqual(restored.getRetryCounter("test_key"), 1);
+    });
+  });
+
+  // --- NEEDS_CHANGES → TDD_GREEN_WRITE transition ---
+
+  describe("NEEDS_CHANGES → TDD_GREEN_WRITE", () => {
+    function walkToNeedsChanges(sm: StateMachine): void {
+      forceTransition(sm, "SPEC_WORK");
+      forceTransition(sm, "SPEC_APPROVED");
+      forceTransition(sm, "GIT_CHECKPOINT");
+      sm.transition("TDD_RED_WRITE");
+      forceTransition(sm, "TDD_RED_VALIDATE");
+      sm.setEvidence("test_run_this_state");
+      sm.transition("TDD_GREEN_WRITE");
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      forceTransition(sm, "REVIEWING");
+      forceTransition(sm, "NEEDS_CHANGES");
+    }
+
+    it("requires review_completed evidence", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToNeedsChanges(sm);
+      // Without evidence — guard should block
+      const result = sm.transition("TDD_GREEN_WRITE");
+      assert.ok(result !== undefined, "Should return guard error");
+      assert.ok("missingEvidence" in result!);
+      assert.ok((result as any).missingEvidence.includes("review_completed"));
+      assert.strictEqual(sm.currentState, "NEEDS_CHANGES", "State should not have changed");
+    });
+
+    it("succeeds with review_completed evidence", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToNeedsChanges(sm);
+      sm.setEvidence("review_completed");
+      const result = sm.transition("TDD_GREEN_WRITE");
+      assert.strictEqual(result, undefined, "Transition should succeed");
+      assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE");
+    });
+
+    it("does not require non_functional_classified evidence", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToNeedsChanges(sm);
+      sm.setEvidence("review_completed");
+      // Should succeed WITHOUT non_functional_classified
+      const result = sm.transition("TDD_GREEN_WRITE");
+      assert.strictEqual(result, undefined, "Transition should succeed");
+      assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE");
+    });
+
+    it("loops back via GREEN_VALIDATE → GREEN_WRITE on failure and increments retries", () => {
+      const sm = new StateMachine(makeConfig());
+      walkToNeedsChanges(sm);
+      sm.setEvidence("review_completed");
+      sm.transition("TDD_GREEN_WRITE");
+      assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE");
+      // Arrive at GREEN_VALIDATE
+      forceTransition(sm, "TDD_GREEN_VALIDATE");
+      assert.strictEqual(sm.currentState, "TDD_GREEN_VALIDATE");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 0, "No retries yet");
+      // Simulate test failure → loops back to GREEN_WRITE
+      sm.setEvidence("test_run_this_state");
+      sm.transition("TDD_GREEN_WRITE");
+      assert.strictEqual(sm.currentState, "TDD_GREEN_WRITE", "Should loop back to GREEN_WRITE on failure");
+      assert.strictEqual(sm.getRetryCounter("green_retries"), 1, "Should have incremented green_retries");
+    });
   });
 });

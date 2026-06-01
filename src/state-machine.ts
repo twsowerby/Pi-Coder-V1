@@ -44,10 +44,12 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
     { from: "TDD_GREEN_VALIDATE", to: "REVIEWING", event: "tests_pass" },
     { from: "TDD_GREEN_VALIDATE", to: "TDD_GREEN_WRITE", event: "tests_still_fail" },
     { from: "TDD_GREEN_VALIDATE", to: "TDD_RED_WRITE", event: "next_unit" },
+    { from: "TDD_GREEN_WRITE", to: "BLOCKED", event: "green_retry_limit" },
     { from: "REVIEWING", to: "APPROVED", event: "review_passed" },
     { from: "REVIEWING", to: "NEEDS_CHANGES", event: "review_needs_changes" },
     { from: "NEEDS_CHANGES", to: "TDD_RED_WRITE", event: "reimplement" },
     { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
+    { from: "NEEDS_CHANGES", to: "TDD_GREEN_WRITE", event: "needs_changes_functional_shortcut" },
     { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
     { from: "APPROVED", to: "MERGING", event: "merge_approved" },
     { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
@@ -100,7 +102,17 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
         "The reviewer must classify the fix type in its verdict. If the fix is non-functional " +
         "(test cleanup, comments, naming, assertions), the reviewer should include " +
         "'Fix-Type: non-functional' in its output. If the fix is functional (production code " +
-        "changes), advance to TDD_RED_WRITE for a full RED/GREEN cycle instead.",
+        "changes), advance to TDD_RED_WRITE or TDD_GREEN_WRITE instead.",
+    },
+    {
+      from: "NEEDS_CHANGES",
+      to: "TDD_GREEN_WRITE",
+      requiredEvidence: ["review_completed"],
+      errorMessage:
+        "Cannot advance to TDD_GREEN_WRITE from NEEDS_CHANGES without a completed review. " +
+        "This path is for functional fixes with existing test coverage — the implementor fixes " +
+        "the code and you validate everything passes at GREEN_VALIDATE. " +
+        "If the fix needs new tests, advance to TDD_RED_WRITE instead.",
     },
     {
       from: "REVIEWING",
@@ -115,10 +127,8 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
   ],
 
   actionRules: [
-    {
-      toolPattern: "pi_coder_run_tests",
-      allowedStates: new Set(["TDD_RED_VALIDATE", "TDD_GREEN_VALIDATE"]),
-    },
+    // pi_coder_run_tests removed from actionRules — it's in alwaysAllowed
+    // (the tool description explicitly says "Available in any mode and state")
     {
       toolPattern: "subagent",
       agents: ["pi-coder.researcher"],
@@ -140,7 +150,7 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
     },
   ],
 
-  alwaysAllowed: ["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm"],
+  alwaysAllowed: ["upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec", "intercom", "ls", "find", "grep", "pi_coder_advance_fsm", "pi_coder_run_tests"],
 
   persistentEvidence: ["spec_saved", "spec_user_approved", "non_functional_classified", "review_completed"],
 
@@ -155,7 +165,7 @@ const TDD_DEFINITION: StateMachineDefinition<FSMState> = {
     TDD_GREEN_VALIDATE: { shouldNudge: true, expectedAction: "Run tests (GREEN validation)", expectedTool: "pi_coder_run_tests" },
     REVIEWING: { shouldNudge: true, expectedAction: "Delegate to pi-coder.reviewer", expectedTool: "subagent" },
     APPROVED: { shouldNudge: false, expectedAction: "", expectedTool: "" },
-    NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Delegate implementor for non-functional fix, then advance to REVIEWING; or advance to TDD_RED_WRITE for functional fix", expectedTool: "subagent" },
+    NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Delegate implementor to fix, then advance: REVIEWING (non-functional), TDD_GREEN_WRITE (functional with existing tests), or TDD_RED_WRITE (functional needing new tests)", expectedTool: "subagent" },
     FINAL_APPROVAL: { shouldNudge: false, expectedAction: "", expectedTool: "" },
     MERGING: { shouldNudge: true, expectedAction: "Merge feature branch", expectedTool: "pi_coder_git" },
     COMPLETE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
@@ -174,6 +184,7 @@ export interface StateMachineJSON {
   gitRef: string | null;
   currentUnitName: string | null;
   evidence: EvidenceFlag[];
+  retryCounters?: Record<string, number>;
 }
 
 export class StateMachine extends BaseStateMachine<FSMState> {

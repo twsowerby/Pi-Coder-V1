@@ -106,6 +106,14 @@ export interface IStateMachine {
   getValidTransitions(): string[];
   /** Whether the circuit breaker has tripped */
   circuitBreakerTripped(): boolean;
+  /** Get a retry counter value */
+  getRetryCounter(key: string): number;
+  /** Increment a retry counter */
+  incrementRetryCounter(key: string): void;
+  /** Reset a specific retry counter */
+  resetRetryCounter(key: string): void;
+  /** Reset all retry counters */
+  resetAllRetryCounters(): void;
   /** Whether the current state should trigger nudges */
   canNudge(): { shouldNudge: boolean; expectedAction: string; expectedTool: string };
   /** Set the git ref independently (used after checkpoint) */
@@ -160,6 +168,16 @@ export interface NudgeConfig {
   defaults: NudgeDefaults;
   /** Per-state overrides. Keys are state name strings. */
   states: Partial<Record<string, NudgeStateConfig>>;
+}
+
+/** Per-state retry counter configuration. */
+export interface RetryEscalationConfig {
+  /** Maximum retries before hard-blocking (transition to BLOCKED). Default: 10 */
+  maxRetries: number;
+  /** Retry count at which enriched steers start (includes failure details + strategy hints). Default: 4 */
+  enrichedSteerThreshold: number;
+  /** Retry count at which REPLAN intervention steers start (force strategic analysis before continuing). Default: 7 */
+  replanThreshold: number;
 }
 
 /**
@@ -240,6 +258,25 @@ export interface TestCommands {
   [suite: string]: string;
 }
 
+/**
+ * Database stack configuration.
+ * When configured (not null), the orchestrator includes DB inspection
+ * instructions in delegation briefs for tasks that touch the data layer.
+ * Auto-detected by `/pi-coder-init` from package.json dependencies.
+ */
+export type DbStack = "supabase" | "prisma" | "drizzle" | "raw-pg" | "raw-mysql" | "raw-sqlite" | (string & {});
+
+/**
+ * Database inspection commands config.
+ * When configured (not null), the orchestrator includes DB inspection
+ * instructions in delegation briefs for tasks that touch the data layer.
+ * Auto-detected by `/pi-coder-init` from package.json dependencies.
+ */
+export interface DbCommandsConfig {
+  /** DB stack identifier — controls which inspection instructions are provided */
+  stack: DbStack;
+}
+
 export interface PiCoderConfig {
   /** Command to run the project test suite. Legacy — prefer testCommands */
   testCommand: string;
@@ -263,13 +300,35 @@ export interface PiCoderConfig {
   subagentControl: SubagentControlConfig;
   /** Desktop notifications configuration */
   notifications: NotificationsConfig;
+  /** Per-state retry escalation configuration */
+  retryEscalation: RetryEscalationConfig;
   /** ⚠️ EXPERIMENTAL: Named reference projects accessible by the researcher subagent */
   referenceProjects?: Record<string, string>;
+  /** Database inspection commands. When configured, orchestrator includes DB inspection
+   *  instructions in delegation briefs. Set to null or omit to disable.
+   *  Auto-populated by `/pi-coder-init` from package.json dependencies. */
+  dbCommands?: DbCommandsConfig | null;
 }
 
 // ---------------------------------------------------------------------------
 // Phase 3: Domain Value Types
 // ---------------------------------------------------------------------------
+
+/**
+ * A single test failure parsed from test output.
+ * Best-effort extraction — not all test runner formats produce
+ * structured failure details that can be automatically parsed.
+ */
+export interface TestFailure {
+  /** Test file path (if parseable) */
+  testFile?: string;
+  /** Test name / description */
+  testName: string;
+  /** Error message */
+  errorMessage: string;
+  /** Assertion diff (expected vs actual), if available */
+  assertionDiff?: string;
+}
 
 /**
  * Result of executing the project test suite.
@@ -278,7 +337,7 @@ export interface PiCoderConfig {
 export interface TestRunResult {
   /** Process exit code (0 = all passed, non-zero = failures) */
   exitCode: number;
-  /** Combined stdout + stderr, truncated to 5000 characters */
+  /** Combined stdout + stderr, smart-truncated to ~5000 characters preserving failure details */
   output: string;
   /** Number of passing tests, if parseable. Null if parsing fails. */
   passed: number | null;
@@ -286,6 +345,8 @@ export interface TestRunResult {
   failed: number | null;
   /** Whether the test run exceeded the timeout */
   timedOut: boolean;
+  /** Parsed failure details, if available. Undefined if not yet parsed. */
+  failures?: TestFailure[];
 }
 
 /**
@@ -429,6 +490,10 @@ export interface SpecState {
   currentUnitName?: string | null;
   /** ISO timestamp of state creation */
   createdAt: string;
+  /** Per-transition-loop retry counters (e.g., green_retries, red_retries) */
+  retryCounters?: Record<string, number>;
+  /** The spec ID (directory name). Enables cross-referencing state.json → spec directory. */
+  specId?: string;
   /** ISO timestamp of last state update */
   updatedAt: string;
 }

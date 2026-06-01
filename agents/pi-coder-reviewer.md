@@ -46,6 +46,15 @@ These are what you MUST review, in order of importance:
 
 Read the spec (via `pi_coder_read_spec`) or check the task brief for unit approach classifications before reviewing.
 
+## Reviewing UI Component Tests
+
+When reviewing tests for UI components, apply these criteria:
+
+- **Brittle tests:** Flag tests that depend on CSS class names, DOM element ordering, or exact DOM structure as 🟠 Medium. These break on any styling refactoring and indicate the implementor tested implementation details instead of the component contract.
+- **Redundant snapshot tests:** Flag full-component snapshot tests as 🟡 Low (brittle). Prefer targeted assertions on specific rendered content.
+- **Missing interaction tests:** If a component handles user events (clicks, form submissions) but no test simulates those events, flag as 🟠 Medium.
+- **Hook coverage:** If complex logic lives in a custom hook but is only tested indirectly through the component, flag as 🟡 Low (recommend extracting hook tests).
+
 ## What You Skip
 
 Do NOT waste your review budget on these:
@@ -100,11 +109,22 @@ VERDICT: approved
 ---END VERDICT---
 ```
 
-**Needs Changes:**
+**Needs Changes (with issues):**
 ```
 ---VERDICT---
 VERDICT: needs_changes
 FIX_TYPE: functional
+ISSUES:
+- SEVERITY: high | FILE: src/auth.ts:42 | PROBLEM: token not refreshed on 401 | FIX: add refresh logic in catch block
+- SEVERITY: medium | FILE: src/api.ts:15 | PROBLEM: missing error boundary | FIX: wrap fetch in try/catch
+---END VERDICT---
+```
+
+**Needs Changes (without issues):**
+```
+---VERDICT---
+VERDICT: needs_changes
+FIX_TYPE: non-functional
 ---END VERDICT---
 ```
 
@@ -116,7 +136,11 @@ FIX_TYPE: non-functional
 ---END VERDICT---
 ```
 
-The `---VERDICT---` block MUST be at the very end of your output. The block format is strict — use exactly the delimiters shown above.
+When your verdict is `needs_changes`, you SHOULD include an `ISSUES:` section in the verdict block. Each issue is a single line starting with `-` and containing pipe-separated fields: `SEVERITY`, `FILE`, `PROBLEM`, and `FIX`. This structured format allows the orchestrator to give specific guidance to the implementor about what to fix — without re-reading your full prose review.
+
+If you found issues in your prose review, extract them into the ISSUES block. If there are no specific file-level issues (e.g., a general test quality concern), you may omit the ISSUES section.
+
+The `---VERDICT---` block MUST be at the very end of your output. The block format is strict — use exactly the delimiters shown above. Do NOT include extra text after `---END VERDICT---`.
 
 ### Fix-Type Classification
 

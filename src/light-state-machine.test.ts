@@ -729,6 +729,10 @@ describe("LightStateMachine: IStateMachine interface", () => {
     assert.equal(typeof sm.setGitRef, "function");
     assert.equal(typeof sm.reset, "function");
     assert.equal(typeof sm.toJSON, "function");
+    assert.equal(typeof sm.getRetryCounter, "function");
+    assert.equal(typeof sm.incrementRetryCounter, "function");
+    assert.equal(typeof sm.resetRetryCounter, "function");
+    assert.equal(typeof sm.resetAllRetryCounters, "function");
   });
 });
 

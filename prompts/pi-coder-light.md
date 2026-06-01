@@ -81,3 +81,4 @@ State advancement:
 - **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES → IMPLEMENTING. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry.
 
 {{referenceProjects}}
+{{dbCommands}}

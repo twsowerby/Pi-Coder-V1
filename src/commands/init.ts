@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PiCoderConfig } from "../types.ts";
-import { detectTestCommand, detectTestCommands } from "../config.ts";
+import { detectTestCommand, detectTestCommands, detectDbStack } from "../config.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 
 /** Resolve the package's own agents/ directory path. */
@@ -47,6 +47,7 @@ export function registerInitCommand(ctx: HandlerContext): void {
 
       // 3. Create .pi-coder/config.json — only if it doesn't already exist
       const configPath = join(cwd, ".pi-coder", "config.json");
+      const detectedDbStack = detectDbStack(cwd);
       if (!existsSync(configPath)) {
         const detectedTestCommand = detectTestCommand(cwd);
         const detectedTestCommands = detectTestCommands(cwd);
@@ -58,6 +59,7 @@ export function registerInitCommand(ctx: HandlerContext): void {
           mergeBranch: "merge",
           branchPrefix: "pi-coder/",
           interviewTimeout: 0,
+          retryEscalation: { maxRetries: 10, enrichedSteerThreshold: 4, replanThreshold: 7 },
           nudge: {
             enabled: true,
             defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
@@ -81,6 +83,7 @@ export function registerInitCommand(ctx: HandlerContext): void {
           notifications: {
             enabled: false,
           },
+          dbCommands: detectedDbStack,
         };
         writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), "utf-8");
         created.push(".pi-coder/config.json");
@@ -182,6 +185,42 @@ export function registerInitCommand(ctx: HandlerContext): void {
         skipped.push(".pi-coder/knowledge/design_system.md (already exists)");
       }
 
+      // 4d. Create database.md in knowledge — skip if exists
+      const databaseMdPath = join(knowledgeDir, "database.md");
+      if (!existsSync(databaseMdPath)) {
+        const dbMdLines: string[] = [
+          "# Database",
+          "",
+          "This file documents the project's database configuration.",
+          "The researcher and implementor reference this before working on data-layer features.",
+        ];
+        if (detectedDbStack) {
+          dbMdLines.push("");
+          dbMdLines.push(`This project uses **${detectedDbStack.stack}** for its database.`);
+          dbMdLines.push("");
+          dbMdLines.push("## Key Tables");
+          dbMdLines.push("");
+          dbMdLines.push("<!-- List the most important tables and their purpose. -->");
+          dbMdLines.push("<!-- e.g., `users` — Core user accounts with email, hashed password, and role -->");
+          dbMdLines.push("<!-- e.g., `sessions` — Active user sessions with token and expiry -->");
+          dbMdLines.push("");
+          dbMdLines.push("## Gotchas");
+          dbMdLines.push("");
+          dbMdLines.push("<!-- Document unexpected schema details, naming conventions, or traps. -->");
+          dbMdLines.push("<!-- e.g., `created_at` columns use timestamptz, not timestamp — always compare with timezone-aware values -->");
+          dbMdLines.push("<!-- e.g., `users.email` has a unique constraint but the app doesn't enforce it — rely on the DB constraint -->");
+        } else {
+          dbMdLines.push("");
+          dbMdLines.push("<!-- No database stack was auto-detected. If this project uses a database, -->");
+          dbMdLines.push("<!-- add \"dbCommands\": { \"stack\": \"supabase\" } to .pi-coder/config.json. -->");
+          dbMdLines.push("<!-- See the README's \"dbCommands\" configuration section for details. -->");
+        }
+        writeFileSync(databaseMdPath, dbMdLines.join("\n") + "\n", "utf-8");
+        created.push(`.pi-coder/knowledge/database.md${detectedDbStack ? ` (${detectedDbStack.stack} detected)` : " (no DB detected — fill in manually)"}`);
+      } else {
+        skipped.push(".pi-coder/knowledge/database.md (already exists)");
+      }
+
       // 4d. Create .pi-coder/damage-control.json
       const damageControlPath = join(cwd, ".pi-coder", "damage-control.json");
       if (!existsSync(damageControlPath)) {
@@ -198,6 +237,10 @@ export function registerInitCommand(ctx: HandlerContext): void {
               { pattern: "\\bchmod\\s+.*777\\b", reason: "chmod 777 is a security risk — use minimum permissions" },
               { pattern: "\\btruncate\\b", reason: "Truncating files is destructive — write new content instead" },
               { pattern: "\\b(?:mkfs|dd\\s+if=)\\b", reason: "Can destroy filesystems — do not attempt to work around this" },
+              { pattern: "\\bDROP\\s+(?:TABLE|DATABASE|SCHEMA)\\b", reason: "Dropping database objects is destructive — use migrations to alter schema instead" },
+              { pattern: "\\bTRUNCATE\\s+", reason: "Truncating tables destroys data — use DELETE with WHERE to remove specific rows" },
+              { pattern: "\\bDELETE\\s+FROM\\b(?![^;]*\\bWHERE\\b)", reason: "DELETE without WHERE removes all rows — add a WHERE clause to target specific rows" },
+              { pattern: "\\b(?:supabase\\s+db\\s+dump|pg_dump|mysqldump)\\b", reason: "Full schema dumps produce massive output — use targeted queries instead (see dbCommands in config)" },
             ],
             zeroAccessPaths: [".env", ".env.local", ".env.production", "~/.ssh/", "~/.gnupg/"],
             readOnlyPaths: [".git/config"],

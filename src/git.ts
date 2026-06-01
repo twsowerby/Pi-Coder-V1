@@ -132,7 +132,14 @@ export class GitOperations {
       };
     }
 
-    const fullBranchName = `${this.config.branchPrefix}${branch}`;
+    // Fix D: Strip leading branchPrefix if the LLM already included it.
+    // This prevents double-prefixing (e.g., "pi-coder/pi-coder/my-spec").
+    const prefix = this.config.branchPrefix;
+    let normalizedBranch = branch;
+    while (normalizedBranch.startsWith(prefix)) {
+      normalizedBranch = normalizedBranch.slice(prefix.length);
+    }
+    const fullBranchName = `${prefix}${normalizedBranch}`;
 
     const args = ["checkout", "-b", fullBranchName];
     if (baseBranch) {
@@ -184,6 +191,39 @@ export class GitOperations {
       ref,
       message: commitResult.message,
     };
+  }
+
+  /**
+   * Commit only .pi-coder/knowledge/ files. Used when knowledge is updated
+   * after the merge to prevent dangling uncommitted changes on main.
+   * Stages and commits ONLY knowledge files — no other changes are touched.
+   */
+  async commitKnowledge(filename: string): Promise<GitCheckpointResult> {
+    // Stage only knowledge files. Use -f to override root .gitignore entries
+    // that may ignore .pi-coder/ (knowledge files should be tracked regardless).
+    const addResult = await this.execGit(["add", "-f", ".pi-coder/knowledge/"]);
+    if (!addResult.success) {
+      return addResult;
+    }
+
+    // Check if there's anything staged (knowledge might already be committed)
+    const diffResult = await this.execGit(["diff", "--cached", "--quiet"]);
+    if (diffResult.success) {
+      // diff --cached --quiet returns 0 when there are NO staged changes
+      return { success: true, ref: undefined, message: "No knowledge changes to commit" };
+    }
+
+    const commitResult = await this.execGit([
+      "commit",
+      "-m",
+      `knowledge: ${filename}`,
+    ]);
+    if (!commitResult.success) {
+      return commitResult;
+    }
+
+    const ref = extractCommitRef(commitResult.message ?? "");
+    return { success: true, ref, message: commitResult.message };
   }
 
   /**

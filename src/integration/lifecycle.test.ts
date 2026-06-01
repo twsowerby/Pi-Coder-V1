@@ -53,6 +53,11 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
       level: "standard",
       maxLogFiles: 10,
     },
+    retryEscalation: {
+      maxRetries: 10,
+      enrichedSteerThreshold: 4,
+      replanThreshold: 7,
+    },
     ...overrides,
   };
 }

@@ -64,7 +64,7 @@ State advancement:
   - `TDD_RED_VALIDATE → TDD_GREEN_WRITE`: `test_run_this_state` (set when you run pi_coder_run_tests in validation states)
   - `TDD_GREEN_VALIDATE → TDD_RED_WRITE / REVIEWING`: `test_run_this_state` (same)
   - `NEEDS_CHANGES → REVIEWING`: `non_functional_classified` (set automatically when reviewer classifies fix as non-functional; escape hatch: pass `fixType="non-functional"` to pi_coder_advance_fsm)
-- `REVIEWING → APPROVED` has NO evidence guard — the reviewer's `---VERDICT---` block drives auto-transition. If you see "⚠️ AUTO-TRANSITION FAILED", read the review yourself and advance manually with `pi_coder_advance_fsm` (a `reason` string is required for this exception transition). **Do not advance if the review has actionable findings** — fix them first.
+- `REVIEWING → APPROVED`: Requires `review_completed` evidence (set automatically by auto-transition handler when reviewer returns verdict). If auto-transition failed AND degraded recovery didn't fire, use `reviewOverride` with the verdict you determined from reading the reviewer's output. This is audited — do not use routinely. **Do not advance if the review has actionable findings** — fix them first.
 
 From APPROVED, you can advance directly to MERGING (if the user already approved via interview — the interview IS the multi-point approval) or step through FINAL_APPROVAL → MERGING.
 
@@ -137,14 +137,34 @@ Direct unit classification:
 - GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
 - **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES → TDD_RED_WRITE. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry, so the RED_VALIDATE gate will enforce the TDD requirement until you update the spec. If you believe the direct classification is still valid (e.g., the reviewer flagged a documentation typo, not a production behavior issue), you can still pass `unitName` when advancing — but the unit will go through full TDD unless you re-save with `approach: "direct"`.
 
+## NEEDS_CHANGES Routing (TDD Mode)
+
+When the reviewer returns NEEDS_CHANGES, there are three paths depending on the fix type:
+
+**1. Non-functional fix** (comments, naming, test cleanup — no production behavior change):
+- Delegate implementor to apply the fix, then advance to REVIEWING.
+- The evidence gate is satisfied automatically if the reviewer classified the fix as non-functional.
+- If not, pass `fixType="non-functional"` to `pi_coder_advance_fsm`.
+
+**2. Functional fix with existing test coverage** (production code change, but existing tests already assert the expected behavior):
+- Delegate implementor to fix the code AND tighten existing assertions in one dispatch.
+- Then advance to TDD_GREEN_WRITE (bypasses RED — existing tests serve as the regression check).
+- GREEN_VALIDATE will confirm everything passes.
+
+**3. Functional fix needing new tests** (production code change, no existing test covers the buggy behavior):
+- Advance to TDD_RED_WRITE for a full RED/GREEN cycle.
+- Write a new failing test first, then implement the fix.
+
 ## NEEDS_CHANGES Re-delegation
 
-When the reviewer returns NEEDS_CHANGES and you re-delegate to the implementor:
+When you re-delegate to the implementor from NEEDS_CHANGES:
 
 1. **Copy the reviewer's issue descriptions verbatim** — do not summarize. Detail matters for accurate fixes.
 2. **Include existing test context** — which test files cover the affected areas, so the implementor doesn't create parallel files.
 3. **State whether to extend existing tests or add new ones** — reviewers often flag missing test coverage alongside code issues. Be explicit: "Extend the existing test at X" or "Add new test cases for Y under describe('Z')".
-4. **For functional fixes:** "You are re-entering RED phase. The existing test suite has N passing tests. Write NEW failing tests that demonstrate the bug identified by the reviewer. Do NOT modify the passing tests — they validate existing correct behaviour."
-5. **For non-functional fixes** (style, naming, docs): "This is a non-functional change. Modify the code directly — no new tests needed."
+4. **For functional fixes going through TDD_RED_WRITE:** "You are re-entering RED phase. The existing test suite has N passing tests. Write NEW failing tests that demonstrate the bug identified by the reviewer. Do NOT modify the passing tests — they validate existing correct behaviour."
+5. **For functional fixes going through TDD_GREEN_WRITE:** "This is a functional fix with existing test coverage. Modify the production code to fix the issue, and tighten the existing assertions if needed. The existing tests will validate the fix at GREEN_VALIDATE."
+6. **For non-functional fixes** (style, naming, docs): "This is a non-functional change. Modify the code directly — no new tests needed."
 
 {{referenceProjects}}
+{{dbCommands}}

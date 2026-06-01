@@ -8,6 +8,31 @@
  * action rules, etc.) — all behavior lives here.
  */
 
+/**
+ * Generate a one-line explanation for why an illegal transition is blocked.
+ * Helps LLM orchestrators understand the TDD reasoning, reducing retry rates.
+ */
+function getTransitionExplanation(from: string, to: string, validTargets: string[]): string {
+  // Specific cases that cause the most retries
+  if (from === "TDD_RED_WRITE" && to === "TDD_GREEN_WRITE") {
+    return "You cannot skip TDD_RED_VALIDATE — tests must be run and validated before proceeding to GREEN.";
+  }
+  if (from === "TDD_GREEN_WRITE" && to === "REVIEWING") {
+    return "You cannot skip TDD_GREEN_VALIDATE — tests must pass before proceeding to REVIEWING.";
+  }
+  if (from === "TDD_RED_WRITE" && to === "REVIEWING") {
+    return "You must go through TDD_RED_VALIDATE and TDD_GREEN_VALIDATE before REVIEWING.";
+  }
+  if (from === "SPEC_WORK" && to === "TDD_RED_WRITE") {
+    return "The spec must be approved and checkpointed first — go through SPEC_APPROVED → GIT_CHECKPOINT.";
+  }
+  // Generic fallback
+  if (validTargets.length === 1) {
+    return `Only ${validTargets[0]} is valid from ${from}.`;
+  }
+  return "";
+}
+
 import type { PiCoderConfig, EvidenceFlag, IStateMachine, TransitionGuardError as ITransitionGuardError } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -138,6 +163,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
   private _gitRef: string | null = null;
   protected _currentUnitName: string | null = null;
   private _evidence: Set<EvidenceFlag> = new Set();
+  private _retryCounters: Map<string, number> = new Map();
   protected readonly _config: PiCoderConfig;
 
   // Pre-computed lookup structures (instance-level, from definition)
@@ -185,6 +211,29 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     this._currentUnitName = name;
   }
 
+  // --- Retry Counters ---
+
+  /** Get the retry counter for a specific transition loop key (e.g., 'green_retries'). */
+  getRetryCounter(key: string): number {
+    return this._retryCounters.get(key) ?? 0;
+  }
+
+  /** Increment the retry counter for a specific transition loop key. */
+  incrementRetryCounter(key: string): void {
+    const current = this._retryCounters.get(key) ?? 0;
+    this._retryCounters.set(key, current + 1);
+  }
+
+  /** Reset a specific retry counter. */
+  resetRetryCounter(key: string): void {
+    this._retryCounters.delete(key);
+  }
+
+  /** Reset all retry counters. */
+  resetAllRetryCounters(): void {
+    this._retryCounters.clear();
+  }
+
   // --- Evidence Management ---
 
   setEvidence(flag: EvidenceFlag): void {
@@ -215,9 +264,11 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     // 1. Check transition topology
     if (!this._transitionSet.has(key)) {
       const validTargets = this._transitionMap.get(this._currentState) ?? [];
+      const explanation = getTransitionExplanation(this._currentState, to, validTargets);
+      const explanationPart = explanation ? ` ${explanation}` : "";
       throw new Error(
-        `Illegal transition: ${this._currentState} → ${to}. ` +
-        `Valid transitions from ${this._currentState}: ${validTargets.join(", ")}`,
+        `Illegal transition: ${this._currentState} → ${to}.` +
+        `${explanationPart} Valid transition${validTargets.length !== 1 ? "s" : ""} from ${this._currentState}: ${validTargets.join(", ")}`,
       );
     }
 
@@ -272,11 +323,21 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       this._currentUnitName = null;
     }
 
-    // Reset loop counter, evidence, and currentUnitName on IDLE entry
+    // Track GREEN retry loops (GREEN_VALIDATE → GREEN_WRITE auto-transition)
+    if (from === "TDD_GREEN_VALIDATE" && to === "TDD_GREEN_WRITE") {
+      this.incrementRetryCounter("green_retries");
+    }
+    // Reset GREEN retry counter on unit transitions
+    if (from === "TDD_GREEN_VALIDATE" && (to === "REVIEWING" || to === "TDD_RED_WRITE")) {
+      this.resetRetryCounter("green_retries");
+    }
+
+    // Reset loop counter, evidence, currentUnitName, and retry counters on IDLE entry
     if (to === "IDLE") {
       this._loopCount = 0;
       this._evidence.clear();
       this._currentUnitName = null;
+      this._retryCounters.clear();
     }
   }
 
@@ -298,6 +359,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     this._gitRef = null;
     this._currentUnitName = null;
     this._evidence.clear();
+    this._retryCounters.clear();
   }
 
   // --- Action Guards ---
@@ -356,36 +418,51 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
 
     if (def.allowAnyToBlocked) {
       // Light mode diagram
-      lines.push("FSM States & Transitions (Light Mode — no TDD phases):");
-      lines.push("IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →");
-      lines.push("IMPLEMENTING → REVIEWING →");
-      lines.push("(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) | (APPROVED → MERGING → COMPLETE) |");
-      lines.push("(NEEDS_CHANGES → IMPLEMENTING | REVIEWING)");
+      lines.push("FSM State Transitions (Light Mode):");
+      lines.push("| Current State | Valid Target | When |");
+      lines.push("|---|---|---|");
+      lines.push("| IDLE | SPEC_WORK | Start a new cycle |");
+      lines.push("| SPEC_WORK | SPEC_APPROVED | Spec saved AND user approved |");
+      lines.push("| SPEC_APPROVED | GIT_CHECKPOINT | User approved → checkpoint |");
+      lines.push("| GIT_CHECKPOINT | IMPLEMENTING | Auto (checkpoint complete) |");
+      lines.push("| IMPLEMENTING | REVIEWING | After implementor completes, advance to REVIEWING |");
+      lines.push("| REVIEWING | APPROVED | Auto (review approved) |");
+      lines.push("| REVIEWING | NEEDS_CHANGES | Auto (review needs changes) |");
+      lines.push("| NEEDS_CHANGES | IMPLEMENTING | Functional or comprehensive fix |");
+      lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
+      lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+      lines.push("| Any | BLOCKED | Emergency override |");
+      lines.push("| Any | IDLE | Abort cycle |");
       lines.push("");
-      lines.push("Manual advances: Use pi_coder_advance_fsm to advance states.");
-      lines.push("  IDLE → SPEC_WORK (start a new cycle)");
-      lines.push("  GIT_CHECKPOINT (create checkpoint after spec approval)");
-      lines.push("  Any → BLOCKED (emergency override for unrecoverable errors)");
-      lines.push("  Any → IDLE (abort cycle)");
-      lines.push("Auto-transitions: Happen on subagent/test results (deterministic).");
+      lines.push("⚠️ IMPORTANT: The table above is COMPLETE. No other transitions are valid.");
     } else {
-      // TDD mode diagram — includes RED_VALIDATE triple exit
-      lines.push("FSM States & Transitions:");
-      lines.push("IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →");
-      lines.push("TDD_RED_WRITE → TDD_RED_VALIDATE →");
-      lines.push("  (tests fail as expected) TDD_GREEN_WRITE → TDD_GREEN_VALIDATE →");
-      lines.push("  (tests pass) REVIEWING | (tests still fail) TDD_GREEN_WRITE | (next unit) TDD_RED_WRITE →");
-      lines.push("  (RED tautology: tests pass unexpectedly)");
-      lines.push("    → TDD_GREEN_WRITE (acknowledge tautology) | → BLOCKED (genuinely problematic)");
-      lines.push("(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) | (APPROVED → MERGING → COMPLETE) |");
-      lines.push("(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING)");
+      // TDD mode diagram
+      lines.push("FSM State Transitions (TDD Mode):");
+      lines.push("| Current State | Valid Target | When |");
+      lines.push("|---|---|---|");
+      lines.push("| IDLE | SPEC_WORK | Start a new cycle |");
+      lines.push("| SPEC_WORK | SPEC_APPROVED | Spec saved AND user approved |");
+      lines.push("| SPEC_APPROVED | GIT_CHECKPOINT | User approved → checkpoint |");
+      lines.push("| GIT_CHECKPOINT | TDD_RED_WRITE | Auto (checkpoint complete) |");
+      lines.push("| TDD_RED_WRITE | TDD_RED_VALIDATE | After implementor writes tests |");
+      lines.push("| TDD_RED_VALIDATE | TDD_GREEN_WRITE | Auto (tests fail as expected) |");
+      lines.push("| TDD_RED_VALIDATE | TDD_GREEN_WRITE | RED tautology acknowledged |");
+      lines.push("| TDD_RED_VALIDATE | BLOCKED | RED tautology — genuinely problematic |");
+      lines.push("| TDD_GREEN_WRITE | TDD_GREEN_VALIDATE | After implementor writes code |");
+      lines.push("| TDD_GREEN_VALIDATE | REVIEWING | Auto (all tests pass) |");
+      lines.push("| TDD_GREEN_VALIDATE | TDD_GREEN_WRITE | Auto (tests still fail) |");
+      lines.push("| TDD_GREEN_VALIDATE | TDD_RED_WRITE | Next implementation unit |");
+      lines.push("| TDD_GREEN_WRITE | BLOCKED | GREEN retry limit exceeded |");
+      lines.push("| REVIEWING | APPROVED | Auto (review approved) |");
+      lines.push("| REVIEWING | NEEDS_CHANGES | Auto (review needs changes) |");
+      lines.push("| NEEDS_CHANGES | TDD_RED_WRITE | Functional fix needing new tests |");
+      lines.push("| NEEDS_CHANGES | TDD_GREEN_WRITE | Functional fix with existing test coverage |");
+      lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
+      lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+      lines.push("| Any | IDLE | Abort cycle |");
       lines.push("");
-      lines.push("Manual advances: Use pi_coder_advance_fsm to advance states.");
-      lines.push("  IDLE → SPEC_WORK (start a new cycle)");
-      lines.push("  GIT_CHECKPOINT (create checkpoint after spec approval)");
-      lines.push("  TDD_RED_VALIDATE → BLOCKED: RED tautology when tests passing is genuinely problematic");
-      lines.push("  Any → IDLE (abort cycle)");
-      lines.push("Auto-transitions: Happen on subagent/test results (deterministic).");
+      lines.push("⚠️ IMPORTANT: The table above is COMPLETE. No other transitions are valid.");
+      lines.push("If you try an invalid transition, pi_coder_advance_fsm will reject it. Read the error message carefully — it tells you exactly which transition IS valid.");
     }
 
     return lines.join("\n");
@@ -400,6 +477,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       gitRef: this._gitRef,
       currentUnitName: this._currentUnitName,
       evidence: [...this._evidence],
+      retryCounters: Object.fromEntries(this._retryCounters),
     };
   }
 
@@ -410,5 +488,8 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     this._gitRef = (data.gitRef as string | null) ?? null;
     this._currentUnitName = (data.currentUnitName as string | null) ?? null;
     this._evidence = new Set((data.evidence as EvidenceFlag[]) ?? []);
+    // Restore retry counters
+    const retryCounters = data.retryCounters as Record<string, number> | undefined;
+    this._retryCounters = new Map(retryCounters ? Object.entries(retryCounters) : []);
   }
 }
