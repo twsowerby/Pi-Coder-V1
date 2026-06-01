@@ -823,7 +823,7 @@ describe("Spec 16 Phase 5: Spec Close Command", () => {
       "Must clear activeSpecId when closing active spec",
     );
     assert.ok(
-      content.includes('resetNudgeState("IDLE")'),
+      content.includes('nudgeEngine.reset("IDLE")'),
       "Must reset nudge state to IDLE",
     );
   });

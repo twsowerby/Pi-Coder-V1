@@ -23,7 +23,7 @@ import { SpecManager } from "../src/spec.ts";
 import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persistence.ts";
 import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools, summarizeToolInput, type StateMachineRef } from "../src/tools.ts";
-import type { PiCoderConfig, PiCoderMode, FSMState, EvidenceFlag, IStateMachine, NudgeStateConfig } from "../src/types.ts";
+import type { PiCoderConfig, PiCoderMode, FSMState, IStateMachine } from "../src/types.ts";
 import { Logger, type LogEventType } from "../src/logger.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -48,45 +48,24 @@ export let subagentsAvailable = false;
 export let stateMachine: IStateMachine | null;
 export let config: PiCoderConfig;
 
-/** Nudge tracking state. */
-interface NudgeState {
-  fsmState: string;
-  turnsSinceEntry: number;
-  actionAttempted: boolean;
-  lastNudgeLevel: number;
-}
+// Nudge engine — imported from src/nudge-engine.ts
+import { NudgeEngine } from "../src/nudge-engine.ts";
 
-export let nudgeState: NudgeState = {
-  fsmState: "IDLE",
-  turnsSinceEntry: 0,
-  actionAttempted: false,
-  lastNudgeLevel: 0,
-};
+/** Shared nudge engine instance. */
+const nudgeEngine = new NudgeEngine();
+
+// Subagent monitor — imported from src/subagent-monitor.ts
+import { SubagentMonitor } from "../src/subagent-monitor.ts";
+
+/** Shared subagent monitor instance. */
+const subagentMonitor = new SubagentMonitor();
+
 
 /** Captured ExtensionContext from session_start — used by refreshUI(). */
 let sessionCtx: ExtensionContext | null = null;
 
-/** Whether a pi-coder subagent is currently running (for UI indicator). */
-let subagentRunning = false;
 
-/** Live subagent progress data — updated via `tool_execution_update` events. */
-interface SubagentActivity {
-  agent: string;
-  task: string;
-  currentTool: string | undefined;
-  currentToolArgs: string | undefined;
-  currentPath: string | undefined;
-  toolCount: number;
-  turnCount: number | undefined;
-  tokens: number;
-  durationMs: number;
-  recentTools: Array<{ tool: string; args: string }>;
-  lastUpdatedAt: number;
-}
-let subagentActivity: SubagentActivity | null = null;
 
-/** Timer that re-renders the subagent widget to update elapsed duration. */
-let subagentWidgetTimer: ReturnType<typeof setInterval> | null = null;
 
 // ---------------------------------------------------------------------------
 // UI Refresh — updates widget, status line, and working indicator
@@ -109,7 +88,7 @@ function refreshUI(): void {
 
   // Always keep the subagent widget in sync — clear it when not running,
   // delegate to refreshSubagentWidget() when active
-  if (!subagentRunning) {
+  if (!subagentMonitor.running) {
     ctx.ui.setWidget("pi-coder-subagent", undefined);
   } else {
     refreshSubagentWidget();
@@ -119,13 +98,13 @@ function refreshUI(): void {
     // Plan mode — investigation only, no FSM
     const theme = ctx.ui.theme;
     let widgetLine = theme.fg("accent", "🔍 Plan");
-    if (subagentRunning) {
+    if (subagentMonitor.running) {
       widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
     }
     ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
     ctx.ui.setStatus("pi-coder", theme.fg("accent", "🔍 plan mode"));
 
-    if (subagentRunning) {
+    if (subagentMonitor.running) {
       ctx.ui.setWorkingIndicator({
         frames: [theme.fg("accent", "⏣"), theme.fg("muted", "⏣")],
         intervalMs: 500,
@@ -143,13 +122,13 @@ function refreshUI(): void {
     if (stateMachine) {
       widgetLine += theme.fg("dim", ` | `) + theme.fg("muted", stateMachine!.currentState);
     }
-    if (subagentRunning) {
+    if (subagentMonitor.running) {
       widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
     }
     ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
     ctx.ui.setStatus("pi-coder", theme.fg("accent", "⚡ light mode"));
 
-    if (subagentRunning) {
+    if (subagentMonitor.running) {
       ctx.ui.setWorkingIndicator({
         frames: [theme.fg("accent", "⏣"), theme.fg("muted", "⏣")],
         intervalMs: 500,
@@ -181,7 +160,7 @@ function refreshUI(): void {
   if (showLoop && loopCount > 0) {
     widgetLine += theme.fg("dim", `  loop: `) + theme.fg("muted", String(loopCount)) + theme.fg("dim", `/${config.maxLoops}`);
   }
-  if (subagentRunning) {
+  if (subagentMonitor.running) {
     widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
   }
 
@@ -204,7 +183,7 @@ function refreshUI(): void {
   ctx.ui.setStatus("pi-coder", statusText);
 
   // --- Working indicator ---
-  if (subagentRunning) {
+  if (subagentMonitor.running) {
     // Pulsing dot while subagent is active
     ctx.ui.setWorkingIndicator({
       frames: [
@@ -235,19 +214,19 @@ function refreshUI(): void {
 // UI formatting helpers — imported from src/ui/formatting.ts
 import { formatDurationMs, formatTokenCount } from "../src/ui/formatting.ts";
 
-/** Refresh the pi-coder-subagent widget based on current subagentActivity. */
+/** Refresh the pi-coder-subagent widget based on current subagentMonitor.activity. */
 function refreshSubagentWidget(): void {
   if (!sessionCtx) return;
   const ctx = sessionCtx;
 
-  if (piCoderMode === "off" || !subagentRunning || !subagentActivity) {
+  if (piCoderMode === "off" || !subagentMonitor.running || !subagentMonitor.activity) {
     // No active subagent — clear the widget
     ctx.ui.setWidget("pi-coder-subagent", undefined);
     return;
   }
 
   const theme = ctx.ui.theme;
-  const a = subagentActivity;
+  const a = subagentMonitor.activity;
 
   // Line 1: Agent name + spec/unit context
   const specId = activeSpecId;
@@ -283,8 +262,8 @@ function refreshSubagentWidget(): void {
   if (a.toolCount > 0) stats.push(`${a.toolCount} tool${a.toolCount !== 1 ? "s" : ""}`);
   if (a.turnCount !== undefined && a.turnCount > 0) stats.push(`${a.turnCount} turn${a.turnCount !== 1 ? "s" : ""}`);
   if (a.tokens > 0) stats.push(`${formatTokenCount(a.tokens)} tok`);
-  // Fallback duration from subagentStartTime if tool_execution_update isn't providing it
-  const elapsed = subagentStartTime !== null ? Date.now() - subagentStartTime : 0;
+  // Fallback duration from subagentMonitor.startTime if tool_execution_update isn't providing it
+  const elapsed = subagentMonitor.startTime !== null ? Date.now() - subagentMonitor.startTime : 0;
   if (a.durationMs > 0) {
     // Provided by tool_execution_update — use it
   } else if (elapsed > 0) {
@@ -313,105 +292,18 @@ let logger: Logger;
 /** Session ID — generated once per extension initialization. */
 let sessionId: string;
 
-/** Track subagent start times for duration calculation. */
-let subagentStartTime: number | null = null;
 
-/** Track the last subagent agent name for pairing start/end events. */
-let lastSubagentAgent: string | null = null;
 
 /**
  * Session turn counter — incremented at the start of every agent turn.
  */
-let sessionTurnCount = 0;
+// Token tracker — imported from src/token-tracker.ts
+import { TokenTracker } from "../src/token-tracker.ts";
 
-/** Track lifecycle start time for wall clock duration. */
-let lifecycleStartTime: number | null = null;
-
-/** Track session start time for session_summary duration. */
-let sessionStartTime: number | null = null;
-
-/** Track spec count attempted in this session. */
-let sessionSpecCount = 0;
-
-/** Track cumulative token usage across a spec lifecycle. */
-let lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-
-/** Token breakdown by source: orchestrator turns vs subagent delegation. */
-interface SourceTokens {
-  /** Tokens from orchestrator (main session) turns */
-  orchestrator: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
-  /** Tokens from pi-coder subagent delegations */
-  subagent: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
-}
-
-/** Token breakdown per FSM state. Keyed by state name (e.g. "SPEC_WORK", "TDD_RED_WRITE"). */
-let phaseTokens: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number; source: SourceTokens } > = {};
-
-/** The FSM state that is currently accruing tokens. */
-let currentAccrualState: string | null = null;
-
-/** Reset per-lifecycle tracking for a new spec. */
-function resetLifecycleTracking(): void {
-  lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-  phaseTokens = {};
-  currentAccrualState = null;
-}
-
-/** Ensure an accrual bucket exists for the given FSM state. */
-function ensurePhaseBucket(state: string): void {
-  if (!phaseTokens[state]) {
-    phaseTokens[state] = {
-      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
-      source: {
-        orchestrator: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-        subagent: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-      },
-    };
-  }
-}
-
-/** Set the current accrual state (called on FSM transitions and lifecycle start). */
-function setAccrualState(state: string): void {
-  currentAccrualState = state;
-  ensurePhaseBucket(state);
-}
-
-/**
- * Emit an fsm_state_usage event for the state we're leaving and set the new accrual state.
- * Call this on every FSM transition to capture per-state token breakdown.
- *
- * @param fromState - The FSM state being exited
- * @param toState - The FSM state being entered
- * @param logger_ - The logger instance (passed to avoid circular module-level access issues)
- */
-function emitStateUsageAndTransition(fromState: string, toState: string): void {
-  // Emit usage for the state we're leaving
-  const bucket = phaseTokens[fromState];
-  if (bucket && (bucket.input > 0 || bucket.output > 0 || bucket.cacheRead > 0 || bucket.cacheWrite > 0 || bucket.cost > 0 || bucket.turns > 0)) {
-    logEvent("fsm_state_usage", {
-      state: fromState,
-      input: bucket.input,
-      output: bucket.output,
-      cacheRead: bucket.cacheRead,
-      cacheWrite: bucket.cacheWrite,
-      cost: bucket.cost,
-      turns: bucket.turns,
-      source: {
-        orchestrator: { ...bucket.source.orchestrator },
-        subagent: { ...bucket.source.subagent },
-      },
-      specId: activeSpecId,
-      nextState: toState,
-    });
-  }
-  // Start accruing into the new state
-  setAccrualState(toState);
-}
+/** Shared token tracker instance. */
+const tokenTracker = new TokenTracker();
 
 let globalStatePersistence: GlobalStatePersistence;
-
-/** Track spec approval interview start time for duration calculation. */
-let specApprovalInterviewStartTime: number | null = null;
 
 /** Module-level active spec ID. Set by pi_coder_save_spec, cleared on IDLE/COMPLETE. */
 let activeSpecId: string | null = null;
@@ -427,31 +319,25 @@ let projectCwd: string = process.cwd();
 let persistStatePromise: Promise<void> = Promise.resolve();
 
 export async function persistState(): Promise<void> {
-  // Serialize saves — each writes the full state, last one wins.
-  // Wait for any in-flight save, then start ours.
   const prev = persistStatePromise.catch(() => {});
   const ourSave = prev.then(async () => {
-    const now = new Date().toISOString();
-
-    // 1. Save global state (pointer only)
     const globalState: GlobalState = {
       version: 1,
       piCoderMode,
       activeSpecId,
-      updatedAt: now,
+      updatedAt: new Date().toISOString(),
     };
     await globalStatePersistence.save(globalState);
 
-    // 2. Save per-spec state (FSM + evidence) if a spec is active
+    // Also persist per-spec state if a spec is active
     if (activeSpecId && stateMachine) {
-      const fsmJson = stateMachine!.toJSON();
+      const now = new Date().toISOString();
       const specState: SpecState = {
         version: 1,
-        currentState: fsmJson.currentState as string,
-        loopCount: fsmJson.loopCount as number,
-        gitRef: fsmJson.gitRef as string | null,
-        evidence: fsmJson.evidence as EvidenceFlag[],
-        currentUnitName: fsmJson.currentUnitName as string | null ?? null,
+        currentState: stateMachine.currentState,
+        loopCount: stateMachine.loopCount,
+        gitRef: null,
+        evidence: [],
         createdAt: specStateCreatedAt ?? now,
         updatedAt: now,
       };
@@ -463,8 +349,9 @@ export async function persistState(): Promise<void> {
     }
   });
   persistStatePromise = ourSave;
-  return ourSave;
+  await ourSave;
 }
+
 
 /** Log a structured event. Convenience wrapper that adds sessionId, timestamp, turnCount, and mode. */
 function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
@@ -473,7 +360,7 @@ function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
     timestamp: new Date().toISOString(),
     sessionId,
     type,
-    payload: { ...payload, turnCount: sessionTurnCount, mode: piCoderMode },
+    payload: { ...payload, turnCount: tokenTracker.sessionTurnCount, mode: piCoderMode },
   });
 }
 
@@ -490,50 +377,6 @@ export { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetPlanModeProm
 // ---------------------------------------------------------------------------
 // Nudge Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Get the nudge threshold for a given FSM state.
- * Returns undefined if nudging is disabled for the state.
- */
-function getNudgeThreshold(state: string): number | undefined {
-  if (!config.nudge.enabled) return undefined;
-
-  const stateConfig = (config.nudge.states as Record<string, NudgeStateConfig | undefined>)[state];
-  if (stateConfig?.enabled === false) return undefined;
-
-  return stateConfig?.turnsBeforeNudge ?? config.nudge.defaults.turnsBeforeNudge;
-}
-
-/**
- * Build a nudge message for the given level.
- */
-function buildNudgeMessage(state: string, level: number): string {
-  const expectation = stateMachine!.canNudge();
-
-  if (level === 1) {
-    return `\n\n[NUDGE] Reminder: You are in state ${state}. The expected next action is: ${expectation.expectedAction}.`;
-  }
-
-  if (level === 2) {
-    const lifecycle = piCoderMode === "light" ? "implementation" : "TDD";
-    return `\n\n[NUDGE - URGENT] You must now proceed with: ${expectation.expectedAction}. This is a required step in the ${lifecycle} lifecycle. The FSM cannot advance until this action is taken.`;
-  }
-
-  // Level 3 is handled via ctx.ui.notify(), not appended to the prompt
-  return "";
-}
-
-/**
- * Reset nudge state — called on FSM transition or action attempted.
- */
-export function resetNudgeState(newState: string): void {
-  nudgeState = {
-    fsmState: newState,
-    turnsSinceEntry: 0,
-    actionAttempted: false,
-    lastNudgeLevel: 0,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -568,9 +411,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     // Reset session state
-    sessionTurnCount = 0;
-    sessionStartTime = Date.now();
-    sessionSpecCount = 0;
+    tokenTracker.sessionTurnCount = 0;
+    tokenTracker.sessionStartTime = Date.now();
+    tokenTracker.sessionSpecCount = 0;
 
     // --- Child Process Guard ---
     // Pi-coder state machine must only run in the orchestrator process.
@@ -652,7 +495,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       specManager,
       config,
       logEvent,
-      sessionTurnCount: { get current() { return sessionTurnCount; } },
+      sessionTurnCount: { get current() { return tokenTracker.sessionTurnCount; } },
     });
 
     // Check for pi-subagents availability
@@ -677,7 +520,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         // Only surface events that match our config thresholds
         if (ctrl.type === "needs_attention") {
           // Suppress if pi-coder already knows the subagent completed
-          if (!subagentRunning) return;
+          if (!subagentMonitor.running) return;
           logEvent("subagent_control", {
             type: ctrl.type,
             agent: ctrl.agent,
@@ -695,7 +538,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           //
           // For async subagents (not yet supported), steer delivery would
           // be appropriate since the agent isn't blocked.
-          if (!subagentRunning) return;
+          if (!subagentMonitor.running) return;
           // Log only — no pi.sendMessage for foreground subagents
           // pi.sendMessage(
           //   {
@@ -788,7 +631,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         if (!progress || progress.status !== "running") return;
 
-        subagentActivity = {
+        subagentMonitor.activity = {
           agent: progress.agent,
           task: progress.task,
           currentTool: progress.currentTool,
@@ -826,9 +669,9 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       pi.events.on("tool_execution_end", (data: unknown) => {
         const event = data as { toolName: string };
         if (event.toolName !== "subagent") return;
-        // The subagentActivity will be fully cleared in the tool_result handler,
+        // The subagentMonitor.activity will be fully cleared in the tool_result handler,
         // but we can clear the widget immediately for snappier UX
-        subagentActivity = null;
+        subagentMonitor.activity = null;
         refreshSubagentWidget();
       });
     }
@@ -971,7 +814,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     }
 
     // Initialize nudge state from current FSM state (null in Plan/Off modes)
-    resetNudgeState(stateMachine?.currentState ?? "IDLE");
+    nudgeEngine.reset(stateMachine?.currentState ?? "IDLE");
 
     // Activate mode if subagents are available
     if (subagentsAvailable) {
@@ -1015,31 +858,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     const cwVal = usage.cacheWrite ?? 0;
     const costVal = usage.cost?.total ?? 0;
 
-    // Accumulate into lifecycle tokens (same accumulator as subagent tokens)
-    lifecycleTokens.input += inVal;
-    lifecycleTokens.output += outVal;
-    lifecycleTokens.cacheRead += crVal;
-    lifecycleTokens.cacheWrite += cwVal;
-    lifecycleTokens.cost += costVal;
-
-    // Accrue into per-FSM-state bucket (source: orchestrator)
-    const fsmState = stateMachine?.currentState ?? "N/A";
-    if (currentAccrualState) {
-      ensurePhaseBucket(currentAccrualState);
-      const bucket = phaseTokens[currentAccrualState];
-      bucket.input += inVal;
-      bucket.output += outVal;
-      bucket.cacheRead += crVal;
-      bucket.cacheWrite += cwVal;
-      bucket.cost += costVal;
-      bucket.source.orchestrator.input += inVal;
-      bucket.source.orchestrator.output += outVal;
-      bucket.source.orchestrator.cacheRead += crVal;
-      bucket.source.orchestrator.cacheWrite += cwVal;
-      bucket.source.orchestrator.cost += costVal;
-    }
+    // Accumulate into lifecycle tokens + per-FSM-state bucket (source: orchestrator)
+    tokenTracker.accrueOrchestrator({ input: inVal, output: outVal, cacheRead: crVal, cacheWrite: cwVal, cost: costVal });
 
     // Log per-turn usage for granular analysis
+    const fsmState = stateMachine?.currentState ?? "N/A";
     logEvent("turn_usage", {
       input: inVal,
       output: outVal,
@@ -1059,24 +882,24 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     // Emit session summary before cleanup — works for all modes
     logEvent("session_summary", {
-      totalTurns: sessionTurnCount,
-      totalTokens: { ...lifecycleTokens },
-      specsAttempted: sessionSpecCount,
+      totalTurns: tokenTracker.sessionTurnCount,
+      totalTokens: tokenTracker.snapshotLifecycleTokens(),
+      specsAttempted: tokenTracker.sessionSpecCount,
       finalMode: piCoderMode,
       finalFsmState: stateMachine?.currentState ?? "N/A",
-      sessionDurationMs: sessionStartTime !== null ? Date.now() - sessionStartTime : null,
+      sessionDurationMs: tokenTracker.sessionStartTime !== null ? Date.now() - tokenTracker.sessionStartTime : null,
     });
 
-    if (subagentWidgetTimer) {
-      clearInterval(subagentWidgetTimer);
-      subagentWidgetTimer = null;
+    if (subagentMonitor.widgetTimer) {
+      clearInterval(subagentMonitor.widgetTimer);
+      subagentMonitor.widgetTimer = null;
     }
-    subagentRunning = false;
-    subagentActivity = null;
-    sessionTurnCount = 0;
-    sessionStartTime = null;
-    sessionSpecCount = 0;
-    specApprovalInterviewStartTime = null;
+    subagentMonitor.running = false;
+    subagentMonitor.activity = null;
+    tokenTracker.sessionTurnCount = 0;
+    tokenTracker.sessionStartTime = null;
+    tokenTracker.sessionSpecCount = 0;
+    tokenTracker.specApprovalInterviewStartTime = null;
     // Persist final state so it survives session restarts
     if (stateMachine) {
       await persistState();
@@ -1089,7 +912,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", async (event, ctx) => {
     // Increment session turn counter — every agent turn counts
-    sessionTurnCount++;
+    tokenTracker.sessionTurnCount++;
 
     // When off or subagents not available, let pi run normally
     if (piCoderMode === "off" || !subagentsAvailable) return;
@@ -1185,32 +1008,32 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     if (piCoderMode === "tdd" || piCoderMode === "light") {
     // Increment turn counter
-    nudgeState.turnsSinceEntry++;
+    nudgeEngine.state.turnsSinceEntry++;
 
     // Check if nudging should fire
-    const threshold = getNudgeThreshold(stateMachine!.currentState);
+    const threshold = nudgeEngine.getThreshold(config, stateMachine!.currentState);
     const maxEscalation = config.nudge.defaults.escalationLevels;
 
     if (
       threshold !== undefined &&
-      !nudgeState.actionAttempted &&
-      nudgeState.turnsSinceEntry > threshold &&
-      nudgeState.lastNudgeLevel < maxEscalation
+      !nudgeEngine.state.actionAttempted &&
+      nudgeEngine.state.turnsSinceEntry > threshold &&
+      nudgeEngine.state.lastNudgeLevel < maxEscalation
     ) {
-      nudgeState.lastNudgeLevel++;
+      nudgeEngine.state.lastNudgeLevel++;
 
       // Log nudge event
       logEvent("nudge_fired", {
         fsmState: stateMachine?.currentState ?? "N/A",
-        level: nudgeState.lastNudgeLevel,
+        level: nudgeEngine.state.lastNudgeLevel,
         expectedAction: stateMachine!.canNudge().expectedAction,
       });
 
-      if (nudgeState.lastNudgeLevel < maxEscalation) {
+      if (nudgeEngine.state.lastNudgeLevel < maxEscalation) {
         // Levels 1-2: append to system prompt
-        const nudgeMsg = buildNudgeMessage(
+        const nudgeMsg = nudgeEngine.buildMessage(stateMachine!, piCoderMode, 
           stateMachine!.currentState,
-          nudgeState.lastNudgeLevel,
+          nudgeEngine.state.lastNudgeLevel,
         );
         fullPrompt += nudgeMsg;
       } else {
@@ -1220,11 +1043,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         // Log nudge escalation
         logEvent("nudge_escalation", {
           fsmState: stateMachine?.currentState ?? "N/A",
-          newLevel: nudgeState.lastNudgeLevel,
+          newLevel: nudgeEngine.state.lastNudgeLevel,
         });
 
         ctx.ui.notify(
-          `Pi Coder: Orchestrator has not progressed past state ${stateMachine!.currentState} after ${nudgeState.turnsSinceEntry} turns. Expected: ${expectation.expectedAction}. Would you like to intervene?`,
+          `Pi Coder: Orchestrator has not progressed past state ${stateMachine!.currentState} after ${nudgeEngine.state.turnsSinceEntry} turns. Expected: ${expectation.expectedAction}. Would you like to intervene?`,
           "warning",
         );
       }
@@ -1261,7 +1084,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     // Desktop notification on spec approval interview
     if (stateMachine && toolName === "interview" && stateMachine.currentState === "SPEC_WORK") {
       notify(config, "spec_approval", "Pi Coder \u00b7 \uD83D\uDCCB Review", `Spec ${activeSpecId ?? "unknown"} ready for your approval`);
-      specApprovalInterviewStartTime = Date.now();
+      tokenTracker.specApprovalInterviewStartTime = Date.now();
     }
 
     // Determine which tools are allowed based on current mode
@@ -1443,19 +1266,19 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         (input as Record<string, unknown>).control = { enabled: false };
 
         // Track subagent timing
-        subagentStartTime = Date.now();
-        lastSubagentAgent = targetAgent;
+        subagentMonitor.startTime = Date.now();
+        subagentMonitor.lastAgent = targetAgent;
 
         // Update UI to show subagent running
-        subagentRunning = true;
+        subagentMonitor.running = true;
 
         // Capture task from tool_call input for the subagent widget
         const taskInput = typeof (input as Record<string, unknown>).task === "string"
           ? ((input as Record<string, unknown>).task as string)
           : "";
 
-        // Populate subagentActivity immediately from tool_call data
-        subagentActivity = {
+        // Populate subagentMonitor.activity immediately from tool_call data
+        subagentMonitor.activity = {
           agent: targetAgent,
           task: taskInput,
           currentTool: undefined,
@@ -1473,15 +1296,15 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         refreshSubagentWidget();
 
         // Start a timer to update the subagent widget periodically (for elapsed duration)
-        if (subagentWidgetTimer) clearInterval(subagentWidgetTimer);
-        subagentWidgetTimer = setInterval(() => {
-          if (subagentRunning && subagentActivity) {
+        if (subagentMonitor.widgetTimer) clearInterval(subagentMonitor.widgetTimer);
+        subagentMonitor.widgetTimer = setInterval(() => {
+          if (subagentMonitor.running && subagentMonitor.activity) {
             refreshSubagentWidget();
           } else {
             // Subagent ended — clean up timer
-            if (subagentWidgetTimer) {
-              clearInterval(subagentWidgetTimer);
-              subagentWidgetTimer = null;
+            if (subagentMonitor.widgetTimer) {
+              clearInterval(subagentMonitor.widgetTimer);
+              subagentMonitor.widgetTimer = null;
             }
           }
         }, 2000);
@@ -1499,13 +1322,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         });
 
         // Mark action as attempted (resets nudge urgency)
-        nudgeState.actionAttempted = true;
+        nudgeEngine.state.actionAttempted = true;
       }
     }
 
     // Mark action attempted for pi_coder_run_tests and pi_coder_git too
     if (toolName === "pi_coder_run_tests" || toolName === "pi_coder_git") {
-      nudgeState.actionAttempted = true;
+      nudgeEngine.state.actionAttempted = true;
     }
 
     // Log allowed tool call — only for validated, allowed calls
@@ -1559,11 +1382,11 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
     // Log lifecycle_start on IDLE → SPEC_WORK transitions (pi_coder_advance_fsm)
     // This replaces the old lifecycle_start that fired on first subagent completion (too late)
-    if (toolName === "pi_coder_advance_fsm" && currentState === "SPEC_WORK" && lifecycleStartTime === null) {
-      lifecycleStartTime = Date.now();
-      resetLifecycleTracking();
-      setAccrualState("SPEC_WORK");
-      sessionSpecCount++;
+    if (toolName === "pi_coder_advance_fsm" && currentState === "SPEC_WORK" && tokenTracker.lifecycleStartTime === null) {
+      tokenTracker.lifecycleStartTime = Date.now();
+      tokenTracker.resetLifecycleTracking();
+      tokenTracker.setAccrualState("SPEC_WORK");
+      tokenTracker.sessionSpecCount++;
       logEvent("lifecycle_start", {
         specId: activeSpecId ?? "none",
         userRequest: "(spec work initiated)",
@@ -1575,7 +1398,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
     if (toolName === "pi_coder_advance_fsm") {
       const advDetails = details as { success?: boolean; previousState?: string; newState?: string; error?: string; exceptionTransition?: string; reason?: string } | undefined;
       if (advDetails?.success === true && advDetails?.previousState && advDetails?.newState && advDetails.previousState !== advDetails.newState) {
-        emitStateUsageAndTransition(advDetails.previousState, advDetails.newState);
+        tokenTracker.emitStateUsageAndTransition(advDetails.previousState, advDetails.newState, activeSpecId);
         logEvent("fsm_transition", {
           from: advDetails.previousState,
           to: advDetails.newState,
@@ -1588,60 +1411,34 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         // Log lifecycle events on terminal transitions via manual advance
         if (advDetails.newState === "COMPLETE") {
-          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
+          const wallClockMs = tokenTracker.lifecycleStartTime !== null ? Date.now() - tokenTracker.lifecycleStartTime : null;
           logEvent("lifecycle_end", {
             specId: activeSpecId,
             outcome: "COMPLETE",
             wallClockMs,
-            totalTokens: { ...lifecycleTokens },
-            phaseTokens: Object.fromEntries(
-              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
-                input: bucket.input,
-                output: bucket.output,
-                cacheRead: bucket.cacheRead,
-                cacheWrite: bucket.cacheWrite,
-                cost: bucket.cost,
-                turns: bucket.turns,
-                source: {
-                  orchestrator: { ...bucket.source.orchestrator },
-                  subagent: { ...bucket.source.subagent },
-                },
-              }])
-            ),
+            totalTokens: tokenTracker.snapshotLifecycleTokens(),
+            phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
           notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
-          lifecycleStartTime = null;
-          resetLifecycleTracking();
+          tokenTracker.lifecycleStartTime = null;
+          tokenTracker.resetLifecycleTracking();
         }
 
         // Log BLOCKED terminal state
         if (advDetails.newState === "BLOCKED") {
-          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
+          const wallClockMs = tokenTracker.lifecycleStartTime !== null ? Date.now() - tokenTracker.lifecycleStartTime : null;
           logEvent("lifecycle_end", {
             specId: activeSpecId,
             outcome: "BLOCKED",
             wallClockMs,
-            totalTokens: { ...lifecycleTokens },
-            phaseTokens: Object.fromEntries(
-              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
-                input: bucket.input,
-                output: bucket.output,
-                cacheRead: bucket.cacheRead,
-                cacheWrite: bucket.cacheWrite,
-                cost: bucket.cost,
-                turns: bucket.turns,
-                source: {
-                  orchestrator: { ...bucket.source.orchestrator },
-                  subagent: { ...bucket.source.subagent },
-                },
-              }])
-            ),
+            totalTokens: tokenTracker.snapshotLifecycleTokens(),
+            phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
         }
 
         // Reset nudge state on transition via advance_fsm
         if (stateMachine) {
-          resetNudgeState(stateMachine.currentState);
+          nudgeEngine.reset(stateMachine.currentState);
         }
       }
     }
@@ -1672,13 +1469,13 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         if (allApproved) {
           stateMachine!.setEvidence("spec_user_approved");
-          const interviewDurationMs = specApprovalInterviewStartTime !== null ? Date.now() - specApprovalInterviewStartTime : null;
-          specApprovalInterviewStartTime = null;
+          const interviewDurationMs = tokenTracker.specApprovalInterviewStartTime !== null ? Date.now() - tokenTracker.specApprovalInterviewStartTime : null;
+          tokenTracker.specApprovalInterviewStartTime = null;
           logEvent("spec_approval", { status: "approved", responseCount: responses.length, durationMs: interviewDurationMs });
         } else {
           // User rejected or requested changes for at least one question
-          const interviewDurationMs = specApprovalInterviewStartTime !== null ? Date.now() - specApprovalInterviewStartTime : null;
-          specApprovalInterviewStartTime = null;
+          const interviewDurationMs = tokenTracker.specApprovalInterviewStartTime !== null ? Date.now() - tokenTracker.specApprovalInterviewStartTime : null;
+          tokenTracker.specApprovalInterviewStartTime = null;
           logEvent("spec_approval", { status: "rejected", responseCount: responses.length, durationMs: interviewDurationMs });
           // Append steer message telling orchestrator to revise
           const rejectionSteer = "\n\n⚠️ Spec not approved — the user requested changes. Review the interview feedback and revise the spec. Re-run the interview after making changes.";
@@ -1690,8 +1487,8 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       } else {
         // Interview was cancelled, timed out, or aborted
         const status = interviewDetails?.status ?? "unknown";
-        const interviewDurationMs = specApprovalInterviewStartTime !== null ? Date.now() - specApprovalInterviewStartTime : null;
-        specApprovalInterviewStartTime = null;
+        const interviewDurationMs = tokenTracker.specApprovalInterviewStartTime !== null ? Date.now() - tokenTracker.specApprovalInterviewStartTime : null;
+        tokenTracker.specApprovalInterviewStartTime = null;
         logEvent("spec_approval", { status: "not_completed", interviewStatus: status, durationMs: interviewDurationMs });
         const notCompletedSteer = `\n\n⚠️ Spec approval interview was not completed (status: ${status}). Re-run the interview when ready.`;
         if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
@@ -1738,7 +1535,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (validation.valid) {
           // Tests failed as expected → advance to GREEN
           stateMachine!.transition("TDD_GREEN_WRITE");
-          emitStateUsageAndTransition("TDD_RED_VALIDATE", "TDD_GREEN_WRITE");
+          tokenTracker.emitStateUsageAndTransition("TDD_RED_VALIDATE", "TDD_GREEN_WRITE", activeSpecId);
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           // Tests passed unexpectedly during RED phase
@@ -1785,7 +1582,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         } else {
           // Tests still fail → loop back to GREEN
           stateMachine!.transition("TDD_GREEN_WRITE");
-          emitStateUsageAndTransition("TDD_GREEN_VALIDATE", "TDD_GREEN_WRITE");
+          tokenTracker.emitStateUsageAndTransition("TDD_GREEN_VALIDATE", "TDD_GREEN_WRITE", activeSpecId);
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Tests still failing. You are now in TDD_GREEN_WRITE. Delegate to pi-coder.implementor again with clearer instructions. Do NOT call pi_coder_advance_fsm yet.";
         }
       }
@@ -1834,7 +1631,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Reset nudge state on transition
       if (stateMachine!.currentState !== previousState) {
-        resetNudgeState(stateMachine!.currentState);
+        nudgeEngine.reset(stateMachine!.currentState);
       }
 
       // Persist state after transition
@@ -1850,7 +1647,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       if (gitDetails?.success === true && gitDetails?.operation === "checkpoint") {
         const nextState = piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
         stateMachine!.transition(nextState);
-        emitStateUsageAndTransition("GIT_CHECKPOINT", nextState);
+        tokenTracker.emitStateUsageAndTransition("GIT_CHECKPOINT", nextState, activeSpecId);
         logEvent("fsm_transition", {
           from: "GIT_CHECKPOINT",
           to: nextState,
@@ -1859,7 +1656,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           loopCount: stateMachine!.loopCount,
           specId: activeSpecId,
         });
-        resetNudgeState(stateMachine!.currentState);
+        nudgeEngine.reset(stateMachine!.currentState);
         await persistState();
 
         // Append auto-transition info to tool result
@@ -1879,7 +1676,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
       if (gitDetails?.success === true) {
         stateMachine!.transition("COMPLETE");
-        emitStateUsageAndTransition("MERGING", "COMPLETE");
+        tokenTracker.emitStateUsageAndTransition("MERGING", "COMPLETE", activeSpecId);
         logEvent("fsm_transition", {
           from: "MERGING",
           to: "COMPLETE",
@@ -1891,27 +1688,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         logEvent("lifecycle_end", {
           specId: activeSpecId,
           outcome: "COMPLETE",
-          wallClockMs: lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null,
-          totalTokens: { ...lifecycleTokens },
-          phaseTokens: Object.fromEntries(
-            Object.entries(phaseTokens).map(([state, bucket]) => [state, {
-              input: bucket.input,
-              output: bucket.output,
-              cacheRead: bucket.cacheRead,
-              cacheWrite: bucket.cacheWrite,
-              cost: bucket.cost,
-              turns: bucket.turns,
-              source: {
-                orchestrator: { ...bucket.source.orchestrator },
-                subagent: { ...bucket.source.subagent },
-              },
-            }])
-          ),
+          wallClockMs: tokenTracker.lifecycleStartTime !== null ? Date.now() - tokenTracker.lifecycleStartTime : null,
+          totalTokens: tokenTracker.snapshotLifecycleTokens(),
+            phaseTokens: tokenTracker.snapshotPhaseTokens(),
         });
         notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
-        lifecycleStartTime = null;
-        resetLifecycleTracking();
-        resetNudgeState(stateMachine!.currentState);
+        tokenTracker.lifecycleStartTime = null;
+        tokenTracker.resetLifecycleTracking();
+        nudgeEngine.reset(stateMachine!.currentState);
         await persistState();
 
         // Append auto-transition info to tool result
@@ -1930,38 +1714,16 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       let transitionTrigger: import("../src/logger.ts").FSMTrigger | null = null;
 
       // Log subagent end with duration and expanded usage from pi-subagents
-      const durationMs = subagentStartTime !== null ? Date.now() - subagentStartTime : null;
+      const durationMs = subagentMonitor.startTime !== null ? Date.now() - subagentMonitor.startTime : null;
       const subUsage = extractSubagentUsage(details);
 
       if (subUsage) {
-        lifecycleTokens.input += subUsage.input;
-        lifecycleTokens.output += subUsage.output;
-        lifecycleTokens.cacheRead += subUsage.cacheRead;
-        lifecycleTokens.cacheWrite += subUsage.cacheWrite;
-        lifecycleTokens.cost += subUsage.cost;
-        lifecycleTokens.turns += subUsage.turns;
-
-        // Accrue subagent tokens into per-FSM-state bucket (source: subagent)
-        if (currentAccrualState) {
-          ensurePhaseBucket(currentAccrualState);
-          const bucket = phaseTokens[currentAccrualState];
-          bucket.input += subUsage.input;
-          bucket.output += subUsage.output;
-          bucket.cacheRead += subUsage.cacheRead;
-          bucket.cacheWrite += subUsage.cacheWrite;
-          bucket.cost += subUsage.cost;
-          bucket.turns += subUsage.turns;
-          bucket.source.subagent.input += subUsage.input;
-          bucket.source.subagent.output += subUsage.output;
-          bucket.source.subagent.cacheRead += subUsage.cacheRead;
-          bucket.source.subagent.cacheWrite += subUsage.cacheWrite;
-          bucket.source.subagent.cost += subUsage.cost;
-          bucket.source.subagent.turns += subUsage.turns;
-        }
+        // Accumulate into lifecycle tokens + per-FSM-state bucket (source: subagent)
+        tokenTracker.accrueSubagent(subUsage);
       }
 
       logEvent("subagent_end", {
-        agent: lastSubagentAgent ?? "unknown",
+        agent: subagentMonitor.lastAgent ?? "unknown",
         model: subUsage?.model ?? null,
         durationMs,
         tokenUsage: subUsage
@@ -1981,14 +1743,14 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       });
 
       // Subagent timing reset
-      subagentStartTime = null;
-      lastSubagentAgent = null;
-      subagentRunning = false;
-      subagentActivity = null;
+      subagentMonitor.startTime = null;
+      subagentMonitor.lastAgent = null;
+      subagentMonitor.running = false;
+      subagentMonitor.activity = null;
       // Stop the subagent widget timer
-      if (subagentWidgetTimer) {
-        clearInterval(subagentWidgetTimer);
-        subagentWidgetTimer = null;
+      if (subagentMonitor.widgetTimer) {
+        clearInterval(subagentMonitor.widgetTimer);
+        subagentMonitor.widgetTimer = null;
       }
       // Immediately clear the subagent widget — old content persists otherwise
       refreshSubagentWidget();
@@ -2067,7 +1829,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           // with reason (emergency escape hatch for verdict extraction failures).
           stateMachine!.setEvidence("review_completed");
           stateMachine!.transition(target);
-          emitStateUsageAndTransition("REVIEWING", target);
+          tokenTracker.emitStateUsageAndTransition("REVIEWING", target, activeSpecId);
           transitionTrigger = "auto_review_verdict";
 
           // If reviewer classified fix as non-functional, set evidence
@@ -2163,53 +1925,27 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
         // Log lifecycle events on terminal transitions
         if (stateMachine!.currentState === "COMPLETE") {
-          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
+          const wallClockMs = tokenTracker.lifecycleStartTime !== null ? Date.now() - tokenTracker.lifecycleStartTime : null;
           logEvent("lifecycle_end", {
             specId: activeSpecId,
             outcome: "COMPLETE",
             wallClockMs,
-            totalTokens: { ...lifecycleTokens },
-            phaseTokens: Object.fromEntries(
-              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
-                input: bucket.input,
-                output: bucket.output,
-                cacheRead: bucket.cacheRead,
-                cacheWrite: bucket.cacheWrite,
-                cost: bucket.cost,
-                turns: bucket.turns,
-                source: {
-                  orchestrator: { ...bucket.source.orchestrator },
-                  subagent: { ...bucket.source.subagent },
-                },
-              }])
-            ),
+            totalTokens: tokenTracker.snapshotLifecycleTokens(),
+            phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
           notify(config, "complete", "Pi Coder \u00b7 \u2705 Complete", `Spec ${activeSpecId ?? "unknown"} merged successfully`);
-          lifecycleStartTime = null;
-          resetLifecycleTracking();
+          tokenTracker.lifecycleStartTime = null;
+          tokenTracker.resetLifecycleTracking();
         }
 
         if (stateMachine!.currentState === "BLOCKED" && previousState === "TDD_RED_VALIDATE") {
-          const wallClockMs = lifecycleStartTime !== null ? Date.now() - lifecycleStartTime : null;
+          const wallClockMs = tokenTracker.lifecycleStartTime !== null ? Date.now() - tokenTracker.lifecycleStartTime : null;
           logEvent("lifecycle_end", {
             specId: activeSpecId,
             outcome: "BLOCKED",
             wallClockMs,
-            totalTokens: { ...lifecycleTokens },
-            phaseTokens: Object.fromEntries(
-              Object.entries(phaseTokens).map(([state, bucket]) => [state, {
-                input: bucket.input,
-                output: bucket.output,
-                cacheRead: bucket.cacheRead,
-                cacheWrite: bucket.cacheWrite,
-                cost: bucket.cost,
-                turns: bucket.turns,
-                source: {
-                  orchestrator: { ...bucket.source.orchestrator },
-                  subagent: { ...bucket.source.subagent },
-                },
-              }])
-            ),
+            totalTokens: tokenTracker.snapshotLifecycleTokens(),
+            phaseTokens: tokenTracker.snapshotPhaseTokens(),
           });
         }
 
@@ -2226,7 +1962,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
       // Reset nudge state on transition
       if (stateMachine!.currentState !== previousState) {
-        resetNudgeState(stateMachine!.currentState);
+        nudgeEngine.reset(stateMachine!.currentState);
       }
 
       // Persist state after transition
@@ -2320,7 +2056,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
       piCoderMode = selectedMode;
 
       // Reset session state on mode switch
-      sessionTurnCount = 0;
+      tokenTracker.sessionTurnCount = 0;
 
       // Update active tools based on mode
       pi.setActiveTools(MODE_TOOL_SETS[piCoderMode]);
@@ -2755,7 +2491,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
         if (stateMachine) {
           const previousState = stateMachine.currentState;
           stateMachine.reset();
-          emitStateUsageAndTransition(previousState, "IDLE");
+          tokenTracker.emitStateUsageAndTransition(previousState, "IDLE", activeSpecId);
           logEvent("fsm_transition", {
             from: previousState,
             to: "IDLE",
@@ -2766,7 +2502,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
           });
         }
         activeSpecId = null;
-        resetNudgeState("IDLE");
+        nudgeEngine.reset("IDLE");
       }
 
       // 6. Persist and refresh
