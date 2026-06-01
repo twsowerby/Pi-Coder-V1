@@ -24,10 +24,16 @@ import { GlobalStatePersistence, SpecStatePersistence } from "../src/state-persi
 import type { GlobalState, SpecState } from "../src/types.ts";
 import { registerTools, summarizeToolInput, type StateMachineRef } from "../src/tools.ts";
 import type { PiCoderConfig, PiCoderMode, FSMState, IStateMachine } from "../src/types.ts";
+import { registerResetAgentsCommand } from "../src/commands/reset-agents.ts";
+import { registerCloseCommand } from "../src/commands/close.ts";
+import { registerLogsCommand } from "../src/commands/logs.ts";
+import { registerModeCommand } from "../src/commands/mode.ts";
+import { registerInitCommand } from "../src/commands/init.ts";
+
+import type { HandlerContext } from "../src/handlers/types.ts";
+
 import { Logger, type LogEventType } from "../src/logger.ts";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -387,7 +393,7 @@ export { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetPlanModeProm
 import { notify } from "../src/notification-manager.ts";
 
 // Config — imported from src/config.ts
-import { loadConfig, detectTestCommand, detectTestCommands } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
 
 
 // ---------------------------------------------------------------------------
@@ -406,6 +412,50 @@ import { extractSubagentTarget, extractSubagentUsage, extractReviewVerdict, extr
 // ---------------------------------------------------------------------------
 
 export default function piCoderExtension(pi: ExtensionAPI): void {
+  // -----------------------------------------------------------------------
+  // Handler Context — shared state object for extracted handlers/commands
+  // -----------------------------------------------------------------------
+  const hctx: HandlerContext = {
+    pi,
+    get piCoderMode() { return piCoderMode; },
+    set piCoderMode(m: PiCoderMode) { piCoderMode = m; },
+    get stateMachine() { return stateMachine; },
+    set stateMachine(sm: IStateMachine | null) { stateMachine = sm; },
+    get config() { return config; },
+    set config(c: PiCoderConfig) { config = c; },
+    get subagentsAvailable() { return subagentsAvailable; },
+    set subagentsAvailable(v: boolean) { subagentsAvailable = v; },
+    get activeSpecId() { return activeSpecId; },
+    set activeSpecId(id: string | null) { activeSpecId = id; },
+    tokenTracker,
+    nudgeEngine,
+    subagentMonitor,
+    get specManager() { return specManager; },
+    set specManager(sm: SpecManager) { specManager = sm; },
+    get sessionCtx() { return sessionCtx; },
+    set sessionCtx(ctx: ExtensionContext | null) { sessionCtx = ctx; },
+    get logger() { return logger; },
+    set logger(l: Logger) { logger = l; },
+    get sessionId() { return sessionId; },
+    set sessionId(id: string) { sessionId = id; },
+    get gitOps() { return gitOps; },
+    set gitOps(go: GitOperations) { gitOps = go; },
+    get tddRunner() { return tddRunner; },
+    set tddRunner(tr: TddRunner) { tddRunner = tr; },
+    get knowledgeStore() { return knowledgeStore; },
+    set knowledgeStore(ks: KnowledgeStore) { knowledgeStore = ks; },
+    get globalStatePersistence() { return globalStatePersistence; },
+    set globalStatePersistence(gsp: GlobalStatePersistence) { globalStatePersistence = gsp; },
+    get specStateCreatedAt() { return specStateCreatedAt; },
+    set specStateCreatedAt(v: string | null) { specStateCreatedAt = v; },
+    get projectCwd() { return projectCwd; },
+    set projectCwd(cwd: string) { projectCwd = cwd; },
+    logEvent,
+    persistState,
+    refreshUI,
+    refreshSubagentWidget,
+  };
+
   // -----------------------------------------------------------------------
   // Phase 1: Extension Foundation & Toggle State
   // -----------------------------------------------------------------------
@@ -1984,656 +2034,18 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // Spec 10: Commands
   // =====================================================================
 
-  // -----------------------------------------------------------------------
-  // Phase 1: Toggle Command — /pi-coder
-  // -----------------------------------------------------------------------
+  // Toggle Command — /pi-coder (extracted to src/commands/mode.ts)
+  registerModeCommand(hctx);
 
-  pi.registerCommand("pi-coder", {
-    description: "Switch pi-coder mode",
-    handler: async (_args, ctx) => {
-      // Build the mode labels with current state indicators
-      const current = piCoderMode;
-      const modes = [
-        { value: "plan", label: `Plan Mode (investigation & discussion)${current === "plan" ? "  ◀" : ""}` },
-        { value: "light", label: `Light Mode (spec → implement → review)${current === "light" ? "  ◀" : ""}` },
-        { value: "tdd", label: `TDD Mode (full RED/GREEN lifecycle)${current === "tdd" ? "  ◀" : ""}` },
-        { value: "off", label: `Off (normal Pi)${current === "off" ? "  ◀" : ""}` },
-      ];
+  // Init Command — /pi-coder-init (extracted to src/commands/init.ts)
+  registerInitCommand(hctx);
 
-      const choice = await ctx.ui.select(
-        "Pi Coder Mode",
-        modes.map(m => m.label),
-      );
+  // Reset Agents Command — /pi-coder-reset-agents (extracted to src/commands/reset-agents.ts)
+  registerResetAgentsCommand(hctx);
 
-      if (choice === undefined) return; // Cancelled
+  // Close Spec Command — /pi-coder-close (extracted to src/commands/close.ts)
+  registerCloseCommand(hctx);
 
-      // choice is the selected label string — find the matching mode
-      const selectedMode = modes.find(m => m.label === choice)?.value as PiCoderMode | undefined;
-      if (!selectedMode || selectedMode === current) return; // No change
-
-      // If switching to any active mode, check pi-subagents availability
-      if (selectedMode !== "off" && !subagentsAvailable) {
-        ctx.ui.notify(
-          "Pi Coder requires the pi-subagents package. Install with: `pi install npm:pi-subagents`",
-          "error",
-        );
-        logEvent("command", { command: "mode_select", result: "blocked_no_subagents" });
-        return;
-      }
-
-      // Handle mode switch FSM logic
-      if (selectedMode !== current) {
-        // When leaving a mode with an active FSM, pause the spec
-        if (stateMachine && stateMachine!.currentState !== "IDLE") {
-          logEvent("mode_switch", {
-            from: current,
-            to: selectedMode,
-            fsmState: stateMachine?.currentState ?? "N/A",
-            specId: activeSpecId,
-          });
-          // Per-spec state.json on disk is NOT deleted — user can switch back
-          // Send notification about paused spec
-          if (activeSpecId) {
-            ctx.ui.notify(`Active spec '${activeSpecId}' paused. Switch back to ${current} mode to resume.`, "info");
-          }
-        }
-
-        // When entering a mode with a FSM, create the appropriate instance
-        if (selectedMode === "tdd") {
-          if (!stateMachine || !(stateMachine instanceof StateMachine)) {
-            stateMachine = new StateMachine(config);
-          }
-        } else if (selectedMode === "light") {
-          if (!stateMachine || !(stateMachine instanceof LightStateMachine)) {
-            stateMachine = new LightStateMachine(config);
-          }
-        } else {
-          // Plan or Off — no FSM
-          stateMachine = null;
-        }
-      }
-
-      // Set mode first so downstream code uses the new value
-      piCoderMode = selectedMode;
-
-      // Reset session state on mode switch
-      tokenTracker.sessionTurnCount = 0;
-
-      // Update active tools based on mode
-      pi.setActiveTools(MODE_TOOL_SETS[piCoderMode]);
-      refreshUI();
-
-      // Notify user of mode change
-      const modeLabels: Record<PiCoderMode, string> = {
-        plan: "Plan Mode — Investigation and discussion only",
-        tdd: "TDD Mode — Full lifecycle with spec, RED/GREEN, and review",
-        light: "Light Mode — Spec, implementation, and review (no TDD)",
-        off: "Off — Normal Pi mode",
-      };
-      ctx.ui.notify(`Pi Coder: ${modeLabels[piCoderMode]}`, "info");
-      logEvent("command", { command: "mode_select", result: piCoderMode });
-
-      // Send a steer message so the LLM knows the mode changed immediately
-      // This is critical for mid-conversation mode switches — the system prompt
-      // will be rebuilt on the next before_agent_start, but the LLM needs to
-      // know right now that the rules have changed.
-      if (piCoderMode !== "off") {
-        const modeDescriptions: Record<PiCoderMode, string> = {
-          plan: "Plan mode — Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
-          tdd: "TDD mode — Full lifecycle with FSM, spec approval, RED/GREEN phases, and review. Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
-          light: "Light mode — Spec, implement, and review lifecycle with FSM. No RED/GREEN TDD phases. Follow the FSM state machine.",
-          off: "",
-        };
-        pi.sendMessage(
-          {
-            customType: "pi-coder-mode-change",
-            content: `🔄 Pi Coder mode changed to: ${piCoderMode.toUpperCase()}. ${modeDescriptions[piCoderMode]}`,
-            display: true,
-          },
-          { deliverAs: "nextTurn" },
-        );
-      }
-
-      // Persist mode state
-      await persistState();
-    },
-  });
-
-  // -----------------------------------------------------------------------
-  // Phase 2: Init Command — /pi-coder-init
-  // -----------------------------------------------------------------------
-
-  /**
-   * Resolve the package's own agents/ directory path.
-   * Uses import.meta.url to locate the package root relative to this extension file.
-   */
-  function getPackageAgentsDir(): string {
-    // This file is at extensions/index.ts, so agents/ is one directory up
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    return join(thisDir, "..", "agents");
-  }
-
-  pi.registerCommand("pi-coder-init", {
-    description: "Initialize pi-coder directory structure and config",
-    handler: async (_args, ctx) => {
-      const cwd = ctx.cwd;
-      const created: string[] = [];
-      const skipped: string[] = [];
-      const warnings: string[] = [];
-
-      // 1. Create .pi-coder/ directory structure
-      const knowledgeDir = join(cwd, ".pi-coder", "knowledge");
-      const specsDir = join(cwd, ".pi-coder", "specs");
-      const agentsDir = join(cwd, ".pi", "agents");
-
-      mkdirSync(knowledgeDir, { recursive: true });
-      created.push(".pi-coder/knowledge/");
-      mkdirSync(specsDir, { recursive: true });
-      created.push(".pi-coder/specs/");
-
-      // 2. Create .pi/agents/ if missing
-      if (!existsSync(agentsDir)) {
-        mkdirSync(agentsDir, { recursive: true });
-        created.push(".pi/agents/");
-      }
-
-      // 3. Create .pi-coder/config.json — only if it doesn't already exist
-      const configPath = join(cwd, ".pi-coder", "config.json");
-      if (!existsSync(configPath)) {
-        const detectedTestCommand = detectTestCommand(cwd);
-        const detectedTestCommands = detectTestCommands(cwd);
-        const defaultConfig: PiCoderConfig = {
-          testCommand: detectedTestCommand,
-          testCommands: detectedTestCommands,
-          maxLoops: 3,
-          createBranch: true,
-          mergeBranch: "merge",
-          branchPrefix: "pi-coder/",
-          interviewTimeout: 0,
-          nudge: {
-            enabled: true,
-            defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
-            states: {
-              SPEC_WORK: { turnsBeforeNudge: 3 },
-              BLOCKED: { turnsBeforeNudge: 2 },
-              IDLE: { enabled: false },
-              SPEC_APPROVED: { enabled: false },
-              FINAL_APPROVAL: { enabled: false },
-              COMPLETE: { enabled: false },
-            },
-          },
-          logging: {
-            enabled: false,
-            level: "standard",
-            maxLogFiles: 10,
-          },
-          subagentControl: {
-            enabled: true,
-          },
-          notifications: {
-            enabled: false,
-          },
-        };
-        writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), "utf-8");
-        created.push(".pi-coder/config.json");
-      } else {
-        skipped.push(".pi-coder/config.json (already exists)");
-      }
-
-      // 4. Copy agent .md files — skip existing (don't overwrite customizations)
-      const packageAgentsDir = getPackageAgentsDir();
-      const agentFilenames = [
-        "pi-coder-researcher.md",
-        "pi-coder-implementor.md",
-        "pi-coder-reviewer.md",
-      ];
-
-      for (const filename of agentFilenames) {
-        const source = join(packageAgentsDir, filename);
-        const target = join(agentsDir, filename);
-
-        if (!existsSync(source)) {
-          warnings.push(`Agent source file not found: ${filename}`);
-          continue;
-        }
-
-        if (!existsSync(target)) {
-          copyFileSync(source, target);
-          created.push(`.pi/agents/${filename}`);
-        } else {
-          skipped.push(`.pi/agents/${filename} (already exists)`);
-        }
-      }
-
-      // 4b. Copy orchestrator prompt template from prompts/ — skip existing
-      const packagePromptsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
-      const orchestratorSource = join(packagePromptsDir, "pi-coder-orchestrator.md");
-      const orchestratorTarget = join(cwd, ".pi", "agents", "pi-coder-orchestrator.md");
-
-      if (existsSync(orchestratorSource)) {
-        if (!existsSync(orchestratorTarget)) {
-          mkdirSync(dirname(orchestratorTarget), { recursive: true });
-          copyFileSync(orchestratorSource, orchestratorTarget);
-          created.push(".pi/agents/pi-coder-orchestrator.md (prompt template)");
-        } else {
-          skipped.push(".pi/agents/pi-coder-orchestrator.md (already exists)");
-        }
-      } else {
-        warnings.push("Orchestrator prompt template not found in package");
-      }
-
-      // 4c. Create starter design_system.md in knowledge — skip if exists
-      const designSystemPath = join(knowledgeDir, "design_system.md");
-      if (!existsSync(designSystemPath)) {
-        const designSystemContent = [
-          "# Design System",
-          "",
-          "This file documents the project's UI component library, patterns, and conventions.",
-          "The implementor and reviewer reference this before writing or reviewing UI code.",
-          "Fill in each section for your project.",
-          "",
-          "## Component Library",
-          "",
-          "<!-- List reusable UI components and their locations. -->",
-          "<!-- e.g., `components/ui/Card.tsx` — bordered card with header slot -->",
-          "<!-- e.g., `components/ui/Button.tsx` — primary/secondary/ghost variants -->",
-          "",
-          "## Layout & Spacing",
-          "",
-          "<!-- Document the spacing system and layout conventions. -->",
-          "<!-- e.g., 4px base grid, gap-2 (8px) between sibling elements -->",
-          "<!-- e.g., max-width container with responsive breakpoints at 640/768/1024px -->",
-          "",
-          "## Colors & Theming",
-          "",
-          "<!-- Document color tokens, dark mode strategy, and theme configuration. -->",
-          "<!-- e.g., CSS custom properties: --color-primary, --color-bg, --color-text -->",
-          "",
-          "## Typography",
-          "",
-          "<!-- Document font families, sizes, and heading hierarchy. -->",
-          "<!-- e.g., Inter for body, heading scale: text-sm / text-base / text-lg / text-xl -->",
-          "",
-          "## Interaction Patterns",
-          "",
-          "<!-- Document common interaction patterns and conventions. -->",
-          "<!-- e.g., Modal dialogs use `Dialog` component with overlay click to dismiss -->",
-          "<!-- e.g., Form validation shows errors inline below each field -->",
-          "<!-- e.g., Loading states use skeleton placeholders, not spinners -->",
-          "",
-          "## Existing Patterns to Follow",
-          "",
-          "<!-- When adding a new feature, what existing components/patterns should be reused? -->",
-          "<!-- e.g., List pages: use DataTable with ColumnDef and server-side pagination -->",
-          "<!-- e.g., Detail pages: use Card layout with header slot and action buttons -->",
-          "",
-        ].join("\n");
-        writeFileSync(designSystemPath, designSystemContent, "utf-8");
-        created.push(".pi-coder/knowledge/design_system.md (starter template — fill in for your project)");
-      } else {
-        skipped.push(".pi-coder/knowledge/design_system.md (already exists)");
-      }
-
-      // 4d. Create .pi-coder/damage-control.json — only if it doesn't exist
-      // Scaffold the full defaults so the file is self-documenting —
-      // the user can see what's configured and edit it.
-      const damageControlPath = join(cwd, ".pi-coder", "damage-control.json");
-      if (!existsSync(damageControlPath)) {
-        const damageControlContent = JSON.stringify({
-          enabled: true,
-          rules: {
-            bashToolPatterns: [
-              { pattern: "\\brm\\s+(-rf?|--recursive|-r\\s*-f)", reason: "Recursive delete is destructive — describe what needs removing and use a targeted approach" },
-              { pattern: "\\bsudo\\b", reason: "Sudo commands require host-level access — ask the user to run it" },
-              { pattern: "\\bgit\\s+push\\s+.*--force", reason: "Force push rewrites shared history — use a new commit or branch" },
-              { pattern: "\\bgit\\s+push\\s+.*--delete", reason: "Deleting remote branches is destructive" },
-              { pattern: "\\bgit\\s+reset\\s+--hard", reason: "Hard reset discards uncommitted changes — use pi_coder_git rollback" },
-              { pattern: "\\bgit\\s+clean\\s+-", reason: "Git clean removes untracked files — clarify what needs removing" },
-              { pattern: "\\bchmod\\s+.*777\\b", reason: "chmod 777 is a security risk — use minimum permissions" },
-              { pattern: "\\btruncate\\b", reason: "Truncating files is destructive — write new content instead" },
-              { pattern: "\\b(?:mkfs|dd\\s+if=)\\b", reason: "Can destroy filesystems — do not attempt to work around this" },
-            ],
-            zeroAccessPaths: [".env", ".env.local", ".env.production", "~/.ssh/", "~/.gnupg/"],
-            readOnlyPaths: [".git/config"],
-            noDeletePaths: [".git/", "node_modules/"],
-          },
-        }, null, 2) + "\n";
-        writeFileSync(damageControlPath, damageControlContent, "utf-8");
-        created.push(".pi-coder/damage-control.json");
-      } else {
-        skipped.push(".pi-coder/damage-control.json (already exists)");
-      }
-
-      // 4e. Create .pi-coder/.gitignore — exclude workspace-local files
-      // from version control while keeping specs, knowledge, and config tracked.
-      // Without this, state.json changes between checkpoint and merge dirty
-      // the working tree and block git merge.
-      const piCoderGitignorePath = join(cwd, ".pi-coder", ".gitignore");
-      if (!existsSync(piCoderGitignorePath)) {
-        writeFileSync(piCoderGitignorePath, [
-          "# Workspace-local pi-coder files — not project artifacts",
-          "state.json",
-          "logs/",
-        ].join("\n") + "\n", "utf-8");
-        created.push(".pi-coder/.gitignore");
-      } else {
-        skipped.push(".pi-coder/.gitignore (already exists)");
-      }
-
-      // 5. Warn if subagent tool is not detected
-      if (!subagentsAvailable) {
-        warnings.push(
-          "pi-subagents is not detected. Delegation features will not work until installed: `pi install npm:pi-subagents`",
-        );
-      }
-
-      // 6. Disable built-in subagents that clash with pi-coder roles in project settings
-      // This prevents the orchestrator from accidentally delegating to a generic
-      // researcher/reviewer/worker instead of the pi-coder-specific ones.
-      // 6. Disable ALL built-in subagents via project settings
-      // pi-subagents respects subagents.disableBuiltins — this hides researcher, reviewer,
-      // worker, scout, planner, oracle, delegate, context-builder from discovery.
-      // pi-coder agents come from the package's agents/ dir, so they're unaffected.
-      const settingsPath = join(cwd, ".pi", "settings.json");
-      let settings: Record<string, unknown> = {};
-      try {
-        if (existsSync(settingsPath)) {
-          settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-        }
-      } catch {
-        // Start fresh if corrupt
-      }
-
-      const subagentsConfig = (settings as Record<string, Record<string, unknown>>).subagents ?? {};
-      const alreadyDisabled = subagentsConfig.disableBuiltins === true;
-      if (!alreadyDisabled) {
-        subagentsConfig.disableBuiltins = true;
-        (settings as Record<string, Record<string, unknown>>).subagents = subagentsConfig;
-
-        mkdirSync(dirname(settingsPath), { recursive: true });
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
-        created.push(".pi/settings.json (disabled all built-in subagents — pi-coder agents only)");
-      } else {
-        skipped.push(".pi/settings.json (built-in subagents already disabled)");
-      }
-
-      // 7. Report summary
-      const lines: string[] = ["Pi Coder Init Complete"];
-      if (created.length > 0) {
-        lines.push(`Created: ${created.join(", ")}`);
-      }
-      if (skipped.length > 0) {
-        lines.push(`Skipped: ${skipped.join(", ")}`);
-      }
-      if (warnings.length > 0) {
-        lines.push(`Warnings: ${warnings.join(", ")}`);
-      }
-      ctx.ui.notify(lines.join("\n"), "info");
-
-      // Log init command
-      logEvent("command", { command: "init", result: "success", created: created.length, skipped: skipped.length, warnings: warnings.length });
-    },
-  });
-
-  // -----------------------------------------------------------------------
-  // Phase 3: Reset Agents Command — /pi-coder-reset-agents
-  // -----------------------------------------------------------------------
-
-  pi.registerCommand("pi-coder-reset-agents", {
-    description: "Reset pi-coder agent files to package defaults",
-    handler: async (_args, ctx) => {
-      // 1. Warn and require confirmation
-      const ok = await ctx.ui.confirm(
-        "Reset agent files?",
-        "All customizations to pi-coder agent files will be lost. Continue?",
-      );
-      if (!ok) return;
-
-      // 2. Overwrite .pi/agents/pi-coder-*.md with package defaults
-      const agentsDir = join(ctx.cwd, ".pi", "agents");
-      const packageAgentsDir = getPackageAgentsDir();
-      const agentFilenames = [
-        "pi-coder-researcher.md",
-        "pi-coder-implementor.md",
-        "pi-coder-reviewer.md",
-      ];
-
-      const reset: string[] = [];
-      for (const filename of agentFilenames) {
-        const source = join(packageAgentsDir, filename);
-        const target = join(agentsDir, filename);
-
-        if (!existsSync(source)) {
-          continue; // Package source file missing — skip
-        }
-
-        copyFileSync(source, target);
-        reset.push(filename);
-      }
-
-      // Reset orchestrator prompt from prompts/ directory
-      const packagePromptsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
-      const orchestratorSource = join(packagePromptsDir, "pi-coder-orchestrator.md");
-      if (existsSync(orchestratorSource)) {
-        copyFileSync(orchestratorSource, join(agentsDir, "pi-coder-orchestrator.md"));
-        reset.push("pi-coder-orchestrator.md");
-      }
-
-      // 3. Invalidate all prompt caches if any agent files were reset
-      if (reset.length > 0) {
-        resetOrchestratorPromptCache();
-        resetLightModePromptCache();
-        resetPlanModePromptCache();
-      }
-
-      // 4. Report which files were reset
-      if (reset.length > 0) {
-        ctx.ui.notify(`Agent files reset to defaults: ${reset.join(", ")}`, "info");
-      } else {
-        ctx.ui.notify("No agent files found to reset.", "info");
-      }
-
-      // Log reset command
-      logEvent("command", { command: "reset_agents", result: "success", filesReset: reset.length });
-    },
-  });
-
-  // -----------------------------------------------------------------------
-  // Spec 16 Phase 5: Close Spec Command — /pi-coder-close
-  // -----------------------------------------------------------------------
-
-  pi.registerCommand("pi-coder-close", {
-    description: "Close a spec (set CANCELLED status, delete state.json, keep spec.md as audit trail)",
-    handler: async (_args, ctx) => {
-      if (!specManager) {
-        ctx.ui.notify("Pi Coder not initialized. Run /pi-coder-init first.", "error");
-        return;
-      }
-
-      // 1. List all specs and filter to non-COMPLETE/CANCELLED
-      const allSpecIds = await specManager.listSpecs();
-      const openSpecs: Array<{ id: string; status: string }> = [];
-
-      for (const specId of allSpecIds) {
-        const spec = await specManager.readSpec(specId);
-        if (spec && spec.status !== "COMPLETE" && spec.status !== "CANCELLED") {
-          openSpecs.push({ id: specId, status: spec.status });
-        }
-      }
-
-      if (openSpecs.length === 0) {
-        ctx.ui.notify("No open specs to close.", "info");
-        return;
-      }
-
-      // 2. Present selection UI
-      const options = openSpecs.map(s => `${s.id} — ${s.status}`);
-      const selected = await ctx.ui.select(
-        "Close Spec",
-        options,
-      );
-
-      if (selected === undefined) return; // Cancelled
-
-      // Find the selected spec
-      const selectedSpec = openSpecs.find(s => `${s.id} — ${s.status}` === selected);
-      if (!selectedSpec) return;
-
-      const previousStatus = selectedSpec.status;
-
-      // 3. Update spec status to CANCELLED
-      await specManager.updateSpec(selectedSpec.id, { status: "CANCELLED" });
-
-      // 4. Delete state.json
-      await SpecStatePersistence.delete(specManager.specsDir, selectedSpec.id);
-
-      // 5. If this was the active spec, reset FSM and clear active pointer
-      if (activeSpecId === selectedSpec.id) {
-        if (stateMachine) {
-          const previousState = stateMachine.currentState;
-          stateMachine.reset();
-          tokenTracker.emitStateUsageAndTransition(previousState, "IDLE", activeSpecId);
-          logEvent("fsm_transition", {
-            from: previousState,
-            to: "IDLE",
-            trigger: "fsm_reset",
-            event: "reset",
-            loopCount: stateMachine.loopCount,
-            specId: activeSpecId,
-          });
-        }
-        activeSpecId = null;
-        nudgeEngine.reset("IDLE");
-      }
-
-      // 6. Persist and refresh
-      await persistState();
-      refreshUI();
-
-      // 7. Confirm and log
-      ctx.ui.notify(`Spec '${selectedSpec.id}' closed (CANCELLED).`, "info");
-      logEvent("command", { command: "close_spec", specId: selectedSpec.id, previousStatus });
-    },
-  });
-
-  // -----------------------------------------------------------------------
-  // Spec 14: Logs Command — /pi-coder-logs [sessionId] [--spec specId]
-  // -----------------------------------------------------------------------
-
-  pi.registerCommand("pi-coder-logs", {
-    description: "Show pi-coder interaction log statistics. Options: /pi-coder-logs [sessionId] [--spec specId] [--all]",
-    handler: async (args, ctx) => {
-      const baseLogDir = join(ctx.cwd, ".pi-coder", "logs");
-
-      if (!existsSync(baseLogDir)) {
-        ctx.ui.notify("No logs found. Enable logging in .pi-coder/config.json to start collecting telemetry.", "info");
-        return;
-      }
-
-      // Parse arguments
-      const argParts = args.trim().split(/\s+/);
-      let filterSessionId: string | null = null;
-      let filterSpecId: string | null = null;
-      let showAll = false;
-
-      for (const part of argParts) {
-        if (part === "--all") {
-          showAll = true;
-        } else if (part.startsWith("--spec=")) {
-          filterSpecId = part.slice(7);
-        } else if (part.startsWith("--spec")) {
-          // --spec value (next arg handled below or value after =)
-          filterSpecId = part.slice(7) || null;
-        } else if (part && !part.startsWith("--")) {
-          // Positional arg = session ID (or prefix)
-          filterSessionId = part;
-        }
-      }
-
-      // Discover session directories and log files
-      const entries: Array<Record<string, unknown>> = [];
-      const logDirsToRead: string[] = [];
-
-      if (showAll || !filterSessionId) {
-        // Read all session directories (or flat files for backward compat)
-        const topEntries = readdirSync(baseLogDir, { withFileTypes: true });
-        for (const entry of topEntries) {
-          if (entry.isDirectory()) {
-            // Session-scoped directory
-            if (filterSessionId && !entry.name.startsWith(filterSessionId)) continue;
-            logDirsToRead.push(join(baseLogDir, entry.name));
-          } else if (entry.name.endsWith(".log")) {
-            // Legacy flat file (pre-session-scoped)
-            logDirsToRead.push(baseLogDir);
-          }
-        }
-        if (logDirsToRead.length === 0 && topEntries.some(e => e.name.endsWith(".log"))) {
-          // All .log files are in baseLogDir (legacy)
-          logDirsToRead.push(baseLogDir);
-        }
-      } else {
-        // Specific session — look for matching directory
-        const topEntries = readdirSync(baseLogDir, { withFileTypes: true });
-        const match = topEntries.find(e => e.isDirectory() && e.name.startsWith(filterSessionId!));
-        if (match) {
-          logDirsToRead.push(join(baseLogDir, match.name));
-        }
-        // Also check for legacy flat files
-        if (topEntries.some(e => e.name.endsWith(".log"))) {
-          logDirsToRead.push(baseLogDir);
-        }
-      }
-
-      if (logDirsToRead.length === 0) {
-        ctx.ui.notify("No log files found for the given filters.", "info");
-        return;
-      }
-
-      // Read and parse log files from each directory
-      const seenDirs = new Set<string>();
-      for (const dir of logDirsToRead) {
-        if (seenDirs.has(dir)) continue;
-        seenDirs.add(dir);
-        const files = readdirSync(dir).filter(f => f.endsWith(".log")).sort();
-        for (const file of files) {
-          const content = readFileSync(join(dir, file), "utf-8");
-          for (const line of content.trim().split("\n").filter(Boolean)) {
-            try {
-              entries.push(JSON.parse(line));
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        }
-      }
-
-      if (entries.length === 0) {
-        ctx.ui.notify("Log files found but contain no parseable entries.", "info");
-        return;
-      }
-
-      // Filter by specId if requested
-      let filteredEntries = entries;
-      if (filterSpecId) {
-        filteredEntries = entries.filter(e => {
-          const p = (e as Record<string, unknown>).payload as Record<string, unknown> | undefined;
-          return p?.specId === filterSpecId;
-        });
-        if (filteredEntries.length === 0) {
-          ctx.ui.notify(`No log entries found for spec '${filterSpecId}'.`, "info");
-          return;
-        }
-      }
-
-      // Compute and display summary using analysis functions
-      const { computeFullSummary, formatSummary } = await import("../src/log-analysis.ts");
-      const summary = computeFullSummary(filteredEntries as any, config.logging.tokenPricing);
-      const text = formatSummary(summary);
-
-      ctx.ui.notify(text, "info");
-
-      // Log that logs were viewed
-      logEvent("command", { command: "logs", result: "success", entryCount: filteredEntries.length, filterSessionId, filterSpecId });
-    },
-  });
+  // Logs Command — /pi-coder-logs (extracted to src/commands/logs.ts)
+  registerLogsCommand(hctx);
 }
