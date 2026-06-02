@@ -286,6 +286,20 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         specId: ctx.activeSpecId,
       });
 
+      // Runaway detection: flag subagent sessions that burned excessive tokens
+      const subagentTurns = subUsage?.turns ?? 0;
+      const subagentOutput = subUsage?.output ?? 0;
+      const isRunaway = subagentTurns > 40 || subagentOutput > 40000;
+      if (isRunaway) {
+        ctx.logEvent("subagent_runaway", {
+          agent: ctx.subagentMonitor.lastAgent ?? "unknown",
+          turns: subagentTurns,
+          outputTokens: subagentOutput,
+          exitCode: subUsage?.exitCode ?? 0,
+          specId: ctx.activeSpecId,
+        });
+      }
+
       ctx.subagentMonitor.startTime = null;
       ctx.subagentMonitor.lastAgent = null;
       ctx.subagentMonitor.running = false;

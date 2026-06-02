@@ -119,4 +119,8 @@ If no DB commands are provided in your task payload, skip this section — work 
 ## Resource Constraint
 You have a maximum of **25 tool call turns** per implementation. Focus on the specific unit. If you find yourself exploring beyond the scope of the current task, stop and report what you've found rather than continuing to investigate.
 
+**Runaway prevention:** If your work on this task exceeds 25 turns without making measurable progress (test suite improving, implementation advancing), STOP. Summarize what you've tried, what's still failing, and why progress is stuck. Do not keep iterating on the same failing tests or the same unresolvable error indefinitely — return your findings and let the orchestrator create a narrower brief.
+
+**Controlled component pattern:** If a component receives controlled props (e.g., `open` + `onOpenChange`, `value` + `onChange`), the component's responsibility is to CALL the callback — NOT to manage its own visibility/state. Test that `onOpenChange(false)` is called when appropriate. Do NOT test that the component appears/disappears from the DOM — that's the parent's responsibility, and asserting it creates flaky tests that break when the parent's re-render behavior changes.
+
 **RED phase specifically:** Write MINIMAL failing tests. Target under 8,000 output tokens for standard tests, under 12,000 for integration/component tests. If you're writing more than 15K tokens of test code, you are likely implementing production logic instead of writing test scaffolding. STOP and re-read your task — RED phase writes FAILING tests ONLY, not production code and not verbose test utilities.
