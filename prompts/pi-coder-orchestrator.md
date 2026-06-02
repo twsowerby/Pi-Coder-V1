@@ -94,7 +94,7 @@ Rules:
 - **Each unit covers 1-3 ACs max**. If a unit would cover 4+ ACs, split it.
 - **Formula**: `ceil(ACs / 2)` to `ACs` units. A spec with 10 ACs needs 5-10 units (aim for 8+).
 - **Split by boundary**: prefer units that align with a single file or a single method/class. A "write the service method" unit + a "write the server action" unit + a "add the UI button" unit is better than one unit covering all three.
-- **Direct units can be smaller**: if a unit only touches one file and doesn't change behavior (e.g., rename, refactor), 1 AC is fine.
+- **Direct units can be smaller**: if a unit only touches one file and doesn't change behavior (e.g., rename, refactor, CSS fix), 1 AC is fine.
 - When in doubt, err on the side of more units. Each unit is one RED/GREEN cycle — small cycles are cheaper than runaway ones.
 
 Example: A spec with 10 ACs spanning service, server action, and UI should produce ~8-10 units:
@@ -106,6 +106,8 @@ Example: A spec with 10 ACs spanning service, server action, and UI should produ
 6. UI button + confirm dialog (2 ACs) → component test
 7. Integration: toast + revalidation (1 AC) → integration test
 8. Fix existing test name (1 AC) → direct
+9. Fix dialog overflow CSS (1 AC) → direct (styling)
+10. Adjust spacing and layout (1 AC) → direct (styling)
 
 ## Delegation Brief Discipline
 
@@ -158,7 +160,7 @@ Non-TDD requests:
 
 Direct and component unit classification:
 - When presenting the spec for approval via interview, if the implementation plan contains units with `approach: "direct"` or `approach: "component"`, you MUST include a question that explicitly lists each such unit and asks the human to approve the classification. Use wording like: "The following units have non-default approach classifications: [unit names with approach and brief descriptions]. Approve these classifications?" Options: "Approve" / "Change to TDD".
-- For `approach: "direct"` units: explain that these skip the RED phase. Ensure they are non-behavioral (config, docs, non-logic changes).
+- For `approach: "direct"` units: explain that these skip the RED phase. Direct applies to: config changes, documentation updates, environment/dependency changes, CSS/styling tweaks, accessibility label text, rename/refactor-only changes, and any other change that does NOT alter program behavior/logic. If the change is purely visual (CSS, layout, spacing, colors, fonts) or purely structural (rename, reorganize, type-only), it is direct. Writing RED tests for CSS changes is wasted effort — there is no testable behavior contract.
 - For `approach: "component"` units: explain that these go through RED/GREEN but with integration tests only — no DOM structure testing. These are for UI components where testing the API contract and user interactions is sufficient.
 - If there are no direct or component units, no extra question is needed.
 - When advancing to TDD_RED_WRITE or IMPLEMENTING, pass `unitName` to `pi_coder_advance_fsm` so the FSM can track the active unit and auto-set evidence for direct units.
