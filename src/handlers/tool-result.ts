@@ -13,6 +13,7 @@ import { formatTokenCount, formatDurationMs } from "../ui/formatting.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { FSMTrigger } from "../logger.ts";
 import { mkdir, writeFile } from "node:fs/promises";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 /** Maximum consecutive verdict extraction failures before forced re-delegation. */
@@ -95,64 +96,31 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void
 }
 
 /**
- * Capture buffer for subagent output observed during tool_execution_update events.
- * When a subagent (reviewer) sends its result via pi-intercom, the final
- * `tool_result` event may have `finalOutput: undefined` and `rawContent`
- * containing only the intercom receipt. However, during the subagent's
- * execution, `tool_execution_update` events may contain partial results
- * with the actual `finalOutput` content BEFORE the intercom delivery strips it.
- * This buffer captures that content so it can be used as a fallback for
- * verdict extraction.
+ * Read the reviewer output file produced by pi-subagents' `output` parameter.
  *
- * Cleaned on each session_start to prevent stale entries across sessions.
- */
-const subagentOutputCapture = new Map<string, string>();
-
-/**
- * Register a tool_execution_update listener that captures reviewer subagent
- * output as a fallback for verdict extraction when the intercom receipt path
- * strips `finalOutput`.
+ * When the orchestrator calls the reviewer subagent, pi-coder injects an
+ * `output` parameter pointing to `.pi-coder/specs/{specId}/review-output.md`.
+ * Pi-subagents writes the full output to this file — this happens inside the
+ * subagent executor, AFTER the agent completes but BEFORE intercom strips
+ * finalOutput from the in-memory details. The file is always written
+ * regardless of intercom bridge state, making it a reliable extraction source.
  *
- * Call this once during extension initialization (session_start).
+ * With `outputMode: "file-only"`, the in-memory result contains only a
+ * compact file reference ("Output saved to: ..."), so reading from the
+ * file is the PRIMARY extraction path, not a fallback.
+ *
+ * Returns the file content if it exists and is non-empty, else undefined.
  */
-/** Clear the subagentOutputCapture buffer. Called on session_start to prevent stale entries. */
-export function clearSubagentOutputCapture(): void {
-  subagentOutputCapture.clear();
-}
-
-export function registerSubagentOutputCapture(ctx: HandlerContext): void {
-  ctx.pi.events.on("tool_execution_update", (data: unknown) => {
-    if (ctx.piCoderMode === "off") return;
-    const event = data as { toolName: string; partialResult: unknown };
-    if (event.toolName !== "subagent") return;
-
-    const result = event.partialResult as {
-      details?: {
-        results?: Array<{
-          agent?: string;
-          finalOutput?: string;
-        }>;
-      };
-    } | null;
-
-    if (!result?.details?.results) return;
-
-    for (const r of result.details.results) {
-      // Capture the last known finalOutput for reviewer agents
-      if (typeof r.finalOutput === "string" && r.finalOutput.length > 0) {
-        const agent = r.agent ?? "";
-        const isReviewer = agent.includes("pi-coder.reviewer") || agent.includes("reviewer");
-        if (isReviewer) {
-          subagentOutputCapture.set(ctx.activeSpecId ?? "_global", r.finalOutput);
-          ctx.logEvent("subagent_output_capture", {
-            specId: ctx.activeSpecId,
-            agent,
-            textLength: r.finalOutput.length,
-          });
-        }
-      }
-    }
-  });
+function readReviewOutputFile(cwd: string, specId: string | null): string | undefined {
+  if (!specId) return undefined;
+  const filePath = resolve(cwd, ".pi-coder", "specs", specId, "review-output.md");
+  try {
+    if (!existsSync(filePath)) return undefined;
+    const content = readFileSync(filePath, "utf-8");
+    return content.length > 0 ? content : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Save the full review text to `.pi-coder/specs/{activeSpecId}/review.md`. */
@@ -770,35 +738,33 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           return undefined;
         })();
 
-        // Check subagent output capture buffer for intercom-delivered content.
-        // When the reviewer sends its result via pi-intercom, both the
-        // details.results[0].finalOutput and rawContent may be stripped.
-        // The capture buffer stores the last known finalOutput from
-        // tool_execution_update events, which fire BEFORE the intercom
-        // delivery strips it.
-        const specKey = ctx.activeSpecId ?? "_global";
-        const capturedOutput = subagentOutputCapture.get(specKey);
+        // Read the reviewer output file — the PRIMARY extraction source.
+        // When pi-coder dispatches the reviewer, it injects `output` and `outputMode: "file-only"`
+        // into the subagent call. Pi-subagents writes the full output to this file inside
+        // the executor, AFTER the agent completes but BEFORE intercom strips finalOutput
+        // from the in-memory details. The file is always written regardless of intercom state.
+        const outputFileText = readReviewOutputFile(ctx.projectCwd, ctx.activeSpecId);
 
-        // Try extraction with primary sources first
-        let reviewVerdict = extractReviewVerdict(details, rawContentText);
+        // Try extraction with the output file first (most reliable), then details, then rawContent
+        let reviewVerdict: ReviewVerdict | null = null;
+        let extractionSource = "none";
 
-        // If primary extraction failed, try the captured output as a last resort
-        // Wrap the captured string in a Details-shaped object so extractReviewVerdict()
-        // can find it via the results[0].finalOutput path
-        if (!reviewVerdict && capturedOutput) {
-          reviewVerdict = extractReviewVerdict({
-            mode: "single",
-            results: [{ finalOutput: capturedOutput }],
+        if (outputFileText) {
+          reviewVerdict = extractReviewVerdict({ mode: "single", results: [{ finalOutput: outputFileText }] });
+          if (reviewVerdict) extractionSource = "output_file";
+        }
+
+        if (!reviewVerdict) {
+          reviewVerdict = extractReviewVerdict(details, rawContentText);
+          if (reviewVerdict) extractionSource = extractionSource || "details_rawContent";
+        }
+
+        if (reviewVerdict && extractionSource !== "none") {
+          ctx.logEvent("verdict_extraction_source", {
+            source: extractionSource,
+            specId: ctx.activeSpecId,
+            verdict: reviewVerdict.verdict,
           });
-          if (reviewVerdict) {
-            ctx.logEvent("verdict_extraction_captured", {
-              source: "subagent_output_capture",
-              specId: ctx.activeSpecId,
-              verdict: reviewVerdict.verdict,
-            });
-          }
-          // Clean up capture after use
-          subagentOutputCapture.delete(specKey);
         }
 
         if (reviewVerdict) {
@@ -849,17 +815,17 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           if (hasActiveSpecId) {
             // Save the full review text to file
             const fullReviewText = (() => {
-              // Prefer finalOutput from subagent details
+              // Prefer output file — always written by pi-subagents executor
+              if (outputFileText) {
+                return outputFileText;
+              }
+              // Fallback: finalOutput from subagent details (may be stripped by intercom)
               if (subDetails?.results?.[0]?.finalOutput && typeof subDetails.results[0].finalOutput === "string") {
                 return subDetails.results[0].finalOutput as string;
               }
-              // Fallback to rawContent text
+              // Fallback: rawContent text (intercom receipt or file-only reference)
               if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
                 return (rawContent[0] as { type: string; text: string }).text;
-              }
-              // Fallback to captured output
-              if (capturedOutput) {
-                return capturedOutput;
               }
               return "";
             })();
@@ -908,6 +874,8 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
             textLength: diagnostics.textLength,
             firstHundredChars: diagnostics.firstHundredChars,
             intercomReceiptDetected: receiptDetected,
+            hasOutputFile: outputFileText !== undefined,
+            outputFileLength: outputFileText?.length ?? 0,
             consecutiveFailures: failCount,
             maxRetries: MAX_VERDICT_EXTRACTION_RETRIES,
             specId: ctx.activeSpecId,

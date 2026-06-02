@@ -164,6 +164,20 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         // Disable pi-subagents control events for foreground runs
         (input as Record<string, unknown>).control = { enabled: false };
 
+        // Inject `output` parameter for reviewer subagent calls.
+        // When pi-intercom is active, the intercom bridge strips `finalOutput`
+        // from the subagent details, making verdict extraction impossible.
+        // By setting `output`, pi-subagents guarantees the full output is
+        // persisted to a file BEFORE intercom strips the in-memory result.
+        // This is a documented pi-subagents API — no global config hacks needed.
+        if (targetAgent === "pi-coder.reviewer" && ctx.activeSpecId) {
+          const outputParts = [".pi-coder", "specs", ctx.activeSpecId, "review-output.md"];
+          (input as Record<string, unknown>).output = outputParts.join("/");
+          // file-only mode: return a compact file reference instead of the full
+          // output inline. The file is always written regardless of mode.
+          (input as Record<string, unknown>).outputMode = "file-only";
+        }
+
         // Track subagent timing
         ctx.subagentMonitor.startTime = Date.now();
         ctx.subagentMonitor.lastAgent = targetAgent;

@@ -21,7 +21,7 @@ import { registerCloseCommand } from "../src/commands/close.ts";
 import { registerLogsCommand } from "../src/commands/logs.ts";
 import { registerBeforeAgentStartHandler } from "../src/handlers/before-agent-start.ts";
 import { registerToolCallHandler } from "../src/handlers/tool-call.ts";
-import { registerToolResultHandler, registerSubagentOutputCapture, clearSubagentOutputCapture } from "../src/handlers/tool-result.ts";
+import { registerToolResultHandler } from "../src/handlers/tool-result.ts";
 import { registerSessionStartHandler } from "../src/handlers/session-start.ts";
 import { registerModeCommand } from "../src/commands/mode.ts";
 import { registerInitCommand } from "../src/commands/init.ts";
@@ -559,14 +559,6 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
 
   // tool_result handler (extracted to src/handlers/tool-result.ts)
   registerToolResultHandler(hctx);
-
-  // Subagent output capture — monitors tool_execution_update events to
-  // capture reviewer finalOutput before pi-intercom strips it.
-  // This is a fallback for verdict extraction when the intercom receipt
-  // path leaves both finalOutput and rawContent empty.
-  // Clear stale entries from previous sessions first.
-  clearSubagentOutputCapture();
-  registerSubagentOutputCapture(hctx);
 
   // =====================================================================
   // Spec 10: Commands

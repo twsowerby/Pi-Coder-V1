@@ -61,7 +61,8 @@ export type LogEventType =
   | "green_retry_blocked"
   | "verdict_extraction_degraded"
   | "verdict_extraction_captured"
-  | "subagent_output_capture"
+  | "verdict_extraction_source"
+
   | "plan_mode_summary"
   | "proactive_compaction"
   | "proactive_compaction_error"
@@ -116,7 +117,8 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   // P1: Verdict extraction degraded
   verdict_extraction_degraded: "standard",
   verdict_extraction_captured: "standard",
-  subagent_output_capture: "verbose",
+  verdict_extraction_source: "verbose",
+
   plan_mode_summary: "standard",
   proactive_compaction: "standard",
   proactive_compaction_error: "standard",
