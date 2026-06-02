@@ -550,13 +550,17 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     description:
       "Save a spec to .pi-coder/specs/{id}.md. Creates the file if it doesn't exist, updates it if it does. " +
       "The spec file persists the acceptance criteria, constraints, key files, implementation plan, and pruned context. " +
-      "This is the authoritative record of what the TDD cycle is building.",
+      "This is the authoritative record of what the TDD cycle is building. " +
+      "UNIT SIZING RULE: Every implementation plan must have 8-12 units minimum (not 4-5). " +
+      "Each unit covers 1-3 acceptance criteria max. If a spec has N ACs, it needs ceil(N/2) to N units. " +
+      "Broad units cause runaway subagent turns and undifferentiated test suites.",
     promptSnippet: "Persist the compiled spec to .pi-coder/specs/ for reference by implementor and reviewer",
     promptGuidelines: [
       "Save the spec after synthesizing research findings and before presenting for approval.",
       "Update the spec with the implementation plan before starting the TDD cycle.",
       "The spec ID is automatically generated with a timestamp-prefix. Use the active spec ID shown in your system prompt. The slug parameter provides a descriptive suffix.",
       "Include ALL acceptance criteria, constraints, and key files — implementor only sees what you put here.",
+      "UNIT SIZING: Each unit covers 1-3 ACs. A spec with 10 ACs needs 5-10 units. A spec with 15 ACs needs 8-15 units. If you find yourself creating units with 4+ ACs, split them. Err on the side of more, smaller units — each unit is one RED/GREEN cycle.",
     ],
     parameters: Type.Object({
       slug: Type.String({ description: "Descriptive slug for the spec ID suffix (e.g., user-auth). The full spec ID is auto-generated with a timestamp prefix. If an active spec ID is already set (from advancing to SPEC_WORK), that ID is used and this field provides the descriptive suffix only." }),
