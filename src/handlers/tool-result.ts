@@ -526,6 +526,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
               durationMs,
             });
             ctx.tokenTracker.unitStartTime = null;
+            ctx.tokenTracker.unitStartOutputTokens = 0;
           }
         } else {
           ctx.stateMachine!.transition("TDD_GREEN_WRITE");
@@ -616,6 +617,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
               durationMs,
             });
             ctx.tokenTracker.unitStartTime = null;
+            ctx.tokenTracker.unitStartOutputTokens = 0;
           }
         }
       }

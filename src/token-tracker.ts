@@ -108,6 +108,8 @@ export class TokenTracker {
     this.phaseTokens = {};
     this.lifecyclePhaseAccumulator = {};
     this.currentAccrualState = null;
+    this.unitStartTime = null;
+    this.unitStartOutputTokens = 0;
   }
 
   /** Reset session-level counters. */
