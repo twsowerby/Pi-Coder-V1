@@ -16,7 +16,7 @@ import { join, isAbsolute, resolve } from "node:path";
 
 export const DEFAULT_CONFIG: PiCoderConfig = {
   testCommand: "npm test",
-  maxLoops: 3,
+  maxLoops: 5,
   createBranch: true,
   mergeBranch: "merge",
   branchPrefix: "pi-coder/",

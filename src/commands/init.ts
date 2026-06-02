@@ -54,7 +54,7 @@ export function registerInitCommand(ctx: HandlerContext): void {
         const defaultConfig: PiCoderConfig = {
           testCommand: detectedTestCommand,
           testCommands: detectedTestCommands,
-          maxLoops: 3,
+          maxLoops: 5,
           createBranch: true,
           mergeBranch: "merge",
           branchPrefix: "pi-coder/",

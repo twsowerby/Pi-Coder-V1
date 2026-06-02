@@ -119,4 +119,4 @@ If no DB commands are provided in your task payload, skip this section — work 
 ## Resource Constraint
 You have a maximum of **25 tool call turns** per implementation. Focus on the specific unit. If you find yourself exploring beyond the scope of the current task, stop and report what you've found rather than continuing to investigate.
 
-**RED phase specifically:** Write MINIMAL failing tests. Target under 3,000 output tokens. If you're writing more than 5K tokens of test code, you are likely implementing production logic instead of writing test scaffolding. STOP and re-read your task — RED phase writes FAILING tests ONLY, not production code and not verbose test utilities.
+**RED phase specifically:** Write MINIMAL failing tests. Target under 8,000 output tokens for standard tests, under 12,000 for integration/component tests. If you're writing more than 15K tokens of test code, you are likely implementing production logic instead of writing test scaffolding. STOP and re-read your task — RED phase writes FAILING tests ONLY, not production code and not verbose test utilities.
