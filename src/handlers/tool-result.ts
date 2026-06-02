@@ -513,8 +513,12 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         if (validation.valid) {
           transitionSteer = "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
 
-          if (ctx.stateMachine!.currentUnitName) {
-            const durationMs = ctx.tokenTracker.unitStartTime !== null ? Date.now() - ctx.tokenTracker.unitStartTime : null;
+          // BUG-8 fix: Only emit unit_end if unitStartTime is set (not already emitted).
+          // The orchestrator may run pi_coder_run_tests multiple times in GREEN_VALIDATE
+          // (e.g., a focused test then a full suite). Without this guard, each valid=true
+          // pass emits a duplicate unit_end — the second with durationMs=None.
+          if (ctx.stateMachine!.currentUnitName && ctx.tokenTracker.unitStartTime !== null) {
+            const durationMs = Date.now() - ctx.tokenTracker.unitStartTime;
             const outputTokens = ctx.tokenTracker.lifecycleTokens.output - ctx.tokenTracker.unitStartOutputTokens;
             ctx.logEvent("unit_end", {
               specId: ctx.activeSpecId,
@@ -604,8 +608,8 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           });
           notify(ctx.config, "circuit_breaker", "Pi Coder · 🔴 Circuit Breaker", `Max review loops (${ctx.config.maxLoops}) exceeded on spec ${ctx.activeSpecId ?? "unknown"}`);
 
-          if (ctx.stateMachine!.currentUnitName) {
-            const durationMs = ctx.tokenTracker.unitStartTime !== null ? Date.now() - ctx.tokenTracker.unitStartTime : null;
+          if (ctx.stateMachine!.currentUnitName && ctx.tokenTracker.unitStartTime !== null) {
+            const durationMs = Date.now() - ctx.tokenTracker.unitStartTime;
             const outputTokens = ctx.tokenTracker.lifecycleTokens.output - ctx.tokenTracker.unitStartOutputTokens;
             ctx.logEvent("unit_end", {
               specId: ctx.activeSpecId,

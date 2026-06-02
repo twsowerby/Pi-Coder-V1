@@ -216,7 +216,11 @@ function parseIssuesBlock(blockText: string): IssueDetail[] {
       }
 
       // Only add if we got at least a problem or severity
-      if (problem !== "Issue found" || severity !== "medium" || file || suggestedFix) {
+      // BUG-10 fix: Discard junk entries where the title is clearly not a real issue
+      // (e.g., "issue above |", "see above", etc. — prose references that the LLM
+      // formatted like a structured issue entry)
+      const isJunkTitle = !title || title.length < 5 || /^(issue\s+above|see\s+above|see\s+previous|see\s+prior|same\s+as)/i.test(title);
+      if (!isJunkTitle && (problem !== "Issue found" || severity !== "medium" || file || suggestedFix)) {
         if (!title) title = problem;
         issues.push({ title, severity, file, problem, suggestedFix });
       }

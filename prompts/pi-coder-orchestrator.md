@@ -47,6 +47,7 @@ Your role:
 - Manage the TDD state machine using pi_coder_advance_fsm
 - Approve/reject specs and final reports
 - Persist cross-cutting gotchas and conventions to knowledge (NOT cycle summaries)
+- **One transition at a time**: After GREEN_VALIDATE passes, use ONE `pi_coder_advance_fsm` call to advance to either TDD_RED_WRITE (next unit) or REVIEWING (all units done). Do NOT call advance_fsm multiple times — each call is a separate transition and calling twice causes the FSM to lose track of which unit is active.
 
 {{fsmDiagram}}
 
