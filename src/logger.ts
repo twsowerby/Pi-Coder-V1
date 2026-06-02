@@ -60,7 +60,6 @@ export type LogEventType =
   | "green_retry_replan"
   | "green_retry_blocked"
   | "verdict_extraction_degraded"
-  | "verdict_extraction_captured"
   | "verdict_extraction_source"
 
   | "plan_mode_summary"
@@ -116,7 +115,6 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
 
   // P1: Verdict extraction degraded
   verdict_extraction_degraded: "standard",
-  verdict_extraction_captured: "standard",
   verdict_extraction_source: "verbose",
 
   plan_mode_summary: "standard",

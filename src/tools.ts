@@ -551,9 +551,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       "Save a spec to .pi-coder/specs/{id}.md. Creates the file if it doesn't exist, updates it if it does. " +
       "The spec file persists the acceptance criteria, constraints, key files, implementation plan, and pruned context. " +
       "This is the authoritative record of what the TDD cycle is building. " +
-      "UNIT SIZING RULE: Every implementation plan must have 8-12 units minimum (not 4-5). " +
-      "Each unit covers 1-3 acceptance criteria max. If a spec has N ACs, it needs ceil(N/2) to N units. " +
-      "Broad units cause runaway subagent turns and undifferentiated test suites.",
+      "UNIT SIZING RULE: Each unit covers 1-3 ACs max. For a typical spec with 10-15 ACs, aim for 8-12 units (not 4-5). " +
+      "Formula: ceil(ACs/2) to ACs units. Broad units cause runaway subagent turns and undifferentiated test suites.",
     promptSnippet: "Persist the compiled spec to .pi-coder/specs/ for reference by implementor and reviewer",
     promptGuidelines: [
       "Save the spec after synthesizing research findings and before presenting for approval.",
