@@ -277,23 +277,49 @@ export class TokenTracker {
 
   /** Deep-copy lifecyclePhaseAccumulator for logging lifecycle_end events.
    *  Uses the lifecycle accumulator (not the per-visit phaseTokens) so the snapshot
-   *  contains correct totals even after per-visit buckets are reset on emission. */
+   *  contains correct totals even after per-visit buckets are reset on emission.
+   *  This method is side-effect-free — it does not mutate the accumulator. */
   snapshotPhaseTokens(): Record<string, PhaseBucket> {
-    // Also accumulate any currently-active state that hasn't been emitted yet
+    // Merge any currently-active unemitted per-visit buckets into the snapshot
+    // WITHOUT mutating the accumulator (idempotent: safe to call multiple times)
+    const merged: Record<string, PhaseBucket> = {};
+    for (const [state, acc] of Object.entries(this.lifecyclePhaseAccumulator)) {
+      merged[state] = {
+        ...acc,
+        source: {
+          orchestrator: { ...acc.source.orchestrator },
+          subagent: { ...acc.source.subagent },
+        },
+      };
+    }
+    // Add any active per-visit buckets that haven't been emitted yet
     for (const [state, bucket] of Object.entries(this.phaseTokens)) {
       if (bucket.input > 0 || bucket.output > 0 || bucket.cacheRead > 0 || bucket.cacheWrite > 0 || bucket.cost > 0 || bucket.turns > 0) {
-        this.accumulateLifecyclePhase(state, bucket);
+        if (!merged[state]) {
+          merged[state] = TokenTracker.createEmptyBucket();
+        }
+        const m = merged[state];
+        m.input += bucket.input;
+        m.output += bucket.output;
+        m.cacheRead += bucket.cacheRead;
+        m.cacheWrite += bucket.cacheWrite;
+        m.cost += bucket.cost;
+        m.turns += bucket.turns;
+        m.source.orchestrator.input += bucket.source.orchestrator.input;
+        m.source.orchestrator.output += bucket.source.orchestrator.output;
+        m.source.orchestrator.cacheRead += bucket.source.orchestrator.cacheRead;
+        m.source.orchestrator.cacheWrite += bucket.source.orchestrator.cacheWrite;
+        m.source.orchestrator.cost += bucket.source.orchestrator.cost;
+        m.source.orchestrator.turns += bucket.source.orchestrator.turns;
+        m.source.subagent.input += bucket.source.subagent.input;
+        m.source.subagent.output += bucket.source.subagent.output;
+        m.source.subagent.cacheRead += bucket.source.subagent.cacheRead;
+        m.source.subagent.cacheWrite += bucket.source.subagent.cacheWrite;
+        m.source.subagent.cost += bucket.source.subagent.cost;
+        m.source.subagent.turns += bucket.source.subagent.turns;
       }
     }
-    return Object.fromEntries(
-      Object.entries(this.lifecyclePhaseAccumulator).map(([state, bucket]) => [state, {
-        ...bucket,
-        source: {
-          orchestrator: { ...bucket.source.orchestrator },
-          subagent: { ...bucket.source.subagent },
-        },
-      }])
-    );
+    return merged;
   }
 
   /** Shallow-copy lifecycleTokens. */
