@@ -321,7 +321,7 @@ function serializeSpec(spec: SpecFile): string {
     lines.push("## Implementation Plan");
     for (const unit of spec.implementationPlan) {
       const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
-      const approachStr = unit.approach === "direct" ? " (approach: direct)" : ""; // Only serialize 'direct', not 'tdd'
+      const approachStr = unit.approach === "direct" ? " (approach: direct)" : unit.approach === "component" ? " (approach: component)" : ""; // Only serialize non-default approaches
       const suiteStr = unit.testSuite ? ` (suite: ${unit.testSuite})` : "";
       const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
       lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${suiteStr}${deps}`);
@@ -442,7 +442,7 @@ function extractTextSection(content: string, heading: string): string {
  * Extract the Implementation Plan section from a spec file.
  *
  * Format:
- *   - **Unit Name** [AC1, AC2] (approach: direct) (depends on: Other Unit)
+ *   - **Unit Name** [AC1, AC2] (approach: direct|component) (depends on: Other Unit)
  *     - `path/to/file.ts`
  *
  * Returns an array of ImplementationUnit objects.
@@ -475,11 +475,11 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
     const trailing = unitMatch[3] ?? "";
 
     // Extract approach from trailing string
-    let approach: "tdd" | "direct" | undefined;
-    const approachMatch = trailing.match(/\(approach:\s*(tdd|direct)\)/i);
+    let approach: "tdd" | "direct" | "component" | undefined;
+    const approachMatch = trailing.match(/\(approach:\s*(tdd|direct|component)\)/i);
     if (approachMatch) {
-      approach = approachMatch[1].toLowerCase() as "tdd" | "direct";
-      // Normalize: undefined = tdd default, only set if explicitly "direct"
+      approach = approachMatch[1].toLowerCase() as "tdd" | "direct" | "component";
+      // Normalize: undefined = tdd default, only set if explicitly "direct" or "component"
       if (approach === "tdd") approach = undefined;
     }
 
@@ -513,6 +513,8 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
     };
     if (approach === "direct") {
       unit.approach = "direct";
+    } else if (approach === "component") {
+      unit.approach = "component";
     }
     if (testSuite) {
       unit.testSuite = testSuite;

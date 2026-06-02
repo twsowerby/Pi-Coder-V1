@@ -391,7 +391,7 @@ export interface ImplementationUnit {
   /** Names of other units that must be implemented before this one */
   dependsOn: string[];
   /** Approach classification: "tdd" (default, standard RED/GREEN cycle) or "direct" (skip RED phase) */
-  approach?: "tdd" | "direct";
+  approach?: "tdd" | "direct" | "component";
   /** Which test suite to validate this unit against (must match a key in config.testCommands) */
   testSuite?: string;
 }

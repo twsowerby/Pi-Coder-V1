@@ -496,6 +496,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
             `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
             `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: \"Write ONLY failing test files for this unit. Do NOT modify production code.\" This is the correct TDD path when the implementor skipped the test-first step.` +
             `\n2. **Classify as approach: direct**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with approach: \"direct\" on this unit, then acknowledge the tautology with pi_coder_advance_fsm TDD_GREEN_WRITE. This records the decision explicitly.` +
+            `\n2b. **Classify as approach: component**: If this is a UI component where integration tests would pass because the component already works, re-save the spec with approach: \"component\". The RED brief will instruct integration tests only (API contract, callbacks, error states) — no DOM structure tests. Then re-delegate the RED phase with component-specific instructions.` +
             `\n3. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState \"TDD_GREEN_WRITE\" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
             `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units. Option 3 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`;
         }
@@ -834,7 +835,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
 
           let reclassificationGuidance = "";
           if (ctx.piCoderMode === "tdd" && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
-            reclassificationGuidance = " If the reviewer flagged a direct unit as needing TDD, re-save the spec with that unit's approach changed to 'tdd', present the change to the user via interview, and proceed with a full RED/GREEN cycle.";
+            reclassificationGuidance = " If the reviewer flagged a direct unit as needing TDD, re-save the spec with that unit's approach changed to 'tdd' or 'component', present the change to the user via interview, and proceed with a full RED/GREEN cycle. If the reviewer found a component unit's tests were testing DOM internals, the approach is correct but the test scope needs adjustment — re-delegate the RED phase with clearer integration-only instructions.";
           }
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off)."

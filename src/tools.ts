@@ -594,7 +594,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         acceptanceCriteriaIndices: Type.Array(Type.Number(), { description: "0-based indices into acceptanceCriteria array" }),
         keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
-        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct")], { description: "Approach classification: 'tdd' (standard RED/GREEN cycle) or 'direct' (skip RED phase for non-behavioral changes)" })),
+        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct"), Type.Literal("component")], { description: "Approach classification: 'tdd' (standard RED/GREEN cycle), 'direct' (skip RED phase for non-behavioral changes), or 'component' (RED/GREEN with integration tests only — no DOM internals)" })),
         testSuite: Type.Optional(Type.String({ description: "Which test suite to validate against (must match a key in testCommands config, e.g. 'unit', 'component', 'e2e')" })),
       }), { description: "Ordered list of atomic implementation units" })),
     }),
@@ -710,7 +710,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           lines.push("", "## Implementation Plan");
           for (const unit of spec.implementationPlan) {
             const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
-            const approachStr = unit.approach === "direct" ? " (approach: direct)" : "";
+            const approachStr = unit.approach === "direct" ? " (approach: direct)" : unit.approach === "component" ? " (approach: component)" : "";
             const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
             lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${deps}`);
             for (const f of unit.keyFiles) {
@@ -822,6 +822,10 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Check if the current unit is a direct unit (reads spec lazily)
       // This affects evidence-setting: direct units auto-satisfy test_run_this_state
       // for RED_VALIDATE, but NOT for GREEN_VALIDATE (test suite must still run).
+      //
+      // Component-approach units are intentionally excluded — they go through full
+      // RED/GREEN TDD and must have real (integration) tests written and failing.
+      // Only approach: "direct" gets the auto-evidence bypass.
       //
       // CRITICAL: After NEEDS_CHANGES, do NOT auto-set evidence even if the spec
       // still says "direct". If the reviewer flagged a direct unit as needing

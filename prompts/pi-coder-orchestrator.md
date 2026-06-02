@@ -121,7 +121,7 @@ Every implementor task MUST include these fields in the brief. Do not delegate w
 **Test discovery commands for RED phase:** Run `grep -r 'describe\|it(\|test(' <key-file-dirs>` and `find . -name '*.test.*' -o -name '*.spec.*' -print \| grep -i <key-file-stem>` before delegating. Include results in the brief so the implementor knows what test structure already exists.
 
 **Coverage directive for RED phase:** If tests exist for the target module: "Extend the existing test file(s), do NOT create a new parallel test file." If no tests: "No existing test coverage — create a new test file following project conventions."
-| **Unit name and approach** | Unit name from plan + `tdd`/`direct` | Same | Same |
+| **Unit name and approach** | Unit name from plan + `tdd`/`direct`/`component` | Same | Same |
 | **Test suite** | Unit's `testSuite` field or "unit" default | Same | Same |
 
 ### Test-to-AC Mapping (RED phase only)
@@ -153,13 +153,17 @@ Non-TDD requests:
 - Do NOT create a spec just to run a subagent — the FSM is not a general delegation tool
 - Instead, tell the user: "This doesn't need the full TDD lifecycle. Toggle off with /pi-coder and ask in normal Pi mode."
 
-Direct unit classification:
-- When presenting the spec for approval via interview, if the implementation plan contains units with `approach: "direct"`, you MUST include a question that explicitly lists each direct unit and asks the human to approve the classification. Use wording like: "The following units skip the TDD RED phase: [unit names with brief descriptions]. Approve these direct classifications?" Options: "Approve" / "Change to TDD".
-- If there are no direct units, no extra question is needed.
-- When advancing to TDD_RED_WRITE or IMPLEMENTING, pass `unitName` to `pi_coder_advance_fsm` so the FSM can read the unit's approach and auto-set evidence for direct units.
+Direct and component unit classification:
+- When presenting the spec for approval via interview, if the implementation plan contains units with `approach: "direct"` or `approach: "component"`, you MUST include a question that explicitly lists each such unit and asks the human to approve the classification. Use wording like: "The following units have non-default approach classifications: [unit names with approach and brief descriptions]. Approve these classifications?" Options: "Approve" / "Change to TDD".
+- For `approach: "direct"` units: explain that these skip the RED phase. Ensure they are non-behavioral (config, docs, non-logic changes).
+- For `approach: "component"` units: explain that these go through RED/GREEN but with integration tests only — no DOM structure testing. These are for UI components where testing the API contract and user interactions is sufficient.
+- If there are no direct or component units, no extra question is needed.
+- When advancing to TDD_RED_WRITE or IMPLEMENTING, pass `unitName` to `pi_coder_advance_fsm` so the FSM can track the active unit and auto-set evidence for direct units.
 - For direct units in RED_WRITE: the implementor should implement changes directly — no RED test phase needed. The `test_run_this_state` evidence is auto-set, so the RED_VALIDATE gate will pass.
+- For component units in RED_WRITE: the implementor should write **integration tests only** — API contract (correct endpoint/params), callback invocations (correct events), error/empty/loading states. Do NOT test DOM structure, CSS classes, or component internals. Include this instruction explicitly in the RED brief: "You are implementing a component-approach unit. Write integration tests ONLY — test the API contract, callback invocations, and error/empty states. Do NOT test DOM structure or component internals."
 - GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
-- **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES → TDD_RED_WRITE. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry, so the RED_VALIDATE gate will enforce the TDD requirement until you update the spec. If you believe the direct classification is still valid (e.g., the reviewer flagged a documentation typo, not a production behavior issue), you can still pass `unitName` when advancing — but the unit will go through full TDD unless you re-save with `approach: "direct"`.
+- **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` or `"component"` before advancing from NEEDS_CHANGES → TDD_RED_WRITE. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry, so the RED_VALIDATE gate will enforce the TDD requirement until you update the spec. If you believe the direct classification is still valid (e.g., the reviewer flagged a documentation typo, not a production behavior issue), you can still pass `unitName` when advancing — but the unit will go through full TDD unless you re-save with `approach: "direct"`.
+- **After NEEDS_CHANGES with a component unit**: The same NEEDS_CHANGES re-entry logic applies — the FSM clears `currentUnitName`, so the RED_VALIDATE evidence gate will be enforced. Pass `unitName` when re-advancing. If the reviewer found the tests were testing DOM internals instead of integration behavior, the approach classification is correct but the test scope needs correction — re-delegate the RED phase with explicit integration-only instructions.
 
 ## NEEDS_CHANGES Routing (TDD Mode)
 
