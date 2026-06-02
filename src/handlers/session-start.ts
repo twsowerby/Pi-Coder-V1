@@ -375,26 +375,28 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
       // acknowledged, making verdict extraction impossible. Pi-coder
       // subagents all use context: "fresh", so setting mode to "fork-only"
       // disables intercom for pi-coder while preserving it for fork-context agents.
+      //
+      // The config is read from ~/.pi/agent/extensions/subagent/config.json
+      // (pi-subagents' own config), NOT from .pi/settings.json.
       try {
-        const settingsPath = join(cwd, ".pi", "settings.json");
+        const { readFileSync, existsSync } = await import("node:fs");
+        const { homedir } = await import("node:os");
+        const subagentConfigPath = join(homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
         let needsConfigFix = true;
-        try {
-          const { readFileSync } = await import("node:fs");
-          const raw = readFileSync(settingsPath, "utf-8");
-          const settings = JSON.parse(raw);
-          const mode = settings?.subagents?.intercomBridge?.mode;
+        if (existsSync(subagentConfigPath)) {
+          const raw = readFileSync(subagentConfigPath, "utf-8");
+          const config = JSON.parse(raw);
+          const mode = config?.intercomBridge?.mode;
           if (mode === "fork-only" || mode === "off") {
             needsConfigFix = false;
           }
-        } catch {
-          // File doesn't exist or can't be parsed — needs fix
         }
         if (needsConfigFix) {
           ctx.logEvent("config_validation", {
-            warnings: ["intercomBridge.mode not set to 'fork-only' or 'off' — reviewer verdict extraction will fail because intercom delivery strips finalOutput. Add \"intercomBridge\": { \"mode\": \"fork-only\" }" + " to subagents in .pi/settings.json."],
+            warnings: ["intercomBridge.mode not set to 'fork-only' or 'off' in " + subagentConfigPath + " — reviewer verdict extraction will fail because intercom delivery strips finalOutput. Create the file with { \"intercomBridge\": { \"mode\": \"fork-only\" } }."],
           });
           cmdCtx.ui.notify(
-            "⚠️ Pi Coder: Set subagents.intercomBridge.mode to \"fork-only\" in .pi/settings.json to fix verdict extraction. See logs for details.",
+            `⚠️ Pi Coder: Set intercomBridge.mode to "fork-only" in ${subagentConfigPath} to fix verdict extraction.`,
             "warning",
           );
         }
