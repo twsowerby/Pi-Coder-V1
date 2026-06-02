@@ -62,7 +62,13 @@ export type LogEventType =
   | "verdict_extraction_degraded"
   | "verdict_extraction_captured"
   | "subagent_output_capture"
-  | "plan_mode_summary";
+  | "plan_mode_summary"
+  | "proactive_compaction"
+  | "proactive_compaction_error"
+  | "proactive_compaction_resume"
+  | "proactive_compaction_resume_failed"
+  | "review_saved_to_file"
+  | "review_save_failed";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -112,6 +118,12 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   verdict_extraction_captured: "standard",
   subagent_output_capture: "verbose",
   plan_mode_summary: "standard",
+  proactive_compaction: "standard",
+  proactive_compaction_error: "standard",
+  proactive_compaction_resume: "standard",
+  proactive_compaction_resume_failed: "standard",
+  review_saved_to_file: "standard",
+  review_save_failed: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

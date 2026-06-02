@@ -150,3 +150,6 @@ When your verdict is `needs_changes`, you MUST include `FIX_TYPE` in the verdict
 - **`functional`** — the fix changes production behavior (logic changes, API changes, new error handling, modified return values). A full RED/GREEN cycle is required.
 
 This classification is critical — it gates whether the implementor can take the non-functional shortcut. Do NOT classify a functional change as non-functional just because it's small. If production behavior changes in any way observable by tests or users, it's functional.
+
+## Resource Constraint
+You have a maximum of ~20 tool call turns per review. Prioritize the most critical findings. Do not re-read files you have already examined. Return findings in priority order. If you have covered the main concerns after 10-15 turns, summarize remaining concerns and conclude.

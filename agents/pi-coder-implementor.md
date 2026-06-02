@@ -115,3 +115,6 @@ If your task payload includes database inspection commands, **use them** to veri
 **Never use full schema dump commands** (e.g. `supabase db dump`, `pg_dump`, `mysqldump`). These produce massive DDL output that wastes tokens and is mostly irrelevant. Always use targeted queries — inspect only the specific tables and columns your tests reference.
 
 If no DB commands are provided in your task payload, skip this section — work with the information available from the spec and existing code.
+
+## Resource Constraint
+You have a maximum of ~25 tool call turns per implementation. Focus on the specific unit. If you find yourself exploring beyond the scope of the current task, stop and report what you've found rather than continuing to investigate.

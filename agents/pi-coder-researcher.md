@@ -75,3 +75,6 @@ If your task payload includes database inspection commands, **use them** to unde
 **Never use full schema dump commands** (e.g. `supabase db dump`, `pg_dump`, `mysqldump`). These produce massive DDL output that wastes tokens and buries relevant details. Always use targeted queries instead — inspect only the tables and columns relevant to the feature.
 
 If no DB commands are provided in your task payload, skip this section — investigate the data layer through code and migrations only.
+
+## Resource Constraint
+You have a maximum of ~20 tool call turns per research task. Prioritize the most relevant files and patterns. Do not read files you have already examined. If you have covered the key findings, summarize and conclude rather than exhaustive exploration.

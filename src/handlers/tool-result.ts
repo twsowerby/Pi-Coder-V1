@@ -7,14 +7,92 @@
  */
 
 import { extractSubagentUsage, extractReviewVerdict, extractDetailsDiagnostics, isIntercomReceipt } from "../review-extraction.ts";
-import type { IssueDetail } from "../types.ts";
+import type { IssueDetail, ReviewVerdict } from "../types.ts";
 import { notify } from "../notification-manager.ts";
 import { formatTokenCount, formatDurationMs } from "../ui/formatting.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { FSMTrigger } from "../logger.ts";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 /** Maximum consecutive verdict extraction failures before forced re-delegation. */
 const MAX_VERDICT_EXTRACTION_RETRIES = 3;
+
+/** Token threshold for proactive compaction at FSM boundaries (R4). */
+const PROACTIVE_COMPACTION_THRESHOLD_TOKENS = 50_000;
+
+/**
+ * Proactive Compaction at FSM Boundaries (R4).
+ *
+ * After each TDD unit completion (GREEN_VALIDATE transition), check context
+ * token usage and compact if above threshold. This is a natural compaction
+ * boundary — the FSm has just completed a unit and is about to start a new
+ * one, making it safe to compress old context.
+ *
+ * Only triggers in TDD or Light mode (not plan/off mode), and only after
+ * GREEN_VALIDATE transitions (unit completion = natural boundary).
+ */
+function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void {
+  // Only trigger in active FSM modes
+  if (ctx.piCoderMode === "off" || ctx.piCoderMode === "plan") return;
+
+  // Only trigger after GREEN_VALIDATE completions (unit completion = natural boundary)
+  // In TDD mode: REVIEWING or TDD_RED_WRITE (next_unit) transitions follow GREEN_VALIDATE
+  // In Light mode: REVIEWING after IMPLEMENTING complete
+  // TDD_GREEN_VALIDATE → REVIEWING (all units done) or TDD_RED_WRITE (next unit)
+  // Note: TDD_GREEN_WRITE is intentionally excluded — that transition happens via test
+  // result auto-transition handler, not via pi_coder_advance_fsm, so this check would
+  // never see it. Light mode IMPLEMENTING → REVIEWING is not covered either since it
+  // goes through the subagent result path, not pi_coder_advance_fsm.
+  const isPostGreenValidate =
+    afterState === "REVIEWING" || afterState === "TDD_RED_WRITE";
+  if (!isPostGreenValidate) return;
+
+  // Check token usage
+  const usage = ctx.sessionCtx?.getContextUsage();
+  if (!usage || usage.tokens === null) return;
+
+  if (usage.tokens <= PROACTIVE_COMPACTION_THRESHOLD_TOKENS) return;
+
+  // Don't compact during an active subagent run
+  if (ctx.subagentMonitor.running) return;
+
+  ctx.logEvent("proactive_compaction", {
+    tokensBefore: usage.tokens,
+    threshold: PROACTIVE_COMPACTION_THRESHOLD_TOKENS,
+    afterState,
+    specId: ctx.activeSpecId,
+  });
+
+  ctx.sessionCtx?.compact({
+    customInstructions: "Preserve FSM state, spec progress, and recent subagent results. The Pi-Coder FSM State block at the top of the summary is CRITICAL — do not discard or abbreviate it.",
+    onComplete: () => {
+      ctx.logEvent("proactive_compaction", { status: "completed", afterState, specId: ctx.activeSpecId });
+      // Auto-resume: compact() aborts the current agent turn. Without this,
+      // the session stalls until the user manually sends a message.
+      // pi.sendUserMessage always triggers a new turn, so the orchestrator
+      // picks up where it left off using FSM context in the compaction summary.
+      const resumeMessage = `Continue with the current task. You are in ${afterState}. Use pi_coder_advance_fsm to advance the FSM as needed.`;
+      try {
+        ctx.pi.sendUserMessage(resumeMessage);
+        ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId });
+      } catch (err: unknown) {
+        ctx.logEvent("proactive_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), afterState, specId: ctx.activeSpecId });
+      }
+    },
+    onError: (error: Error) => {
+      ctx.logEvent("proactive_compaction_error", { error: error.message, afterState, specId: ctx.activeSpecId });
+      // Attempt resume even on compaction error — the session may still be usable
+      try {
+        const resumeMessage = `Continue with the current task. You are in ${afterState}. Use pi_coder_advance_fsm to advance the FSM as needed.`;
+        ctx.pi.sendUserMessage(resumeMessage);
+        ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId, afterError: true });
+      } catch (err: unknown) {
+        ctx.logEvent("proactive_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), afterState, specId: ctx.activeSpecId, afterError: true });
+      }
+    },
+  });
+}
 
 /**
  * Capture buffer for subagent output observed during tool_execution_update events.
@@ -25,6 +103,8 @@ const MAX_VERDICT_EXTRACTION_RETRIES = 3;
  * with the actual `finalOutput` content BEFORE the intercom delivery strips it.
  * This buffer captures that content so it can be used as a fallback for
  * verdict extraction.
+ *
+ * Cleaned on each session_start to prevent stale entries across sessions.
  */
 const subagentOutputCapture = new Map<string, string>();
 
@@ -35,6 +115,11 @@ const subagentOutputCapture = new Map<string, string>();
  *
  * Call this once during extension initialization (session_start).
  */
+/** Clear the subagentOutputCapture buffer. Called on session_start to prevent stale entries. */
+export function clearSubagentOutputCapture(): void {
+  subagentOutputCapture.clear();
+}
+
 export function registerSubagentOutputCapture(ctx: HandlerContext): void {
   ctx.pi.events.on("tool_execution_update", (data: unknown) => {
     if (ctx.piCoderMode === "off") return;
@@ -68,6 +153,64 @@ export function registerSubagentOutputCapture(ctx: HandlerContext): void {
       }
     }
   });
+}
+
+/** Save the full review text to `.pi-coder/specs/{activeSpecId}/review.md`. */
+async function saveReviewToFile(ctx: HandlerContext, reviewText: string): Promise<void> {
+  const specId = ctx.activeSpecId;
+  if (!specId) return;
+
+  const specsDir = resolve(ctx.projectCwd, ".pi-coder", "specs", specId);
+  const filePath = resolve(specsDir, "review.md");
+
+  try {
+    await mkdir(specsDir, { recursive: true });
+    await writeFile(filePath, reviewText, "utf-8");
+    ctx.logEvent("review_saved_to_file", {
+      specId,
+      path: filePath,
+      textLength: reviewText.length,
+    });
+  } catch (err: unknown) {
+    ctx.logEvent("review_save_failed", {
+      specId,
+      path: filePath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Build a structured summary from the extracted review verdict (for orchestrator context). */
+function buildReviewSummary(verdict: ReviewVerdict, ctx: HandlerContext): string {
+  const lines: string[] = [];
+
+  if (verdict.verdict === "approved") {
+    lines.push("## REVIEW RESULT");
+    lines.push("Verdict: approved");
+  } else {
+    lines.push("## REVIEW RESULT");
+    lines.push(`Verdict: needs_changes | Fix type: ${verdict.fixType}`);
+
+    if (verdict.issues && verdict.issues.length > 0) {
+      lines.push(`### Issues (${verdict.issues.length})`);
+      for (const issue of verdict.issues.slice(0, 10)) { // Cap at 10 for summary
+        const icon = issue.severity === "high" ? "🔴" : issue.severity === "medium" ? "🟠" : "🟢";
+        const fileRef = issue.file ? `${issue.file} —` : "";
+        const fixHint = issue.suggestedFix ? ` → fix: ${issue.suggestedFix}` : "";
+        lines.push(`- ${icon} ${issue.severity.toUpperCase()}: ${fileRef} ${issue.problem}${fixHint}`);
+      }
+      if (verdict.issues.length > 10) {
+        lines.push(`... and ${verdict.issues.length - 10} more`);
+      }
+    }
+  }
+
+  const specId = ctx.activeSpecId;
+  if (specId) {
+    lines.push(`Full review: .pi-coder/specs/${specId}/review.md`);
+  }
+
+  return lines.join("\n");
 }
 
 /** Format issues into a steer string for the NEEDS_CHANGES auto-transition. */
@@ -269,6 +412,15 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
 
         if (ctx.stateMachine) {
           ctx.nudgeEngine.reset(ctx.stateMachine.currentState);
+        }
+
+        // R4: Proactive compaction after GREEN_VALIDATE completions
+        // (GREEN_VALIDATE → REVIEWING = all units done, GREEN_VALIDATE → TDD_RED_WRITE = next unit)
+        if (
+          advDetails.previousState === "TDD_GREEN_VALIDATE" &&
+          (advDetails.newState === "REVIEWING" || advDetails.newState === "TDD_RED_WRITE")
+        ) {
+          checkProactiveCompaction(ctx, advDetails.newState);
         }
       }
     }
@@ -690,9 +842,40 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
                 ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix).${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
                 : `\n\n⚠️ AUTO-TRANSITION: Review needs changes.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Three paths: (1) Non-functional fix → advance to REVIEWING. (2) Functional fix with existing test coverage → advance to TDD_GREEN_WRITE. (3) Functional fix needing new tests → advance to TDD_RED_WRITE.${reclassificationGuidance}`;
 
-          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
-            const textBlock = rawContent[0] as { type: "text"; text: string };
-            (rawContent[0] as { type: "text"; text: string }).text = textBlock.text + reviewSteer;
+          // --- R2: Subagent Working Docs — Reviewer Phase ---
+          // Save full review to file and replace content with structured summary
+          // when we have a valid verdict and an active spec ID.
+          const hasActiveSpecId = ctx.activeSpecId !== null;
+          if (hasActiveSpecId) {
+            // Save the full review text to file
+            const fullReviewText = (() => {
+              // Prefer finalOutput from subagent details
+              if (subDetails?.results?.[0]?.finalOutput && typeof subDetails.results[0].finalOutput === "string") {
+                return subDetails.results[0].finalOutput as string;
+              }
+              // Fallback to rawContent text
+              if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+                return (rawContent[0] as { type: string; text: string }).text;
+              }
+              // Fallback to captured output
+              if (capturedOutput) {
+                return capturedOutput;
+              }
+              return "";
+            })();
+            await saveReviewToFile(ctx, fullReviewText);
+
+            // Build structured summary and replace rawContent with it
+            const summary = buildReviewSummary(reviewVerdict, ctx);
+            if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+              (rawContent[0] as { type: "text"; text: string }).text = summary + reviewSteer;
+            }
+          } else {
+            // No active spec ID — keep existing behavior (append steer to full output)
+            if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+              const textBlock = rawContent[0] as { type: "text"; text: string };
+              (rawContent[0] as { type: "text"; text: string }).text = textBlock.text + reviewSteer;
+            }
           }
         } else {
           const diagnostics = extractDetailsDiagnostics(details);
