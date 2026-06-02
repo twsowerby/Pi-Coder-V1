@@ -364,6 +364,39 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
         ctx.pi.setActiveTools(MODE_TOOL_SETS[ctx.piCoderMode]);
         ctx.refreshUI();
       }
+
+      // Check intercom bridge configuration.
+      // pi-subagents with intercomBridge.mode "always" (the default) strips
+      // finalOutput from subagent details when the intercom receipt is
+      // acknowledged, making verdict extraction impossible. Pi-coder
+      // subagents all use context: "fresh", so setting mode to "fork-only"
+      // disables intercom for pi-coder while preserving it for fork-context agents.
+      try {
+        const settingsPath = join(cwd, ".pi", "settings.json");
+        let needsConfigFix = true;
+        try {
+          const { readFileSync } = await import("node:fs");
+          const raw = readFileSync(settingsPath, "utf-8");
+          const settings = JSON.parse(raw);
+          const mode = settings?.subagents?.intercomBridge?.mode;
+          if (mode === "fork-only" || mode === "off") {
+            needsConfigFix = false;
+          }
+        } catch {
+          // File doesn't exist or can't be parsed — needs fix
+        }
+        if (needsConfigFix) {
+          ctx.logEvent("config_validation", {
+            warnings: ["intercomBridge.mode not set to 'fork-only' or 'off' — reviewer verdict extraction will fail because intercom delivery strips finalOutput. Add \"intercomBridge\": { \"mode\": \"fork-only\" }" + " to subagents in .pi/settings.json."],
+          });
+          cmdCtx.ui.notify(
+            "⚠️ Pi Coder: Set subagents.intercomBridge.mode to \"fork-only\" in .pi/settings.json to fix verdict extraction. See logs for details.",
+            "warning",
+          );
+        }
+      } catch {
+        // Non-critical — don't block initialization
+      }
     } else {
       ctx.piCoderMode = "off";
       cmdCtx.ui.notify(
