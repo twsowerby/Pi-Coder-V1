@@ -103,7 +103,7 @@ Example: A spec with 10 ACs spanning service, server action, and UI should produ
 3. Domain event (1 AC) → service test extension
 4. Server action Zod validation (1 AC) → action test
 5. Server action invocation (1 AC) → action test
-6. UI button + confirm dialog (2 ACs) → component test
+6. UI button + confirm dialog (2 ACs) → direct (component assembly)
 7. Integration: toast + revalidation (1 AC) → integration test
 8. Fix existing test name (1 AC) → direct
 9. Fix dialog overflow CSS (1 AC) → direct (styling)
@@ -160,15 +160,20 @@ Non-TDD requests:
 
 Direct and component unit classification:
 - When presenting the spec for approval via interview, if the implementation plan contains units with `approach: "direct"` or `approach: "component"`, you MUST include a question that explicitly lists each such unit and asks the human to approve the classification. Use wording like: "The following units have non-default approach classifications: [unit names with approach and brief descriptions]. Approve these classifications?" Options: "Approve" / "Change to TDD".
-- For `approach: "direct"` units: explain that these skip the RED phase. Direct applies to: config changes, documentation updates, environment/dependency changes, CSS/styling tweaks, accessibility label text, rename/refactor-only changes, and any other change that does NOT alter program behavior/logic. If the change is purely visual (CSS, layout, spacing, colors, fonts) or purely structural (rename, reorganize, type-only), it is direct. Writing RED tests for CSS changes is wasted effort — there is no testable behavior contract.
-- For `approach: "component"` units: explain that these go through RED/GREEN but with integration tests only — no DOM structure testing. These are for UI components where testing the API contract and user interactions is sufficient.
+- For `approach: "direct"` units: explain that these skip the RED phase. Direct applies to ANY change where there is no testable behavior contract:
+  - **CSS/styling**: layout, spacing, colors, fonts, responsive breakpoints, overflow fixes
+  - **UI component assembly**: composing existing components (shadcn, Radix UI, MUI, etc.) into pages/dialogs/forms — the primitives are already tested by their libraries, your code is assembly not logic
+  - **Config/environment**: .env changes, tsconfig, build config, dependency installs
+  - **Documentation**: README updates, JSDoc, comments
+  - **Rename/refactor**: variable renames, file moves, re-exports — no behavior change
+  - **Accessibility labels**: aria-label text, alt text changes
+  - Rule of thumb: if the unit only changes HOW something looks (not WHAT it does), it's direct
+- For `approach: "component"` units: USE SPARINGLY. This goes through RED/GREEN with integration tests. Only use when a component has **custom business logic that YOU wrote** — a custom hook, data transformation, complex state machine, or error handling that is NOT just composing library primitives. If the component is just assembling shadcn/Radix/MUI components and wiring up props, it is `approach: "direct"` — there is nothing to test-first.
 - If there are no direct or component units, no extra question is needed.
 - When advancing to TDD_RED_WRITE or IMPLEMENTING, pass `unitName` to `pi_coder_advance_fsm` so the FSM can track the active unit and auto-set evidence for direct units.
 - For direct units in RED_WRITE: the implementor should implement changes directly — no RED test phase needed. The `test_run_this_state` evidence is auto-set, so the RED_VALIDATE gate will pass.
-- For component units in RED_WRITE: the implementor should write **integration tests only** — API contract (correct endpoint/params), callback invocations (correct events), error/empty/loading states. Do NOT test DOM structure, CSS classes, or component internals. Include this instruction explicitly in the RED brief: "You are implementing a component-approach unit. Write integration tests ONLY — test the API contract, callback invocations, and error/empty states. Do NOT test DOM structure or component internals. For controlled components (with props like `open`+`onOpenChange`): test that callbacks are called with correct arguments — do NOT test DOM presence/absence that depends on the parent re-rendering."
 - GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
 - **After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` or `"component"` before advancing from NEEDS_CHANGES → TDD_RED_WRITE. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry, so the RED_VALIDATE gate will enforce the TDD requirement until you update the spec. If you believe the direct classification is still valid (e.g., the reviewer flagged a documentation typo, not a production behavior issue), you can still pass `unitName` when advancing — but the unit will go through full TDD unless you re-save with `approach: "direct"`.
-- **After NEEDS_CHANGES with a component unit**: The same NEEDS_CHANGES re-entry logic applies — the FSM clears `currentUnitName`, so the RED_VALIDATE evidence gate will be enforced. Pass `unitName` when re-advancing. If the reviewer found the tests were testing DOM internals instead of integration behavior, the approach classification is correct but the test scope needs correction — re-delegate the RED phase with explicit integration-only instructions.
 
 ## NEEDS_CHANGES Routing (TDD Mode)
 

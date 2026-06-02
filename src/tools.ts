@@ -575,7 +575,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         acceptanceCriteriaIndices: Type.Array(Type.Number(), { description: "0-based indices into acceptanceCriteria array" }),
         keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
-        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct"), Type.Literal("component")], { description: "Approach classification: 'tdd' (standard RED/GREEN cycle), 'direct' (skip RED phase — use for CSS/styling, config, docs, renames, and any non-behavioral change), or 'component' (RED/GREEN with integration tests only — no DOM internals)" })),
+        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct"), Type.Literal("component")], { description: "Approach: 'tdd' = standard RED/GREEN. 'direct' = skip RED (CSS/styling, UI component assembly, config, docs, renames — anything with no testable behavior). 'component' = RED/GREEN with integration tests ONLY for components with custom business logic (rare — most component work is 'direct')." })),
         testSuite: Type.Optional(Type.String({ description: "Which test suite to validate against (must match a key in testCommands config, e.g. 'unit', 'component', 'e2e')" })),
       }), { description: "Ordered list of atomic implementation units" })),
     }),
