@@ -65,6 +65,7 @@ export type LogEventType =
   | "plan_mode_summary"
   | "proactive_compaction_initiated"
   | "proactive_compaction_completed"
+  | "double_advance_rejected"
   | "proactive_compaction_error"
   | "proactive_compaction_resume"
   | "proactive_compaction_resume_failed"
@@ -121,6 +122,7 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   plan_mode_summary: "standard",
   proactive_compaction_initiated: "standard",
   proactive_compaction_completed: "standard",
+  double_advance_rejected: "standard",
   proactive_compaction_error: "standard",
   proactive_compaction_resume: "standard",
   proactive_compaction_resume_failed: "standard",

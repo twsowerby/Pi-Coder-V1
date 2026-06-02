@@ -137,8 +137,27 @@ export function summarizeToolInput(toolName: string, input: unknown): Record<str
   }
 }
 
+// BUG-9 code guard: Module-level counter for advance_fsm calls per turn.
+// Set by registerTools(), reset by the tool-call handler via resetAdvanceFsmCounter().
+let exportAdvanceFsmCounter: () => void = () => {};
+
+/** Reset the advance_fsm per-turn counter. Called by tool-call handler. */
+export function resetAdvanceFsmCounter(): void {
+  exportAdvanceFsmCounter();
+}
+
 export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
   const { stateMachine: smRef, activeSpecId: activeSpecIdRef, setActiveSpecId, gitOps, tddRunner, knowledgeStore, specManager, config } = deps;
+
+  // BUG-9 code guard: Prevent double FSM advance in a single turn.
+  // The orchestrator may call pi_coder_advance_fsm twice in rapid succession
+  // (e.g., GREEN_VALIDATE → TDD_RED_WRITE for next unit, then TDD_RED_WRITE →
+  // TDD_GREEN_VALIDATE for validation). This causes unit tracking to desync.
+  // The counter is reset by the tool-call handler on non-advance tool calls.
+  let advanceFsmCallsThisTurn = 0;
+
+  /** Reset the advance_fsm per-turn counter. Called by tool-call handler. */
+  exportAdvanceFsmCounter = () => { advanceFsmCallsThisTurn = 0; };
 
   // -------------------------------------------------------------------------
   // pi_coder_git
@@ -746,6 +765,25 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const { targetState, request, fixType, reason, unitName, reviewOverride } = params;
+
+      // BUG-9 code guard: Reject double FSM advance in a single turn.
+      advanceFsmCallsThisTurn++;
+      if (advanceFsmCallsThisTurn > 1) {
+        deps.logEvent("double_advance_rejected", {
+          targetState,
+          previousState: smRef.current.currentState,
+          callsThisTurn: advanceFsmCallsThisTurn,
+          specId: deps.activeSpecId.current,
+        });
+        return {
+          content: [{
+            type: "text" as const,
+            text: `⚠️ BLOCKED: You already called pi_coder_advance_fsm once this turn (advanced to ${smRef.current.currentState}). One transition per turn. Continue with the work in ${smRef.current.currentState} — auto-transitions or the next turn's advance will move you forward.`,
+          }],
+          details: { success: false, error: "double_advance_blocked" },
+        };
+      }
+
       const previousState = smRef.current.currentState;
 
       // No static state validation — each state machine (StateMachine, LightStateMachine)

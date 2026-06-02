@@ -7,7 +7,7 @@
  */
 
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
-import { summarizeToolInput } from "../tools.ts";
+import { summarizeToolInput, resetAdvanceFsmCounter } from "../tools.ts";
 import { extractSubagentTarget } from "../review-extraction.ts";
 import { notify } from "../notification-manager.ts";
 import type { HandlerContext } from "../handlers/types.ts";
@@ -23,6 +23,13 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
     if (ctx.stateMachine && toolName === "interview" && ctx.stateMachine.currentState === "SPEC_WORK") {
       notify(ctx.config, "spec_approval", "Pi Coder · 📋 Review", `Spec ${ctx.activeSpecId ?? "unknown"} ready for your approval`);
       ctx.tokenTracker.specApprovalInterviewStartTime = Date.now();
+    }
+
+    // BUG-9 code guard: Reset the per-turn advance_fsm counter on non-advance tool calls.
+    // This allows one advance_fsm call per turn — the counter accumulates within a turn
+    // and is reset when any other tool is called (indicating a new logical step).
+    if (toolName !== "pi_coder_advance_fsm") {
+      resetAdvanceFsmCounter();
     }
 
     // Determine which tools are allowed based on current mode

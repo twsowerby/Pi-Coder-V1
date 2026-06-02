@@ -289,7 +289,11 @@ function parseProseIssues(text: string): IssueDetail[] {
       suggestedFix = fixMatch[1].trim();
     }
 
-    issues.push({ title, severity, file, problem, suggestedFix });
+    // BUG-10 fix: Same junk title filtering as parseIssuesBlock
+    const isJunkTitle = !title || title.length < 5 || /^(issue\s+above|see\s+above|see\s+previous|see\s+prior|same\s+as)/i.test(title);
+    if (!isJunkTitle) {
+      issues.push({ title, severity, file, problem, suggestedFix });
+    }
   }
 
   return issues;
