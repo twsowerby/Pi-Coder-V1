@@ -56,8 +56,16 @@ export class TokenTracker {
   /** Cumulative token usage across a spec lifecycle. */
   lifecycleTokens: TokenBucket = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 
-  /** Token breakdown per FSM state. Keyed by state name. */
+  /** Per-visit phase buckets — reset after each fsm_state_usage emission so re-entering
+   *  the same state (e.g., TDD_RED_WRITE units 1-5) starts fresh. Used for
+   *  real-time per-visit emission in emitStateUsageAndTransition(). */
   phaseTokens: Record<string, PhaseBucket> = {};
+
+  /** Lifecycle-level accumulator — accumulates across ALL visits within a spec lifecycle.
+   *  Only reset by resetLifecycleTracking(). Used by snapshotPhaseTokens() so
+   *  lifecycle_end events include correct per-state totals even after per-visit buckets
+   *  are zeroed. */
+  lifecyclePhaseAccumulator: Record<string, PhaseBucket> = {};
 
   /** The FSM state that is currently accruing tokens. */
   currentAccrualState: string | null = null;
@@ -77,6 +85,12 @@ export class TokenTracker {
   /** Track spec approval interview start time for duration calculation. */
   specApprovalInterviewStartTime: number | null = null;
 
+  /** Track unit start time for unit_end duration. */
+  unitStartTime: number | null = null;
+
+  /** Track unit start output tokens for unit_end token delta. */
+  unitStartOutputTokens: number = 0;
+
   // Callback for logging — set by the owner (avoids hard dependency on Logger)
   private _onLog?: (type: string, payload: Record<string, unknown>) => void;
 
@@ -92,6 +106,7 @@ export class TokenTracker {
   resetLifecycleTracking(): void {
     this.lifecycleTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
     this.phaseTokens = {};
+    this.lifecyclePhaseAccumulator = {};
     this.currentAccrualState = null;
   }
 
@@ -220,7 +235,9 @@ export class TokenTracker {
         specId: activeSpecId,
         nextState: toState,
       });
-      // Reset the bucket so re-entry starts fresh — prevents cumulative stacking
+      // Accumulate into the lifecycle accumulator (never reset between visits)
+      this.accumulateLifecyclePhase(fromState, bucket);
+      // Reset the per-visit bucket so re-entry starts fresh — prevents cumulative stacking
       // across multiple visits to the same state (e.g., TDD_RED_WRITE units 1-5)
       this.phaseTokens[fromState] = TokenTracker.createEmptyBucket();
     }
@@ -232,10 +249,44 @@ export class TokenTracker {
   // Snapshot (deep-copy for logging / state persistence)
   // ---------------------------------------------------------------------------
 
-  /** Deep-copy phaseTokens for logging — eliminates 5× duplicated deep-copy pattern. */
+  /** Add a per-visit bucket's values into the lifecycle accumulator for its state. */
+  private accumulateLifecyclePhase(state: string, bucket: PhaseBucket): void {
+    if (!this.lifecyclePhaseAccumulator[state]) {
+      this.lifecyclePhaseAccumulator[state] = TokenTracker.createEmptyBucket();
+    }
+    const acc = this.lifecyclePhaseAccumulator[state];
+    acc.input += bucket.input;
+    acc.output += bucket.output;
+    acc.cacheRead += bucket.cacheRead;
+    acc.cacheWrite += bucket.cacheWrite;
+    acc.cost += bucket.cost;
+    acc.turns += bucket.turns;
+    acc.source.orchestrator.input += bucket.source.orchestrator.input;
+    acc.source.orchestrator.output += bucket.source.orchestrator.output;
+    acc.source.orchestrator.cacheRead += bucket.source.orchestrator.cacheRead;
+    acc.source.orchestrator.cacheWrite += bucket.source.orchestrator.cacheWrite;
+    acc.source.orchestrator.cost += bucket.source.orchestrator.cost;
+    acc.source.orchestrator.turns += bucket.source.orchestrator.turns;
+    acc.source.subagent.input += bucket.source.subagent.input;
+    acc.source.subagent.output += bucket.source.subagent.output;
+    acc.source.subagent.cacheRead += bucket.source.subagent.cacheRead;
+    acc.source.subagent.cacheWrite += bucket.source.subagent.cacheWrite;
+    acc.source.subagent.cost += bucket.source.subagent.cost;
+    acc.source.subagent.turns += bucket.source.subagent.turns;
+  }
+
+  /** Deep-copy lifecyclePhaseAccumulator for logging lifecycle_end events.
+   *  Uses the lifecycle accumulator (not the per-visit phaseTokens) so the snapshot
+   *  contains correct totals even after per-visit buckets are reset on emission. */
   snapshotPhaseTokens(): Record<string, PhaseBucket> {
+    // Also accumulate any currently-active state that hasn't been emitted yet
+    for (const [state, bucket] of Object.entries(this.phaseTokens)) {
+      if (bucket.input > 0 || bucket.output > 0 || bucket.cacheRead > 0 || bucket.cacheWrite > 0 || bucket.cost > 0 || bucket.turns > 0) {
+        this.accumulateLifecyclePhase(state, bucket);
+      }
+    }
     return Object.fromEntries(
-      Object.entries(this.phaseTokens).map(([state, bucket]) => [state, {
+      Object.entries(this.lifecyclePhaseAccumulator).map(([state, bucket]) => [state, {
         ...bucket,
         source: {
           orchestrator: { ...bucket.source.orchestrator },

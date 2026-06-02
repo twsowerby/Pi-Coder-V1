@@ -152,4 +152,10 @@ When your verdict is `needs_changes`, you MUST include `FIX_TYPE` in the verdict
 This classification is critical — it gates whether the implementor can take the non-functional shortcut. Do NOT classify a functional change as non-functional just because it's small. If production behavior changes in any way observable by tests or users, it's functional.
 
 ## Resource Constraint
-You have a maximum of ~20 tool call turns per review. Prioritize the most critical findings. Do not re-read files you have already examined. Return findings in priority order. If you have covered the main concerns after 10-15 turns, summarize remaining concerns and conclude.
+HARD LIMIT: You must complete your review within **20 tool call turns**. Every additional turn costs tokens and delays the spec. Follow these rules:
+
+1. **Do NOT re-read files** you have already examined in this review
+2. **Do NOT read entire files** when a targeted `grep` or `find` will locate the relevant section
+3. **Prioritize the most critical findings** — high-severity issues first
+4. **Summarize remaining concerns** and conclude once you've covered the main points (typically 10-15 turns)
+5. **A review exceeding 20 turns indicates you are being inefficient** — reading line-by-line instead of targeting searches. Stop and deliver your verdict.

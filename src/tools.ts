@@ -45,6 +45,8 @@ export interface ToolDependencies {
   logEvent: (event: LogEventType, data: Record<string, unknown>) => void;
   /** Getter for the current session turn count (for audit trail). */
   sessionTurnCount?: { get current(): number };
+  /** Token tracker for unit timing and lifecycle metrics. */
+  tokenTracker: import("./token-tracker.ts").TokenTracker;
 }
 
 // ---------------------------------------------------------------------------
@@ -769,6 +771,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // Handle unitName for implementation entry states (TDD and Light mode)
       if (unitName && (targetState === "TDD_RED_WRITE" || targetState === "IMPLEMENTING")) {
         smRef.current.setCurrentUnitName(unitName);
+        deps.tokenTracker.unitStartTime = Date.now();
+        deps.tokenTracker.unitStartOutputTokens = deps.tokenTracker.lifecycleTokens.output;
         deps.logEvent("unit_start", {
           specId: deps.activeSpecId.current,
           unitName,

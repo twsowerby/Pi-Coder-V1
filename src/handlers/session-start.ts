@@ -109,6 +109,7 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
       config: ctx.config,
       logEvent: ctx.logEvent,
       sessionTurnCount: { get current() { return ctx.tokenTracker.sessionTurnCount; } },
+      tokenTracker: ctx.tokenTracker,
     });
 
     // Check for pi-subagents availability

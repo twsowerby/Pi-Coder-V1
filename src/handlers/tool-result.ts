@@ -19,8 +19,13 @@ import { resolve } from "node:path";
 /** Maximum consecutive verdict extraction failures before forced re-delegation. */
 const MAX_VERDICT_EXTRACTION_RETRIES = 3;
 
-/** Token threshold for proactive compaction at FSM boundaries (R4). */
-const PROACTIVE_COMPACTION_THRESHOLD_TOKENS = 50_000;
+/** Token threshold for proactive compaction at FSM boundaries (R4).
+ *  Set to 80K — with KV-cached providers, each compaction invalidates the prompt
+ *  cache (~35K re-read cost). Compacting at 50K was too aggressive, causing 5
+ *  compactions per spec with 3–4 barely exceeding the threshold. 80K allows
+ *  ~3 unit cycles of cache continuity before compaction, reducing cache busting
+ *  by ~3x while still preventing context from growing unboundedly. */
+const PROACTIVE_COMPACTION_THRESHOLD_TOKENS = 80_000;
 
 /**
  * Proactive Compaction at FSM Boundaries (R4).
@@ -33,21 +38,14 @@ const PROACTIVE_COMPACTION_THRESHOLD_TOKENS = 50_000;
  * Only triggers in TDD or Light mode (not plan/off mode), and only after
  * GREEN_VALIDATE transitions (unit completion = natural boundary).
  */
-function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void {
+function checkProactiveCompaction(ctx: HandlerContext, afterState: string, previousState: string): void {
   // Only trigger in active FSM modes
   if (ctx.piCoderMode === "off" || ctx.piCoderMode === "plan") return;
 
   // Only trigger after GREEN_VALIDATE completions (unit completion = natural boundary)
-  // In TDD mode: REVIEWING or TDD_RED_WRITE (next_unit) transitions follow GREEN_VALIDATE
-  // In Light mode: REVIEWING after IMPLEMENTING complete
-  // TDD_GREEN_VALIDATE → REVIEWING (all units done) or TDD_RED_WRITE (next unit)
-  // Note: TDD_GREEN_WRITE is intentionally excluded — that transition happens via test
-  // result auto-transition handler, not via pi_coder_advance_fsm, so this check would
-  // never see it. Light mode IMPLEMENTING → REVIEWING is not covered either since it
-  // goes through the subagent result path, not pi_coder_advance_fsm.
-  const isPostGreenValidate =
-    afterState === "REVIEWING" || afterState === "TDD_RED_WRITE";
-  if (!isPostGreenValidate) return;
+  // This guard checks the ACTUAL previous state, not just the destination,
+  // making it safe even if called from a different code path.
+  if (previousState !== "TDD_GREEN_VALIDATE") return;
 
   // Check token usage
   const usage = ctx.sessionCtx?.getContextUsage();
@@ -58,9 +56,10 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void
   // Don't compact during an active subagent run
   if (ctx.subagentMonitor.running) return;
 
-  ctx.logEvent("proactive_compaction", {
+  ctx.logEvent("proactive_compaction_initiated", {
     tokensBefore: usage.tokens,
     threshold: PROACTIVE_COMPACTION_THRESHOLD_TOKENS,
+    previousState,
     afterState,
     specId: ctx.activeSpecId,
   });
@@ -68,12 +67,17 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void
   ctx.sessionCtx?.compact({
     customInstructions: "Preserve FSM state, spec progress, and recent subagent results. The Pi-Coder FSM State block at the top of the summary is CRITICAL — do not discard or abbreviate it.",
     onComplete: () => {
-      ctx.logEvent("proactive_compaction", { status: "completed", afterState, specId: ctx.activeSpecId });
+      ctx.logEvent("proactive_compaction_completed", { afterState, specId: ctx.activeSpecId });
       // Auto-resume: compact() aborts the current agent turn. Without this,
       // the session stalls until the user manually sends a message.
       // pi.sendUserMessage always triggers a new turn, so the orchestrator
       // picks up where it left off using FSM context in the compaction summary.
-      const resumeMessage = `Continue with the current task. You are in ${afterState}. Use pi_coder_advance_fsm to advance the FSM as needed.`;
+      //
+      // IMPORTANT: Do NOT tell the orchestrator to advance the FSM — the FSM
+      // is already in the correct state after the transition. Telling it to
+      // "use pi_coder_advance_fsm" causes a redundant advance that creates
+      // duplicate unit_start events.
+      const resumeMessage = `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`;
       try {
         ctx.pi.sendUserMessage(resumeMessage);
         ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId });
@@ -84,8 +88,9 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void
     onError: (error: Error) => {
       ctx.logEvent("proactive_compaction_error", { error: error.message, afterState, specId: ctx.activeSpecId });
       // Attempt resume even on compaction error — the session may still be usable
+      // Same fix as onComplete: don't tell orchestrator to advance the FSM
       try {
-        const resumeMessage = `Continue with the current task. You are in ${afterState}. Use pi_coder_advance_fsm to advance the FSM as needed.`;
+        const resumeMessage = `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`;
         ctx.pi.sendUserMessage(resumeMessage);
         ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId, afterError: true });
       } catch (err: unknown) {
@@ -111,16 +116,29 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void
  *
  * Returns the file content if it exists and is non-empty, else undefined.
  */
-function readReviewOutputFile(cwd: string, specId: string | null): string | undefined {
+function readReviewOutputFile(cwd: string, specId: string | null, loopCount?: number): string | undefined {
   if (!specId) return undefined;
-  const filePath = resolve(cwd, ".pi-coder", "specs", specId, "review-output.md");
-  try {
-    if (!existsSync(filePath)) return undefined;
-    const content = readFileSync(filePath, "utf-8");
-    return content.length > 0 ? content : undefined;
-  } catch {
-    return undefined;
+  // Try the loop-counted path first (current format: review-output-0.md, review-output-1.md)
+  // Fall back to the original unversioned path for backward compatibility
+  const candidates = loopCount !== undefined
+    ? [
+        resolve(cwd, ".pi-coder", "specs", specId, `review-output-${loopCount}.md`),
+        resolve(cwd, ".pi-coder", "specs", specId, "review-output.md"), // legacy
+      ]
+    : [
+        resolve(cwd, ".pi-coder", "specs", specId, "review-output.md"),
+      ];
+  for (const filePath of candidates) {
+    try {
+      if (existsSync(filePath)) {
+        const content = readFileSync(filePath, "utf-8");
+        if (content.length > 0) return content;
+      }
+    } catch {
+      // continue to next candidate
+    }
   }
+  return undefined;
 }
 
 /** Save the full review text to `.pi-coder/specs/{activeSpecId}/review.md`. */
@@ -383,12 +401,13 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         }
 
         // R4: Proactive compaction after GREEN_VALIDATE completions
-        // (GREEN_VALIDATE → REVIEWING = all units done, GREEN_VALIDATE → TDD_RED_WRITE = next unit)
+        // Pass both previous and new state so the function can verify
+        // it was actually triggered by a GREEN_VALIDATE transition.
         if (
           advDetails.previousState === "TDD_GREEN_VALIDATE" &&
           (advDetails.newState === "REVIEWING" || advDetails.newState === "TDD_RED_WRITE")
         ) {
-          checkProactiveCompaction(ctx, advDetails.newState);
+          checkProactiveCompaction(ctx, advDetails.newState, advDetails.previousState!);
         }
       }
     }
@@ -495,13 +514,18 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           transitionSteer = "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
 
           if (ctx.stateMachine!.currentUnitName) {
+            const durationMs = ctx.tokenTracker.unitStartTime !== null ? Date.now() - ctx.tokenTracker.unitStartTime : null;
+            const outputTokens = ctx.tokenTracker.lifecycleTokens.output - ctx.tokenTracker.unitStartOutputTokens;
             ctx.logEvent("unit_end", {
               specId: ctx.activeSpecId,
               unitName: ctx.stateMachine!.currentUnitName,
               outcome: "green_validated",
               loopCount: ctx.stateMachine!.loopCount,
               fsmState: ctx.stateMachine!.currentState,
+              outputTokens,
+              durationMs,
             });
+            ctx.tokenTracker.unitStartTime = null;
           }
         } else {
           ctx.stateMachine!.transition("TDD_GREEN_WRITE");
@@ -580,13 +604,18 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           notify(ctx.config, "circuit_breaker", "Pi Coder · 🔴 Circuit Breaker", `Max review loops (${ctx.config.maxLoops}) exceeded on spec ${ctx.activeSpecId ?? "unknown"}`);
 
           if (ctx.stateMachine!.currentUnitName) {
+            const durationMs = ctx.tokenTracker.unitStartTime !== null ? Date.now() - ctx.tokenTracker.unitStartTime : null;
+            const outputTokens = ctx.tokenTracker.lifecycleTokens.output - ctx.tokenTracker.unitStartOutputTokens;
             ctx.logEvent("unit_end", {
               specId: ctx.activeSpecId,
               unitName: ctx.stateMachine!.currentUnitName,
               outcome: "circuit_breaker",
               loopCount: ctx.stateMachine!.loopCount,
               fsmState: ctx.stateMachine!.currentState,
+              outputTokens,
+              durationMs,
             });
+            ctx.tokenTracker.unitStartTime = null;
           }
         }
       }
@@ -743,7 +772,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         // into the subagent call. Pi-subagents writes the full output to this file inside
         // the executor, AFTER the agent completes but BEFORE intercom strips finalOutput
         // from the in-memory details. The file is always written regardless of intercom state.
-        const outputFileText = readReviewOutputFile(ctx.projectCwd, ctx.activeSpecId);
+        const outputFileText = readReviewOutputFile(ctx.projectCwd, ctx.activeSpecId, ctx.stateMachine?.loopCount);
 
         // Try extraction with the output file first (most reliable), then details, then rawContent
         let reviewVerdict: ReviewVerdict | null = null;
@@ -774,6 +803,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
 
           ctx.logEvent("review_result", {
             verdict: reviewVerdict.verdict,
+            extractedFrom: extractionSource,
             issues: reviewVerdict.verdict === "needs_changes" ? reviewVerdict.issues : undefined,
             issueCount: reviewVerdict.verdict === "needs_changes" ? {
               high: reviewVerdict.issues?.filter(i => i.severity === "high").length ?? 0,

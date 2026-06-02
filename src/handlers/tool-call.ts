@@ -171,7 +171,11 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         // persisted to a file BEFORE intercom strips the in-memory result.
         // This is a documented pi-subagents API — no global config hacks needed.
         if (targetAgent === "pi-coder.reviewer" && ctx.activeSpecId) {
-          const outputParts = [".pi-coder", "specs", ctx.activeSpecId, "review-output.md"];
+          // Include loop count in output path so each review cycle writes to a
+          // separate file (review-output-0.md, review-output-1.md, etc.)
+          // instead of overwriting the previous review's output.
+          const loopCount = ctx.stateMachine?.loopCount ?? 0;
+          const outputParts = [".pi-coder", "specs", ctx.activeSpecId, `review-output-${loopCount}.md`];
           (input as Record<string, unknown>).output = outputParts.join("/");
           // file-only mode: return a compact file reference instead of the full
           // output inline. The file is always written regardless of mode.

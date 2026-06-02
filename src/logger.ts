@@ -63,7 +63,8 @@ export type LogEventType =
   | "verdict_extraction_source"
 
   | "plan_mode_summary"
-  | "proactive_compaction"
+  | "proactive_compaction_initiated"
+  | "proactive_compaction_completed"
   | "proactive_compaction_error"
   | "proactive_compaction_resume"
   | "proactive_compaction_resume_failed"
@@ -115,10 +116,11 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
 
   // P1: Verdict extraction degraded
   verdict_extraction_degraded: "standard",
-  verdict_extraction_source: "verbose",
+  verdict_extraction_source: "standard",
 
   plan_mode_summary: "standard",
-  proactive_compaction: "standard",
+  proactive_compaction_initiated: "standard",
+  proactive_compaction_completed: "standard",
   proactive_compaction_error: "standard",
   proactive_compaction_resume: "standard",
   proactive_compaction_resume_failed: "standard",
