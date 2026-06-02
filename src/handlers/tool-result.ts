@@ -68,9 +68,28 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string): void
     customInstructions: "Preserve FSM state, spec progress, and recent subagent results. The Pi-Coder FSM State block at the top of the summary is CRITICAL — do not discard or abbreviate it.",
     onComplete: () => {
       ctx.logEvent("proactive_compaction", { status: "completed", afterState, specId: ctx.activeSpecId });
+      // Auto-resume: compact() aborts the current agent turn. Without this,
+      // the session stalls until the user manually sends a message.
+      // pi.sendUserMessage always triggers a new turn, so the orchestrator
+      // picks up where it left off using FSM context in the compaction summary.
+      const resumeMessage = `Continue with the current task. You are in ${afterState}. Use pi_coder_advance_fsm to advance the FSM as needed.`;
+      try {
+        ctx.pi.sendUserMessage(resumeMessage);
+        ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId });
+      } catch (err: unknown) {
+        ctx.logEvent("proactive_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), afterState, specId: ctx.activeSpecId });
+      }
     },
     onError: (error: Error) => {
       ctx.logEvent("proactive_compaction_error", { error: error.message, afterState, specId: ctx.activeSpecId });
+      // Attempt resume even on compaction error — the session may still be usable
+      try {
+        const resumeMessage = `Continue with the current task. You are in ${afterState}. Use pi_coder_advance_fsm to advance the FSM as needed.`;
+        ctx.pi.sendUserMessage(resumeMessage);
+        ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId, afterError: true });
+      } catch (err: unknown) {
+        ctx.logEvent("proactive_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), afterState, specId: ctx.activeSpecId, afterError: true });
+      }
     },
   });
 }

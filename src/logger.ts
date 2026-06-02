@@ -65,6 +65,8 @@ export type LogEventType =
   | "plan_mode_summary"
   | "proactive_compaction"
   | "proactive_compaction_error"
+  | "proactive_compaction_resume"
+  | "proactive_compaction_resume_failed"
   | "review_saved_to_file"
   | "review_save_failed";
 
@@ -118,6 +120,8 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   plan_mode_summary: "standard",
   proactive_compaction: "standard",
   proactive_compaction_error: "standard",
+  proactive_compaction_resume: "standard",
+  proactive_compaction_resume_failed: "standard",
   review_saved_to_file: "standard",
   review_save_failed: "standard",
 
