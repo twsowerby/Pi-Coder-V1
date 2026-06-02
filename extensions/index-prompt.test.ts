@@ -115,7 +115,7 @@ describe("Spec 13 Phase 1: Orchestrator Prompt File", () => {
 
 describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
   it("loadOrchestratorPrompt returns a template with all variables", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     // Reset cache to ensure we load fresh
     resetOrchestratorPromptCache();
@@ -130,7 +130,7 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
   });
 
   it("loadOrchestratorPrompt strips YAML frontmatter from the template", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     resetOrchestratorPromptCache();
     const template = loadOrchestratorPrompt();
@@ -142,7 +142,7 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
   });
 
   it("loadOrchestratorPrompt strips HTML comment documentation from the template", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     resetOrchestratorPromptCache();
     const template = loadOrchestratorPrompt();
@@ -154,7 +154,7 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
   });
 
   it("loadOrchestratorPrompt caches the template after first load", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     resetOrchestratorPromptCache();
     const first = loadOrchestratorPrompt();
@@ -165,7 +165,7 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
   });
 
   it("resetOrchestratorPromptCache forces a reload on next call", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     resetOrchestratorPromptCache();
     const first = loadOrchestratorPrompt();
@@ -178,15 +178,16 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
 
   it("buildOrchestratorPrompt substitutes all template variables", async () => {
     // This tests the full pipeline: load template → substitute variables
-    const { StateMachine } = await import("../src/state-machine.ts");
-    const { default: piCoderExtension, loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
-    const config = (await import("../src/types.ts")).DEFAULT_CONFIG ?? {
+    // Uses a stub instead of StateMachine to avoid the --experimental-strip-types
+    // parameter property limitation in base-state-machine.ts
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
+    const config = {
       testCommand: "npm test",
       maxLoops: 3,
       createBranch: true,
-    mergeBranch: "merge",
-    branchPrefix: "pi-coder/",
-    interviewTimeout: 0,
+      mergeBranch: "merge",
+      branchPrefix: "pi-coder/",
+      interviewTimeout: 0,
       nudge: {
         enabled: true,
         defaults: { turnsBeforeNudge: 1, escalationLevels: 3 },
@@ -203,8 +204,8 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
       notifications: { enabled: false },
     };
 
-    const sm = new StateMachine(config);
-    sm.transition("SPEC_WORK");
+    // Stub StateMachine — we only need currentState, activeSpecId, loopCount
+    const sm = { currentState: "SPEC_WORK", activeSpecId: null, loopCount: 0 };
 
     // Instead of calling buildOrchestratorPrompt directly (it's not exported),
     // verify that the template + substitution would produce the expected output
@@ -229,7 +230,8 @@ describe("Spec 13 Phase 2: Extension Loads Prompt from File", () => {
       .replace("{{maxLoops}}", String(config.maxLoops))
       .replace("{{interviewTimeout}}", String(config.interviewTimeout))
       .replace("{{toolList}}", toolList)
-      .replace("{{referenceProjects}}", "");
+      .replace("{{referenceProjects}}", "")
+      .replace("{{dbCommands}}", "");
 
     // Verify no unsubstituted template variables remain
     assert.ok(!result.includes("{{"), `Unsubstituted variables remain: ${result.match(/\{\{[^}]+\}\}/g)?.join(", ")}`);
@@ -247,7 +249,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
   it("loadOrchestratorPrompt falls back to package default when no project override", async () => {
     // When no cwd is provided (or .pi/agents/ doesn't have the override),
     // the package default should be loaded
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     resetOrchestratorPromptCache();
     const template = loadOrchestratorPrompt(); // No cwd — uses package default
@@ -257,7 +259,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
   });
 
   it("loadOrchestratorPrompt prefers project-scope customization over package default", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     const tempDir = createTempDir();
     try {
@@ -283,7 +285,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
   });
 
   it("loadOrchestratorPrompt falls back to package default when project file is missing", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
 
     const tempDir = createTempDir();
     try {
@@ -573,7 +575,7 @@ describe("Spec 16 Phase 1: Orchestrator Prompt Discipline", () => {
   });
 
   it("loaded and substituted prompt includes all Spec 16 Phase 1 directives", async () => {
-    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("./index.ts");
+    const { loadOrchestratorPrompt, resetOrchestratorPromptCache } = await import("../src/prompts/prompt-builders.ts");
     resetOrchestratorPromptCache();
     const template = loadOrchestratorPrompt();
 
