@@ -469,7 +469,9 @@ describe("Spec approach field serialization", () => {
     };
     await manager.createSpec(spec);
     const read = await manager.readSpec("approach-test");
-    assert.deepStrictEqual(read!.implementationPlan, spec.implementationPlan);
+    // approach: direct is preserved + testStrategy: skip is migrated from approach
+    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "skip");
   });
 
   it("round-trips undefined approach (default tdd) through serialize/parse", async () => {
@@ -541,6 +543,95 @@ describe("Spec approach field serialization", () => {
     assert.strictEqual(read!.implementationPlan[0].approach, "direct", "Should parse uppercase APPROACH: DIRECT as direct");
   });
 
+
+  // --- testStrategy field (new) ---
+
+  it("round-trips testStrategy: verify through serialize/parse", async () => {
+    const spec: SpecFile = {
+      id: "strategy-test",
+      title: "Strategy Test",
+      acceptanceCriteria: ["API works"],
+      constraints: [],
+      keyFiles: ["api.ts"],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "API handler", acceptanceCriteriaIndices: [0], keyFiles: ["api.ts"], dependsOn: [], testStrategy: "verify", testStrategyRationale: "Integration with external service — test after implementation" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("strategy-test");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "verify");
+    assert.strictEqual(read!.implementationPlan[0].testStrategyRationale, "Integration with external service — test after implementation");
+  });
+
+  it("round-trips testStrategy: skip through serialize/parse", async () => {
+    const spec: SpecFile = {
+      id: "strategy-test",
+      title: "Strategy Test",
+      acceptanceCriteria: ["CSS updated"],
+      constraints: [],
+      keyFiles: ["style.css"],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "CSS update", acceptanceCriteriaIndices: [0], keyFiles: ["style.css"], dependsOn: [], testStrategy: "skip", testStrategyRationale: "Styling only — no testable behavior" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("strategy-test");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "skip");
+    assert.strictEqual(read!.implementationPlan[0].testStrategyRationale, "Styling only — no testable behavior");
+  });
+
+  it("round-trips testStrategy: tdd through serialize/parse", async () => {
+    const spec: SpecFile = {
+      id: "strategy-test",
+      title: "Strategy Test",
+      acceptanceCriteria: ["Core logic"],
+      constraints: [],
+      keyFiles: ["logic.ts"],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "Core logic", acceptanceCriteriaIndices: [0], keyFiles: ["logic.ts"], dependsOn: [], testStrategy: "tdd" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("strategy-test");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "tdd");
+  });
+
+  it("migrates approach: component to testStrategy: tdd + testSuite: integration", async () => {
+    const spec: SpecFile = {
+      id: "strategy-test",
+      title: "Strategy Test",
+      acceptanceCriteria: ["Component renders"],
+      constraints: [],
+      keyFiles: ["widget.tsx"],
+      prunedContext: "context",
+      implementationPlan: [
+        { name: "Widget", acceptanceCriteriaIndices: [0], keyFiles: ["widget.tsx"], dependsOn: [], approach: "component" },
+      ],
+      status: "SPEC_WORK",
+    };
+    await manager.createSpec(spec);
+    const read = await manager.readSpec("strategy-test");
+    assert.strictEqual(read!.implementationPlan[0].approach, "component", "Original approach field preserved");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "tdd", "Component migrates to testStrategy: tdd");
+    assert.strictEqual(read!.implementationPlan[0].testSuite, "integration", "Component gets testSuite: integration");
+  });
+
+  it("testStrategy takes precedence over approach when both in markdown", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-coder-spec-test-"));
+    const mgr = new SpecManager(dir);
+    const specDir = join(dir, "strategy-override-test");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(join(specDir, "spec.md"), `---\nid: strategy-override-test\ntitle: Override Test\nstatus: SPEC_WORK\n---\n\n# Override Test\n\n## Acceptance Criteria\n\n1. Feature works\n\n## Implementation Plan\n\n- **Feature** [1] (strategy: verify)\n`);
+    const read = await mgr.readSpec("strategy-override-test");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "verify", "testStrategy parsed when present");
+    assert.strictEqual(read!.implementationPlan[0].approach, undefined, "approach not parsed when strategy is present");
+  });
 
   // --- testSuite field ---
 

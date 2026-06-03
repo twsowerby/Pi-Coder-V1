@@ -82,7 +82,7 @@ const ADVANCE_FSM_PARAMS = Type.Object({
   request: Type.Optional(Type.String({ description: "The user's original request text. Required when advancing to SPEC_WORK — this is persisted to the spec directory for crash recovery and reference." })),
   fixType: Type.Optional(Type.Union([Type.Literal("functional"), Type.Literal("non-functional")], { description: "Classification of the fix from the reviewer's verdict. In TDD mode, required when advancing from NEEDS_CHANGES → REVIEWING (non-functional fix path) if the evidence gate is not already satisfied. In Light mode, this parameter is ignored — NEEDS_CHANGES → REVIEWING has no evidence gate." })),
   reason: Type.Optional(Type.String({ description: "Required for exception transitions — when skipping a TDD phase. Explains why the exception is justified. Does NOT bypass evidence gates on REVIEWING → APPROVED — that transition requires review_completed evidence set by the auto-transition handler." })),
-  unitName: Type.Optional(Type.String({ description: "Name of the implementation unit. Pass when advancing to TDD_RED_WRITE or IMPLEMENTING so the FSM can track the active unit and auto-set test_run_this_state evidence for direct-approach units. Also pass when re-entering after NEEDS_CHANGES." })),
+  unitName: Type.Optional(Type.String({ description: "Name of the implementation unit. Pass when advancing to TDD_RED_WRITE or IMPLEMENTING so the FSM can track the active unit. Also pass when re-entering after NEEDS_CHANGES." })),
   reviewOverride: Type.Optional(Type.Object({
     verdict: Type.Union([Type.Literal("approved"), Type.Literal("needs_changes")], { description: "The verdict you determined from reading the reviewer's output yourself" }),
     justification: Type.String({ description: "Why you are overriding. Must explain: what the reviewer said, why extraction failed, and how you determined the verdict. This is audited." }),
@@ -575,7 +575,9 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         acceptanceCriteriaIndices: Type.Array(Type.Number(), { description: "0-based indices into acceptanceCriteria array" }),
         keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
-        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct"), Type.Literal("component")], { description: "Approach: 'tdd' = standard RED/GREEN. 'direct' = skip RED (CSS/styling, UI component assembly, config, docs, renames — anything with no testable behavior). 'component' = RED/GREEN with integration tests ONLY for components with custom business logic (rare — most component work is 'direct')." })),
+        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct"), Type.Literal("component")], { description: "Approach: 'tdd' = standard RED/GREEN. 'direct' = skip RED. 'component' = RED/GREEN with integration tests. DEPRECATED — use testStrategy instead." })),
+        testStrategy: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("verify"), Type.Literal("skip")], { description: "Test strategy. tdd = full RED/GREEN cycle. verify = IMPLEMENTING with test gate. skip = IMPLEMENTING with no test gate." })),
+        testStrategyRationale: Type.Optional(Type.String({ description: "Why this test strategy was chosen. Required for verify and skip." })),
         testSuite: Type.Optional(Type.String({ description: "Which test suite to validate against (must match a key in testCommands config, e.g. 'unit', 'component', 'e2e')" })),
       }), { description: "Ordered list of atomic implementation units" })),
     }),
@@ -609,7 +611,9 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             acceptanceCriteriaIndices: u.acceptanceCriteriaIndices,
             keyFiles: u.keyFiles,
             dependsOn: u.dependsOn ?? [],
-            approach: u.approach,
+            approach: u.approach,        // Keep for backward compat
+            testStrategy: u.testStrategy, // NEW
+            testStrategyRationale: u.testStrategyRationale, // NEW
             testSuite: u.testSuite,
           })) ?? [],
           status: smRef.current.currentState,
@@ -691,9 +695,11 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           lines.push("", "## Implementation Plan");
           for (const unit of spec.implementationPlan) {
             const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
-            const approachStr = unit.approach === "direct" ? " (approach: direct)" : unit.approach === "component" ? " (approach: component)" : "";
+            const strategyStr = unit.testStrategy ? ` (strategy: ${unit.testStrategy})` : 
+                              unit.approach === "direct" ? " (approach: direct)" : 
+                              unit.approach === "component" ? " (approach: component)" : "";
             const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
-            lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${deps}`);
+            lines.push(`- **${unit.name}** [${acRefs}]${strategyStr}${deps}`);
             for (const f of unit.keyFiles) {
               lines.push(`  - ${f}`);
             }
@@ -765,7 +771,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // handler didn't fire (e.g., review output saved to artifact file
       // rather than inline, so extractReviewVerdict couldn't parse it).
       // Light mode does not have this gate — fixType is ignored in Light mode.
-      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && deps.piCoderMode.current === "tdd") {
+      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && (deps.piCoderMode.current === "tdd" || deps.piCoderMode.current === "dev")) {
         smRef.current.setEvidence("non_functional_classified");
       }
 
@@ -782,40 +788,35 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         });
       }
 
-      // Check if the current unit is a direct unit (reads spec lazily)
-      // This affects evidence-setting: direct units auto-satisfy test_run_this_state
-      // for RED_VALIDATE, but NOT for GREEN_VALIDATE (test suite must still run).
-      //
-      // Component-approach units are intentionally excluded — they go through full
-      // RED/GREEN TDD and must have real (integration) tests written and failing.
-      // Only approach: "direct" gets the auto-evidence bypass.
-      //
-      // CRITICAL: After NEEDS_CHANGES, do NOT auto-set evidence even if the spec
-      // still says "direct". If the reviewer flagged a direct unit as needing
-      // functional changes, the unit MUST go through full TDD on re-entry.
-      // The orchestrator must re-save the spec with approach: "tdd" before
-      // re-advancing, otherwise the evidence won't be auto-set and the
-      // RED_VALIDATE gate will enforce the TDD requirement.
-      let isDirectUnit = false;
-      const currentUnit = smRef.current.currentUnitName;
-      const cameFromNeedsChanges = smRef.current.currentState === "NEEDS_CHANGES";
-      if (currentUnit && !cameFromNeedsChanges) {
-        // For GREEN_VALIDATE → REVIEWING, never treat as direct — the test
-        // suite MUST actually run as a safety net regardless of approach.
-        const isGreenExit = smRef.current.currentState === "TDD_GREEN_VALIDATE";
-        if (!isGreenExit) {
-          try {
-            const specId = deps.activeSpecId.current;
-            if (specId) {
-              const spec = await deps.specManager.readSpec(specId);
-              if (spec) {
-                const unit = spec.implementationPlan.find(u => u.name === currentUnit);
-                isDirectUnit = unit?.approach === "direct";
-              }
+      // Conditional evidence gate for verify units exiting IMPLEMENTING
+      // In dev mode, verify-strategy units must have test_run_this_state evidence
+      // before they can advance out of IMPLEMENTING. Skip-strategy units have no gate.
+      if (smRef.current.currentState === "IMPLEMENTING" && deps.piCoderMode.current === "dev") {
+        try {
+          const specId = deps.activeSpecId.current;
+          if (specId) {
+            const spec = await deps.specManager.readSpec(specId);
+            const currentUnit = spec?.implementationPlan?.find(
+              u => u.name === smRef.current.currentUnitName
+            );
+            if (currentUnit?.testStrategy === "verify" && !smRef.current.hasEvidence("test_run_this_state")) {
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: `CANNOT ADVANCE: Unit "${currentUnit.name}" is classified as "verify" — you must run tests with pi_coder_run_tests before advancing. This evidence gate ensures verify-strategy units are tested.`,
+                }],
+                details: {
+                  success: false,
+                  error: "verify_test_gate",
+                  missingEvidence: ["test_run_this_state"],
+                  previousState,
+                },
+                isError: true,
+              };
             }
-          } catch {
-            // Spec read failed — assume not direct (safe default)
           }
+        } catch {
+          // Spec read failed — skip conditional check, rely on standard guard
         }
       }
 
@@ -902,14 +903,6 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           };
         }
 
-        // Post-transition: auto-set test_run_this_state for direct units
-        // This must be AFTER transition() because transition() clears transient evidence.
-        // For direct units in the RED phase, this satisfies the RED_VALIDATE guard.
-        // For GREEN_VALIDATE, we DON'T auto-set — the test suite must actually run.
-        if (isDirectUnit) {
-          smRef.current.setEvidence("test_run_this_state");
-        }
-
         // Log user_intervention for BLOCKED state resolution and circuit breaker override
         if (previousState === "BLOCKED") {
           deps.logEvent("user_intervention", {
@@ -955,7 +948,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           IDLE: "Cycle reset. Start a new cycle with pi_coder_advance_fsm → SPEC_WORK when ready.",
           SPEC_WORK: "Spec ID generated. Delegate to pi-coder.researcher to research. Save with pi_coder_save_spec before presenting for approval.",
           SPEC_APPROVED: config.createBranch ? "Create a feature branch with pi_coder_git checkout_branch, then checkpoint with pi_coder_git checkpoint." : "Checkpoint with pi_coder_git checkpoint (branch creation is disabled — working on current branch).",
-          GIT_CHECKPOINT: "Checkpoint created. Advance to TDD_RED_WRITE (TDD) or IMPLEMENTING (Light) when ready.",
+          GIT_CHECKPOINT: "Checkpoint created. In TDD mode: advance to TDD_RED_WRITE. In Dev mode: advance to TDD_RED_WRITE (tdd units) or IMPLEMENTING (verify/skip units). In Light mode: advance to IMPLEMENTING.",
           TDD_RED_WRITE: "Delegate to pi-coder.implementor to write RED (failing) tests.",
           TDD_RED_VALIDATE: "Run tests with pi_coder_run_tests. RED validation: expect tests to FAIL.",
           TDD_GREEN_WRITE: "Delegate to pi-coder.implementor to implement code (make tests pass).",
@@ -963,7 +956,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           IMPLEMENTING: "Delegate to pi-coder.implementor to implement the spec. Run tests freely with pi_coder_run_tests to check progress.",
           REVIEWING: "Delegate to pi-coder.reviewer to review the implementation.",
           APPROVED: "Advance to MERGING (if user already approved via interview) or FINAL_APPROVAL (for separate sign-off).",
-          NEEDS_CHANGES: "Delegate implementor to apply the fix. Then advance: (1) REVIEWING for non-functional fixes (pass fixType=\"non-functional\" if evidence gate not met), (2) TDD_GREEN_WRITE for functional fixes with existing test coverage, or (3) TDD_RED_WRITE for functional fixes needing new tests.",
+          NEEDS_CHANGES: "Delegate implementor to apply the fix. Then advance based on unit strategy: (1) TDD_RED_WRITE for tdd units needing new tests, (2) TDD_GREEN_WRITE for tdd units with existing test coverage, (3) IMPLEMENTING for verify/skip units, or (4) REVIEWING for non-functional fixes (pass fixType=\"non-functional\" if evidence gate not met).",
           FINAL_APPROVAL: "Present summary to user. If approved, advance to MERGING.",
           MERGING: !config.mergeBranch ? "Merge is disabled — tell the user the feature branch is ready for a PR or manual merge." : `Merge the feature branch with pi_coder_git merge (strategy: ${config.mergeBranch}).`,
           COMPLETE: "Spec complete. All tests passing, code reviewed and merged.",

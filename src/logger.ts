@@ -59,6 +59,10 @@ export type LogEventType =
   | "green_retry_enriched"
   | "green_retry_replan"
   | "green_retry_blocked"
+  | "verify_retry"
+  | "verify_retry_enriched"
+  | "verify_retry_replan"
+  | "verify_retry_blocked"
   | "verdict_extraction_degraded"
   | "verdict_extraction_source"
 
@@ -114,6 +118,12 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   green_retry_enriched: "standard",
   green_retry_replan: "standard",
   green_retry_blocked: "minimal",
+
+  // P0: Verify retry escalation events
+  verify_retry: "standard",
+  verify_retry_enriched: "standard",
+  verify_retry_replan: "standard",
+  verify_retry_blocked: "minimal",
 
   // P1: Verdict extraction degraded
   verdict_extraction_degraded: "standard",

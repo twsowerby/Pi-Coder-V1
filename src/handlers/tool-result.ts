@@ -427,7 +427,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
     }
 
     // Evidence: interview tool completion in SPEC_WORK
-    if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light") && toolName === "interview" && currentState === "SPEC_WORK") {
+    if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light" || ctx.piCoderMode === "dev") && toolName === "interview" && currentState === "SPEC_WORK") {
       const interviewDetails = details as { status?: string; responses?: Array<{ id?: string; value?: unknown }> } | undefined;
 
       if (interviewDetails?.status === "completed") {
@@ -481,6 +481,85 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         isTddValidation?: boolean;
       } | undefined;
 
+      const previousState = currentState;
+      let transitionSteer = "";
+
+      // IMPLEMENTING test results (dev mode only)
+      // For verify-strategy units in IMPLEMENTING state, running tests triggers auto-transition behavior.
+      // Skip-strategy units have no test gate — test results don't trigger auto-transitions.
+      // This must run BEFORE the isTddValidation early return — IMPLEMENTING runs are not TDD validations,
+      // so isTddValidation is always false and validation is always undefined for these runs.
+      if (currentState === "IMPLEMENTING" && ctx.piCoderMode === "dev") {
+        ctx.stateMachine!.setEvidence("test_run_this_state");
+
+        try {
+          const spec = await ctx.specManager.readSpec(ctx.activeSpecId ?? "");
+          const unit = spec?.implementationPlan?.find((u: { name: string | null }) => u.name === ctx.stateMachine!.currentUnitName);
+
+          if (unit?.testStrategy === "verify") {
+            const valid = details2?.testResult?.exitCode === 0;
+            if (!valid) {
+              // Auto-transition back to IMPLEMENTING (retry loop)
+              ctx.stateMachine!.transition("IMPLEMENTING");
+              const implRetries = ctx.stateMachine!.getRetryCounter("impl_retries");
+
+              ctx.logEvent("verify_retry", {
+                retryCount: implRetries,
+                specId: ctx.activeSpecId,
+                unitName: ctx.stateMachine!.currentUnitName,
+              });
+
+              const { maxRetries, enrichedSteerThreshold, replanThreshold } = ctx.config.retryEscalation;
+
+              if (implRetries >= maxRetries) {
+                ctx.stateMachine!.transition("BLOCKED");
+                ctx.logEvent("verify_retry_blocked", {
+                  retryCount: implRetries,
+                  maxRetries,
+                  specId: ctx.activeSpecId,
+                  unitName: ctx.stateMachine!.currentUnitName,
+                });
+                notify(ctx.config, "blocked", "Pi Coder · 🔴 Verify Retry Limit", `Max verify retries (${maxRetries}) exceeded on spec ${ctx.activeSpecId ?? "unknown"} — user intervention required`);
+                transitionSteer = `\n\n🔴 HARD BLOCK: Verify retry limit reached (${implRetries} attempts of ${maxRetries} max). The FSM is now in BLOCKED state. The implementor has been unable to make the tests pass after ${implRetries} attempts. This requires human intervention — review the implementation and test failures, then decide how to proceed.`;
+              } else if (implRetries >= replanThreshold) {
+                ctx.logEvent("verify_retry_replan", {
+                  retryCount: implRetries,
+                  replanThreshold,
+                  specId: ctx.activeSpecId,
+                  unitName: ctx.stateMachine!.currentUnitName,
+                });
+                transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Verify tests still failing (attempt ${implRetries + 1} of ${maxRetries}). STRATEGY INTERVENTION REQUIRED.\n\nYou have attempted implementation ${implRetries + 1} times without success. BEFORE delegating to pi-coder.implementor again, you MUST:\n\n1. READ the full implementation file(s) and test file(s) related to this unit\n2. ANALYZE why the tests are still failing\n3. FORMULATE a fresh strategy\n4. ONLY THEN delegate with the new strategy clearly explained\n\nDo NOT simply re-delegate with 'clearer instructions' — change the approach fundamentally.`;
+              } else if (implRetries >= enrichedSteerThreshold) {
+                ctx.logEvent("verify_retry_enriched", {
+                  retryCount: implRetries,
+                  enrichedSteerThreshold,
+                  specId: ctx.activeSpecId,
+                  unitName: ctx.stateMachine!.currentUnitName,
+                });
+                transitionSteer = `\n\n⚠️ AUTO-TRANSITION: Verify tests still failing (attempt ${implRetries + 1} of ${maxRetries}). You are now in IMPLEMENTING.\n\nPrevious attempts have not resolved the failures. When delegating to pi-coder.implementor:\n- Include the SPECIFIC failing test names and assertion errors from the test output above\n- Focus the implementor on ONE failing test at a time\n- Do NOT repeat the same approach that failed previously`;
+              } else {
+                transitionSteer = "\n\n⚠️ AUTO-TRANSITION: Verify tests failed. You are still in IMPLEMENTING. Delegate to pi-coder.implementor to fix the implementation, then run tests again with pi_coder_run_tests.";
+              }
+            } else {
+              // Tests passed — stay in IMPLEMENTING, steer to advance
+              transitionSteer = "\n\n✅ Verify tests passed. You are in IMPLEMENTING. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next tdd unit), IMPLEMENTING (next verify/skip unit), or REVIEWING (all units complete).";
+            }
+          }
+          // If skip unit, no test-failure handling (tests weren't gated)
+        } catch {
+          // Spec read failed — no auto-transition
+        }
+
+        // Return with steer for IMPLEMENTING runs (no TDD validation to process)
+        if (transitionSteer && Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          const appendedText = textBlock.text + transitionSteer;
+          return { content: [{ type: "text" as const, text: appendedText }] };
+        }
+        return;
+      }
+
+      // TDD validation states only — isTddValidation and validation must be present
       if (!details2?.isTddValidation || !details2?.validation) {
         return;
       }
@@ -488,8 +567,6 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
       ctx.stateMachine!.setEvidence("test_run_this_state");
 
       const validation = details2.validation;
-      const previousState = currentState;
-      let transitionSteer = "";
 
       if (currentState === "TDD_RED_VALIDATE") {
         ctx.logEvent("tdd_red_validate", {
@@ -506,13 +583,22 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           const reason = validation.reason ?? "RED_TAUTOLOGY";
-          transitionSteer =
-            `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
-            `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: \"Write ONLY failing test files for this unit. Do NOT modify production code.\" This is the correct TDD path when the implementor skipped the test-first step.` +
-            `\n2. **Classify as approach: direct**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with approach: \"direct\" on this unit, then acknowledge the tautology with pi_coder_advance_fsm TDD_GREEN_WRITE. This records the decision explicitly.` +
-            `\n3. **Classify as approach: component**: If this component has custom business logic you own (data transformation, complex state management, error handling) that should be tested, re-save the spec with approach: \"component\". The RED brief will instruct integration tests only. Then re-delegate the RED phase. ONLY use this if the component has real custom logic — if it is just assembling library components (shadcn/Radix/MUI), use approach: \"direct\" (option 2) instead.` +
-            `\n4. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState \"TDD_GREEN_WRITE\" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
-            `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units (including CSS/styling and component assembly). Option 3 is RARE — only for components with custom business logic that should be tested. Option 4 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`;
+          if (ctx.piCoderMode === "dev") {
+            transitionSteer =
+              `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
+              `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: "Write ONLY failing test files for this unit. Do NOT modify production code." This is the correct TDD path when the implementor skipped the test-first step.` +
+              `\n2. **Reclassify as skip strategy**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with testStrategy: "skip" on this unit, then advance to IMPLEMENTING. This records the decision explicitly.` +
+              `\n3. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState "TDD_GREEN_WRITE" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
+              `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units (CSS/styling, component assembly, config, docs, renames). Option 3 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`;
+          } else {
+            transitionSteer =
+              `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
+              `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: "Write ONLY failing test files for this unit. Do NOT modify production code." This is the correct TDD path when the implementor skipped the test-first step.` +
+              `\n2. **Classify as approach: direct**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with approach: "direct" on this unit, then acknowledge the tautology with pi_coder_advance_fsm TDD_GREEN_WRITE. This records the decision explicitly.` +
+              `\n3. **Classify as approach: component**: If this component has custom business logic you own (data transformation, complex state management, error handling) that should be tested, re-save the spec with approach: "component". The RED brief will instruct integration tests only. Then re-delegate the RED phase. ONLY use this if the component has real custom logic — if it is just assembling library components (shadcn/Radix/MUI), use approach: "direct" (option 2) instead.` +
+              `\n4. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState "TDD_GREEN_WRITE" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
+              `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units (including CSS/styling and component assembly). Option 3 is RARE — only for components with custom business logic that should be tested. Option 4 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`;
+          }
         }
       }
 
@@ -526,7 +612,9 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         });
 
         if (validation.valid) {
-          transitionSteer = "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
+          transitionSteer = ctx.piCoderMode === "dev"
+            ? "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next tdd unit), IMPLEMENTING (next verify/skip unit), or REVIEWING (all units complete)."
+            : "\n\n✅ GREEN validation passed. Current FSM state: TDD_GREEN_VALIDATE. Use pi_coder_advance_fsm to advance: TDD_RED_WRITE (next implementation unit) or REVIEWING (all units complete).";
 
           // BUG-8 fix: Only emit unit_end if unitStartTime is set (not already emitted).
           // The orchestrator may run pi_coder_run_tests multiple times in GREEN_VALIDATE
@@ -652,7 +740,29 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
     if (toolName === "pi_coder_git" && currentState === "GIT_CHECKPOINT") {
       const gitDetails = details as { operation?: string; success?: boolean; error?: string } | undefined;
       if (gitDetails?.success === true && gitDetails?.operation === "checkpoint") {
-        const nextState = ctx.piCoderMode === "light" ? "IMPLEMENTING" : "TDD_RED_WRITE";
+        let nextState: string;
+        if (ctx.piCoderMode === "light") {
+          nextState = "IMPLEMENTING";
+        } else if (ctx.piCoderMode === "dev") {
+          // Dev mode: read the first unit's test strategy to determine target
+          try {
+            const spec = await ctx.specManager.readSpec(ctx.activeSpecId ?? "");
+            const firstUnit = spec?.implementationPlan?.[0];
+            if (firstUnit?.testStrategy === "tdd") {
+              nextState = "TDD_RED_WRITE";
+            } else if (firstUnit) {
+              nextState = "IMPLEMENTING";
+            } else {
+              // Zero units — skip implementation, go straight to review
+              nextState = "REVIEWING";
+            }
+          } catch {
+            // Safe fallback: default to IMPLEMENTING (less constrained than TDD)
+            nextState = "IMPLEMENTING";
+          }
+        } else {
+          nextState = "TDD_RED_WRITE";
+        }
         ctx.stateMachine!.transition(nextState);
         ctx.tokenTracker.emitStateUsageAndTransition("GIT_CHECKPOINT", nextState, ctx.activeSpecId);
         ctx.logEvent("fsm_transition", {
@@ -670,7 +780,9 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           const textBlock = rawContent[0] as { type: "text"; text: string };
           const nextStep = ctx.piCoderMode === "light"
             ? "delegate to pi-coder.implementor to implement the spec."
-            : "delegate to pi-coder.implementor to write failing tests.";
+            : ctx.piCoderMode === "dev" && nextState === "IMPLEMENTING"
+              ? "delegate to pi-coder.implementor to implement the unit (verify/skip strategy)."
+              : "delegate to pi-coder.implementor to write failing tests.";
           const appendedText = textBlock.text + `\n\n⚠️ AUTO-TRANSITION: Checkpoint complete. You are now in ${nextState}. Next step: ${nextStep}`;
           return { content: [{ type: "text" as const, text: appendedText }] };
         }
@@ -843,13 +955,13 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           ctx.tokenTracker.emitStateUsageAndTransition("REVIEWING", target, ctx.activeSpecId);
           transitionTrigger = "auto_review_verdict";
 
-          if (ctx.piCoderMode === "tdd" && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
+          if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "dev") && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
             ctx.stateMachine!.setEvidence("non_functional_classified");
           }
 
           let reclassificationGuidance = "";
-          if (ctx.piCoderMode === "tdd" && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
-            reclassificationGuidance = " If the reviewer flagged a direct unit as needing TDD, re-save the spec with that unit's approach changed to 'tdd' or 'component', present the change to the user via interview, and proceed with a full RED/GREEN cycle. If the reviewer found a component unit's tests were testing DOM internals, the approach is correct but the test scope needs adjustment — re-delegate the RED phase with clearer integration-only instructions.";
+          if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "dev") && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
+            reclassificationGuidance = " If the reviewer flagged a direct/skip unit as needing TDD, re-save the spec with that unit's testStrategy changed to 'tdd', and proceed with a full RED/GREEN cycle.";
           }
           const reviewSteer = reviewVerdict.verdict === "approved"
             ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off)."
@@ -857,7 +969,9 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
               ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
               : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
                 ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes (non-functional fix).${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate to pi-coder.implementor to apply the fix, then advance to REVIEWING with pi_coder_advance_fsm — the evidence gate is already satisfied.`
-                : `\n\n⚠️ AUTO-TRANSITION: Review needs changes.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Three paths: (1) Non-functional fix → advance to REVIEWING. (2) Functional fix with existing test coverage → advance to TDD_GREEN_WRITE. (3) Functional fix needing new tests → advance to TDD_RED_WRITE.${reclassificationGuidance}`;
+                : ctx.piCoderMode === "dev" && reviewVerdict.verdict === "needs_changes"
+                  ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Advance based on unit strategy: (1) Non-functional fix → REVIEWING. (2) TDD unit needing new tests → TDD_RED_WRITE. (3) TDD unit with existing test coverage → TDD_GREEN_WRITE. (4) Verify/skip unit → IMPLEMENTING.${reclassificationGuidance}`
+                  : `\n\n⚠️ AUTO-TRANSITION: Review needs changes.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Three paths: (1) Non-functional fix → advance to REVIEWING. (2) Functional fix with existing test coverage → advance to TDD_GREEN_WRITE. (3) Functional fix needing new tests → advance to TDD_RED_WRITE.${reclassificationGuidance}`;
 
           // --- R2: Subagent Working Docs — Reviewer Phase ---
           // Save full review to file and replace content with structured summary

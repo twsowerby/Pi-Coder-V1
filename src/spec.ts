@@ -16,7 +16,7 @@ import {
   access,
 } from "node:fs/promises";
 import { accessSync } from "node:fs";
-import type { SpecFile, ImplementationUnit } from "./types.ts";
+import type { SpecFile, ImplementationUnit, TestStrategy } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 1: Spec ID Generation
@@ -321,10 +321,13 @@ function serializeSpec(spec: SpecFile): string {
     lines.push("## Implementation Plan");
     for (const unit of spec.implementationPlan) {
       const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
-      const approachStr = unit.approach === "direct" ? " (approach: direct)" : unit.approach === "component" ? " (approach: component)" : ""; // Only serialize non-default approaches
+      const strategyStr = unit.testStrategy ? ` (strategy: ${unit.testStrategy})` : 
+                        unit.approach === "direct" ? " (approach: direct)" : 
+                        unit.approach === "component" ? " (approach: component)" : "";
+      const rationaleStr = unit.testStrategyRationale ? ` — ${unit.testStrategyRationale}` : "";
       const suiteStr = unit.testSuite ? ` (suite: ${unit.testSuite})` : "";
       const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
-      lines.push(`- **${unit.name}** [${acRefs}]${approachStr}${suiteStr}${deps}`);
+      lines.push(`- **${unit.name}** [${acRefs}]${strategyStr}${rationaleStr}${suiteStr}${deps}`);
       for (const f of unit.keyFiles) {
         lines.push(`  - \`${f}\``);
       }
@@ -474,15 +477,6 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
     }).filter((n) => !isNaN(n));
     const trailing = unitMatch[3] ?? "";
 
-    // Extract approach from trailing string
-    let approach: "tdd" | "direct" | "component" | undefined;
-    const approachMatch = trailing.match(/\(approach:\s*(tdd|direct|component)\)/i);
-    if (approachMatch) {
-      approach = approachMatch[1].toLowerCase() as "tdd" | "direct" | "component";
-      // Normalize: undefined = tdd default, only set if explicitly "direct" or "component"
-      if (approach === "tdd") approach = undefined;
-    }
-
     // Extract testSuite from trailing string
     const suiteMatch = trailing.match(/\(suite:\s*(\w+)\)/i);
     const testSuite = suiteMatch ? suiteMatch[1].toLowerCase() : undefined;
@@ -511,11 +505,40 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
       keyFiles,
       dependsOn,
     };
-    if (approach === "direct") {
-      unit.approach = "direct";
-    } else if (approach === "component") {
-      unit.approach = "component";
+
+    // Parse strategy (new format)
+    const strategyMatch = trailing.match(/\(strategy:\s*(tdd|verify|skip)\)/i);
+    if (strategyMatch) {
+      unit.testStrategy = strategyMatch[1].toLowerCase() as TestStrategy;
     }
+
+    // Backward compat: if no strategy, check for old approach field
+    if (!unit.testStrategy) {
+      const approachMatch = trailing.match(/\(approach:\s*(tdd|direct|component)\)/i);
+      if (approachMatch) {
+        switch (approachMatch[1].toLowerCase()) {
+          case "tdd":       unit.testStrategy = "tdd"; break;
+          case "direct":    unit.testStrategy = "skip"; break;
+          case "component": unit.testStrategy = "tdd"; if (!unit.testSuite) unit.testSuite = "integration"; break;
+        }
+        // Also set approach for backward compat
+        if (approachMatch[1].toLowerCase() === "direct") {
+          unit.approach = "direct";
+        } else if (approachMatch[1].toLowerCase() === "component") {
+          unit.approach = "component";
+        }
+      } else {
+        // No strategy and no approach — default to tdd (matches current behavior)
+        unit.testStrategy = "tdd";
+      }
+    }
+
+    // Rationale extraction
+    const rationaleMatch = trailing.match(/—\s*(.+?)(?:\s*\(|$)/);
+    if (rationaleMatch) {
+      unit.testStrategyRationale = rationaleMatch[1].trim();
+    }
+
     if (testSuite) {
       unit.testSuite = testSuite;
     }
