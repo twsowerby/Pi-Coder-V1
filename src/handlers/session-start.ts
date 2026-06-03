@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { StateMachine } from "../state-machine.ts";
 import { LightStateMachine } from "../light-state-machine.ts";
+import { DevStateMachine } from "../dev-state-machine.ts";
 import { KnowledgeStore } from "../knowledge.ts";
 import { SpecManager } from "../spec.ts";
 import { GitOperations } from "../git.ts";
@@ -19,10 +20,10 @@ import { Logger } from "../logger.ts";
 import { registerTools, type StateMachineRef } from "../tools.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
 import { loadConfig } from "../config.ts";
-import { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetLightModePromptCache, resetPlanModePromptCache } from "../prompts/prompt-builders.ts";
+import { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetLightModePromptCache, resetPlanModePromptCache, resetDevModePromptCache } from "../prompts/prompt-builders.ts";
 import { registerCompactionHandler } from "../compaction.ts";
 import type { HandlerContext } from "../handlers/types.ts";
-import type { FSMState, LightFSMState } from "../types.ts";
+import type { FSMState, LightFSMState, DevFSMState } from "../types.ts";
 
 /** Register the session_start event handler and its sub-listeners. */
 export function registerSessionStartHandler(ctx: HandlerContext): void {
@@ -64,11 +65,14 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
     resetOrchestratorPromptCache();
     resetLightModePromptCache();
     resetPlanModePromptCache();
+    resetDevModePromptCache();
     loadOrchestratorPrompt(cwd);
 
     // Initialize state machine based on mode
     if (ctx.piCoderMode === "tdd") {
       ctx.stateMachine = new StateMachine(ctx.config);
+    } else if (ctx.piCoderMode === "dev") {
+      ctx.stateMachine = new DevStateMachine(ctx.config);
     } else if (ctx.piCoderMode === "light") {
       ctx.stateMachine = new LightStateMachine(ctx.config);
     } else {
@@ -260,6 +264,8 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
       // Re-align stateMachine instance with restored mode
       if (ctx.piCoderMode === "light" && !(ctx.stateMachine instanceof LightStateMachine)) {
         ctx.stateMachine = new LightStateMachine(ctx.config);
+      } else if (ctx.piCoderMode === "dev" && !(ctx.stateMachine instanceof DevStateMachine)) {
+        ctx.stateMachine = new DevStateMachine(ctx.config);
       } else if (ctx.piCoderMode === "tdd" && !(ctx.stateMachine instanceof StateMachine)) {
         ctx.stateMachine = new StateMachine(ctx.config);
       } else if (ctx.piCoderMode === "plan" || ctx.piCoderMode === "off") {
@@ -279,6 +285,7 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
           const modeMismatch =
             (ctx.piCoderMode === "light" && isTddState) ||
             (ctx.piCoderMode === "tdd" && isLightOnlyState);
+          // Dev mode handles both TDD and IMPLEMENTING states — no mismatch possible
 
           if (modeMismatch) {
             ctx.logEvent("state_restore", {
@@ -311,6 +318,14 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
               currentUnitName: specState.currentUnitName ?? null,
               evidence: specState.evidence,
             }, ctx.config);
+          } else if (ctx.piCoderMode === "dev") {
+            ctx.stateMachine = DevStateMachine.fromJSON({
+              currentState: specState.currentState as DevFSMState,
+              loopCount: specState.loopCount,
+              gitRef: specState.gitRef,
+              currentUnitName: specState.currentUnitName ?? null,
+              evidence: specState.evidence,
+            }, ctx.config);
           } else {
             ctx.stateMachine = null;
           }
@@ -323,6 +338,14 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
               fsmState: specState.currentState,
               mode: ctx.piCoderMode,
             });
+
+            // Hint: TDD → dev migration path
+            if (ctx.piCoderMode === "tdd" && ctx.stateMachine) {
+              ctx.logEvent("state_restore", {
+                status: "tdd_mode_hint",
+                message: "TDD mode spec restored. Dev mode provides the same TDD lifecycle with per-unit test strategy. Switch with /pi-coder.",
+              });
+            }
           }
         } else {
           ctx.logEvent("state_restore", {

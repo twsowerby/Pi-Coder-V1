@@ -57,7 +57,7 @@ export class NudgeEngine {
     }
 
     if (level === 2) {
-      const lifecycle = piCoderMode === "light" ? "implementation" : "TDD";
+      const lifecycle = piCoderMode === "light" ? "implementation" : piCoderMode === "dev" ? "dev" : "TDD";
       return `\n\n[NUDGE - URGENT] You must now proceed with: ${expectation.expectedAction}. This is a required step in the ${lifecycle} lifecycle. The FSM cannot advance until this action is taken.`;
     }
 

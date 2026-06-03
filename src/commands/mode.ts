@@ -8,6 +8,7 @@
 import type { PiCoderMode, FSMState } from "../types.ts";
 import { StateMachine } from "../state-machine.ts";
 import { LightStateMachine } from "../light-state-machine.ts";
+import { DevStateMachine } from "../dev-state-machine.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 
@@ -21,6 +22,7 @@ export function registerModeCommand(ctx: HandlerContext): void {
       const modes = [
         { value: "plan", label: `Plan Mode (investigation & discussion)${current === "plan" ? "  ◀" : ""}` },
         { value: "light", label: `Light Mode (spec → implement → review)${current === "light" ? "  ◀" : ""}` },
+        { value: "dev", label: `Dev Mode (spec → per-unit TDD/verify/skip → review)${current === "dev" ? "  ◀" : ""}` },
         { value: "tdd", label: `TDD Mode (full RED/GREEN lifecycle)${current === "tdd" ? "  ◀" : ""}` },
         { value: "off", label: `Off (normal Pi)${current === "off" ? "  ◀" : ""}` },
       ];
@@ -80,6 +82,10 @@ export function registerModeCommand(ctx: HandlerContext): void {
         if (selectedMode === "tdd") {
           if (!ctx.stateMachine || !(ctx.stateMachine instanceof StateMachine)) {
             ctx.stateMachine = new StateMachine(ctx.config);
+          }
+        } else if (selectedMode === "dev") {
+          if (!ctx.stateMachine || !(ctx.stateMachine instanceof DevStateMachine)) {
+            ctx.stateMachine = new DevStateMachine(ctx.config);
           }
         } else if (selectedMode === "light") {
           if (!ctx.stateMachine || !(ctx.stateMachine instanceof LightStateMachine)) {

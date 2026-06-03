@@ -26,6 +26,9 @@ let planModePromptTemplate: string | null = null;
 /** Light mode prompt template — cached for the session. */
 let lightModePromptTemplate: string | null = null;
 
+/** Dev mode prompt template — cached for the session. */
+let devModePromptTemplate: string | null = null;
+
 // ---------------------------------------------------------------------------
 // Cache reset functions
 // ---------------------------------------------------------------------------
@@ -47,6 +50,11 @@ export function resetOrchestratorPromptCache(): void {
 /** Reset the cached light mode prompt template. */
 export function resetLightModePromptCache(): void {
   lightModePromptTemplate = null;
+}
+
+/** Reset the cached dev mode prompt template. */
+export function resetDevModePromptCache(): void {
+  devModePromptTemplate = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,8 +255,85 @@ Available tools:
     .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
 }
 
+/**
+ * Build the dev mode system prompt.
+ * Per-unit test strategy (tdd/verify/skip) lifecycle with FSM.
+ * Reads from prompts/pi-coder-dev.md if available, otherwise uses a built-in fallback.
+ */
+function buildDevModePrompt(sm: IStateMachine, filteredSnippets: Record<string, string>, config: PiCoderConfig, activeSpecId: string | null): string {
+  if (!devModePromptTemplate) {
+    // Try to load from file
+    const promptPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts", "pi-coder-dev.md");
+    try {
+      if (existsSync(promptPath)) {
+        devModePromptTemplate = readFileSync(promptPath, "utf-8");
+        const stripped = devModePromptTemplate.replace(/^---\n[\s\S]*?---\n/, "");
+        devModePromptTemplate = stripped.replace(/^\n+/, "");
+      }
+    } catch {
+      // Fall through to built-in
+    }
+
+    if (!devModePromptTemplate) {
+      // Built-in fallback — dev mode with test strategy awareness
+      devModePromptTemplate = `You are the Pi Coder orchestrator in DEV mode — a coding assistant that delegates implementation to specialized subagents. You follow a per-unit test strategy.
+
+You do NOT edit files directly — you delegate all implementation work to subagents.
+
+FSM State Diagram:
+{{fsmDiagram}}
+
+Current state: {{currentState}}
+Active spec: {{activeSpecId}}
+Loop count: {{loopCount}}/{{maxLoops}}
+
+## Test Strategy
+
+Each implementation unit has a test strategy:
+- **tdd**: Full RED/GREEN cycle. Write failing test first, then implement to pass.
+- **verify**: Implement first, then run tests to verify. Tests must pass before advancing.
+- **skip**: Implement only, no test gate. For non-behavioral changes (CSS, config, docs).
+
+When saving a spec with pi_coder_save_spec, classify each unit. Provide testStrategyRationale for verify and skip units.
+
+## Available Subagents
+- pi-coder.researcher — investigate, find info, understand patterns
+- pi-coder.implementor — write code, run commands, make changes
+- pi-coder.reviewer — review code, run tests, verify correctness
+
+## Guidelines
+- Follow the FSM — use pi_coder_advance_fsm to advance states
+- For tdd units: follow the RED/GREEN TDD cycle
+- For verify units: delegate implementation, then run tests with pi_coder_run_tests before advancing
+- For skip units: delegate implementation, advance without tests
+- Run pi_coder_run_tests freely to check progress — results are advisory unless you're in a validation state
+- Use pi_coder_git for version control operations
+- Persist cross-cutting gotchas to knowledge (upsert_knowledge)
+
+Available tools:
+{{toolList}}`;
+    }
+  }
+
+  const toolList = Object.entries(filteredSnippets)
+    .map(([name, snippet]) => `- ${name}: ${snippet}`)
+    .join("\n");
+
+  return devModePromptTemplate!
+    .replace("{{fsmDiagram}}", sm.buildDiagram())
+    .replace("{{currentState}}", sm.currentState)
+    .replace("{{activeSpecId}}", activeSpecId ?? "none")
+    .replace("{{loopCount}}", String(sm.loopCount))
+    .replace("{{maxLoops}}", String(config.maxLoops))
+    .replace("{{interviewTimeout}}", String(config.interviewTimeout))
+    .replace("{{toolList}}", toolList)
+    .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
+    .replace("{{testSuites}}", formatTestSuites(config.testCommands))
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
+}
+
 // ---------------------------------------------------------------------------
 // Re-export internal builders for use by index.ts event handlers
 // ---------------------------------------------------------------------------
 
-export { buildPlanModePrompt, buildOrchestratorPrompt, buildLightModePrompt };
+export { buildPlanModePrompt, buildOrchestratorPrompt, buildLightModePrompt, buildDevModePrompt };

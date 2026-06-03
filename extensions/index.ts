@@ -147,6 +147,67 @@ function refreshUI(): void {
     return;
   }
 
+  if (piCoderMode === "dev") {
+    // Dev mode — same FSM UI as TDD but with different label
+    const state = stateMachine!.currentState;
+    const specId = activeSpecId;
+    const loopCount = stateMachine!.loopCount;
+    const style = STATE_STYLE[state] ?? { icon: "●", color: "accent" as const };
+    const label = STATE_LABEL[state] ?? state;
+    const theme = ctx.ui.theme;
+
+    const isTdd = state.startsWith("TDD_");
+    const showLoop = isTdd || state === "REVIEWING" || state === "NEEDS_CHANGES";
+
+    let widgetLine = theme.fg("accent", "⬡ Dev");
+    if (state !== "IDLE") {
+      widgetLine += theme.fg("dim", ` | `) + theme.fg(style.color, `${style.icon} ${label}`);
+    }
+    if (specId) {
+      widgetLine += theme.fg("dim", `  spec: `) + theme.fg("muted", specId);
+    }
+    if (showLoop && loopCount > 0) {
+      widgetLine += theme.fg("dim", `  loop: `) + theme.fg("muted", String(loopCount)) + theme.fg("dim", `/${config.maxLoops}`);
+    }
+    if (subagentMonitor.running) {
+      widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
+    }
+
+    ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
+
+    // Footer status
+    let statusText: string;
+    if (state === "BLOCKED") {
+      statusText = theme.fg("error", "⚠ blocked");
+    } else if (state === "COMPLETE") {
+      statusText = theme.fg("success", "✓ complete");
+    } else if (state === "IDLE") {
+      statusText = theme.fg("dim", "dev idle");
+    } else {
+      statusText = theme.fg(style.color, `⬡ ${label}`);
+      if (specId) {
+        statusText += theme.fg("dim", ` · ${specId}`);
+      }
+    }
+    ctx.ui.setStatus("pi-coder", statusText);
+
+    // Working indicator
+    if (subagentMonitor.running) {
+      ctx.ui.setWorkingIndicator({
+        frames: [theme.fg("accent", "⏣"), theme.fg("muted", "⏣")],
+        intervalMs: 500,
+      });
+    } else if (state === "IDLE" || state === "COMPLETE" || state === "BLOCKED") {
+      ctx.ui.setWorkingIndicator();
+    } else {
+      ctx.ui.setWorkingIndicator({
+        frames: [theme.fg("accent", "⬡"), theme.fg("muted", "⬡")],
+        intervalMs: 600,
+      });
+    }
+    return;
+  }
+
   // TDD mode — full FSM UI
 
   const state = stateMachine!.currentState;
@@ -383,7 +444,7 @@ function logEvent(type: LogEventType, payload: Record<string, unknown>): void {
 // Prompt builders — imported from src/prompts/prompt-builders.ts
 
 // Re-export for backward compatibility with tests
-export { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetPlanModePromptCache, resetLightModePromptCache } from "../src/prompts/prompt-builders.ts";
+export { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetPlanModePromptCache, resetLightModePromptCache, resetDevModePromptCache } from "../src/prompts/prompt-builders.ts";
 
 
 // ---------------------------------------------------------------------------

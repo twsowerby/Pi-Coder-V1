@@ -8,7 +8,7 @@
 
 import type { PiCoderMode } from "../types.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
-import { buildOrchestratorPrompt, buildLightModePrompt, buildPlanModePrompt } from "../prompts/prompt-builders.ts";
+import { buildOrchestratorPrompt, buildLightModePrompt, buildPlanModePrompt, buildDevModePrompt } from "../prompts/prompt-builders.ts";
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 import type { HandlerContext } from "../handlers/types.ts";
 
@@ -43,6 +43,8 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
         ctx.config,
         ctx.activeSpecId,
       );
+    } else if (ctx.piCoderMode === "dev") {
+      orchestratorPrompt = buildDevModePrompt(ctx.stateMachine!, filteredSnippets, ctx.config, ctx.activeSpecId);
     } else if (ctx.piCoderMode === "light") {
       orchestratorPrompt = buildLightModePrompt(ctx.stateMachine!, filteredSnippets, ctx.config, ctx.activeSpecId);
     } else { // plan
@@ -83,6 +85,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
     const filteredSkills = allSkills.filter(skill => {
       if (skill.name === 'pi-coder-core') return true;
       if (ctx.piCoderMode === 'tdd' && skill.name === 'pi-coder-tdd') return true;
+      if (ctx.piCoderMode === 'dev' && skill.name === 'pi-coder-dev') return true;
       if (ctx.piCoderMode === 'light' && skill.name === 'pi-coder-light') return true;
       if (ctx.piCoderMode === 'plan' && skill.name === 'pi-coder-plan') return true;
       if (!skill.name.startsWith('pi-coder-')) return true;
@@ -101,10 +104,10 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
     fullPrompt += `\nCurrent working directory: ${systemPromptOptions.cwd?.replace(/\\/g, "/") ?? "."}`;
 
     // -------------------------------------------------------------------
-    // Nudge System (TDD and Light modes)
+    // Nudge System (TDD, Light, and Dev modes)
     // -------------------------------------------------------------------
 
-    if (ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light") {
+    if (ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light" || ctx.piCoderMode === "dev") {
       // Increment turn counter
       ctx.nudgeEngine.state.turnsSinceEntry++;
 
@@ -149,7 +152,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
           );
         }
       }
-    } // end TDD/Light-mode nudge
+    } // end TDD/Light/Dev-mode nudge
 
     // Log prompt size before returning
     ctx.logEvent("prompt_size", {
