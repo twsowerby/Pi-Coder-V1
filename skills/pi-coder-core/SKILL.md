@@ -5,7 +5,7 @@ description: Pi Coder shared procedures — spec writing, git checkpoint, review
 
 # Pi Coder — Core Procedures
 
-This skill contains shared procedures used by all Pi Coder modes (Plan, Light, TDD). Mode-specific procedures are in separate skills.
+This skill contains shared procedures used by all Pi Coder modes (Plan, Light, Dev). Mode-specific procedures are in separate skills.
 
 ## Spec Work
 
@@ -70,17 +70,23 @@ Rules for decomposition:
 - **Scope key files per unit.** Each unit lists only the files it touches.
 - **Sequential by default.** The implementor works one unit at a time. Parallel delegation is not used.
 
-#### Unit Approach Classification
+#### Unit Test Strategy Classification
 
-Each implementation unit has an optional `approach` field:
-- **`approach: "tdd"`** (default when absent) — Standard RED/GREEN cycle with all guards enforced. The implementor writes failing tests first, then writes code to make them pass.
-- **`approach: "direct"`** — Skip the RED phase. The `test_run_this_state` evidence is auto-set when advancing to TDD_RED_WRITE or IMPLEMENTING, so the RED_VALIDATE gate passes without running tests. Use this for units that are config changes, documentation updates, or other non-behavioral changes where test-first development adds noise. GREEN_VALIDATE still requires running the full test suite — the safety net is never bypassed.
+Each implementation unit has a `testStrategy` field:
+- **`testStrategy: "tdd"`** (default when absent) — Standard RED/GREEN cycle with all guards enforced.
+- **`testStrategy: "verify"`** — IMPLEMENTING with test gate. The FSM blocks advancement until tests pass. Use this for units where test-first development isn't practical but testing IS needed after implementation (integration points, API surfaces). Provide `testStrategyRationale`.
+- **`testStrategy: "skip"`** — IMPLEMENTING with no test gate. Use for changes with no testable behavior (CSS/styling, config, docs, renames). Provide `testStrategyRationale`.
 
-When saving the spec, include `approach: "direct"` on units that genuinely don't benefit from test-first development. Do NOT use direct for units that change production behavior.
+**Backward compat**: The `approach` field is also accepted during Phase 1:
+- `approach: "tdd"` → `testStrategy: "tdd"`
+- `approach: "direct"` → `testStrategy: "skip"`
+- `approach: "component"` → `testStrategy: "tdd"` with `testSuite: "integration"`
 
-When advancing to TDD_RED_WRITE or IMPLEMENTING, pass the `unitName` parameter to `pi_coder_advance_fsm` so the FSM can read the unit's approach and auto-set evidence for direct units.
+When saving the spec, provide `testStrategy` and `testStrategyRationale` (required for verify and skip). Include `approach` for backward compat if desired — it will be migrated on parse.
 
-**After NEEDS_CHANGES with a direct unit**: When a reviewer flags a direct unit as needing functional changes, you MUST re-save the spec with that unit's approach changed to `"tdd"` before advancing from NEEDS_CHANGES. The FSM clears `currentUnitName` on NEEDS_CHANGES entry and will NOT auto-set evidence on re-entry — the RED_VALIDATE gate enforces TDD until you update the spec. If you believe the direct classification is still valid, re-save the spec with `approach: "direct"` before advancing.
+When advancing to TDD_RED_WRITE or IMPLEMENTING, pass the `unitName` parameter to `pi_coder_advance_fsm` so the FSM can track the active unit.
+
+**After NEEDS_CHANGES**: When a reviewer flags a verify/skip unit as needing functional changes, re-save the spec with that unit's testStrategy changed to `"tdd"` before advancing from NEEDS_CHANGES. The RED_VALIDATE gate will enforce the TDD requirement. If you believe the current classification is still valid (e.g., reviewer flagged a documentation typo), re-save with the original strategy before advancing.
 
 ### Delegation Pacing
 
@@ -122,7 +128,7 @@ Then present the spec for approval using `interview` with **multiple focused que
 2. **Acceptance criteria question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?"
 3. **Constraints question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Constraints: [bulleted list]. Anything missing or wrong?"
 4. **Implementation plan question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Implementation plan: [unit names with AC references]. Does this decomposition look right?"
-5. **Direct classification question** (ONLY if any units have `approach: "direct"`): `type: "single"`, options: ["Approve", "Change to TDD"]. "The following units skip the TDD RED phase: [list unit names with brief descriptions]. Approve these direct classifications?"
+5. **Non-TDD strategy question** (ONLY if any units have `testStrategy: "verify"` or `testStrategy: "skip"`): `type: "single"`, options: ["Approve", "Change to TDD"]. "N of M units use verify or skip strategy: [list unit names with strategy and rationale]. If any of these could have a test-first contract, consider reclassifying as tdd. Approve these classifications?"
   6. **Test suite question** (ONLY if any units have `testSuite` set): `type: "single"`, options: ["Approve", "Change"]. "The following units map to non-default test suites: [list unit names with suite]. Approve these test suite assignments?"
 
 If the user selects "Needs changes" for any question, `spec_user_approved` will NOT be set — review the feedback and revise the spec, then re-present for approval.
@@ -169,18 +175,18 @@ When your FSM is in REVIEWING (all implementation units complete):
 
 4. Monitor the loop count. Every NEEDS_CHANGES exit increments the counter. If it reaches the configured maximum, the circuit breaker trips (see Recovery Procedures).
 
-5. **Direct unit verification**: If the reviewer finds that a direct unit changed production behavior, the unit should be reclassified as TDD. See the "Reclassifying Direct Units" section below.
+5. **Unit test strategy verification**: If the reviewer finds that a verify or skip unit changed production behavior that should have been tdd, re-save the spec with the updated testStrategy before advancing. See the "Reclassifying Units" section below.
 
 ---
 
-## Reclassifying Direct Units
+## Reclassifying Units after Review
 
-If the reviewer finds that a direct unit changed production behavior and should have been TDD:
+If the reviewer finds that a verify or skip unit changed production behavior and should have been tdd:
 
-1. Re-save the spec with `pi_coder_save_spec`, changing the unit's approach from `"direct"` to `"tdd"`
+1. Re-save the spec with `pi_coder_save_spec`, changing the unit's testStrategy to `"tdd"`
 2. Present the reclassification to the user via interview for approval
 3. The NEEDS_CHANGES → TDD_RED_WRITE flow will run a full RED/GREEN cycle for the unit
-4. The `test_run_this_state` evidence will NOT be auto-set (the spec now says `"tdd"`), so the RED phase gate is enforced normally
+4. The test_run_this_state evidence will NOT be auto-set (the spec now says "tdd"), so the RED phase gate is enforced normally
 
 The human's original spec approval covered the OLD classification. The reclassification is a material change that requires human sign-off.
 
@@ -300,6 +306,48 @@ After completing these units, stop and return what you've done. Do NOT continue 
 
 The task payload must NOT contain implementation code, design suggestions, or architectural recommendations. Only the ACs for the specified units, relevant constraints, and the units' key files. The implementor decides how to implement.
 
+### Implementor — IMPLEMENT Phase (Dev mode, per unit)
+
+```
+IMPLEMENT phase — write code and tests for a verify-strategy unit. Write the implementation first, then write tests that verify the key behavior paths.
+
+Unit: {unit name}
+Test strategy: verify
+
+Acceptance Criteria for this unit:
+- {AC item from acceptanceCriteria at the unit's acceptanceCriteriaIndices}
+
+Constraints (apply to this unit):
+- {constraints relevant to this unit's key files}
+
+Key Files for this unit:
+- {path} — {purpose}
+
+Check .pi-coder/knowledge/ for project-specific rules before writing code.
+```
+
+For **skip-strategy** units, use the same template but change the header and omit the test instruction:
+
+```
+IMPLEMENT phase — implement this skip-strategy unit. Write implementation code only — no tests needed for this unit.
+
+Unit: {unit name}
+Test strategy: skip
+
+Acceptance Criteria for this unit:
+- {AC item from acceptanceCriteria at the unit's acceptanceCriteriaIndices}
+
+Constraints (apply to this unit):
+- {constraints relevant to this unit's key files}
+
+Key Files for this unit:
+- {path} — {purpose}
+
+Check .pi-coder/knowledge/ for project-specific rules before writing code.
+```
+
+The task payload must NOT contain implementation code, design suggestions, or architectural recommendations. Only the ACs for the unit, relevant constraints, and the unit's key files. The implementor decides how to implement.
+
 ### Reviewer Task
 
 ```
@@ -348,7 +396,7 @@ When RED tests pass unexpectedly, the extension presents guidance with three opt
 
 1. **Re-delegate to write tests first** — Stay in TDD_RED_WRITE and re-delegate to the implementor with explicit instructions to write ONLY failing test files. This is the correct TDD response when the implementor wrote production code without tests. Do NOT advance the FSM.
 
-2. **Classify as approach: direct** — If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with `approach: "direct"` on this unit, then acknowledge the tautology. This records the decision explicitly and the human must approve it via interview.
+2. **Reclassify as skip strategy** — If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with `testStrategy: "skip"` on this unit, then advance to IMPLEMENTING. This records the decision explicitly and the human must approve it via interview.
 
 3. **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — Only valid when new tests WERE written that test real new behavior, but they pass because the feature was already partially implemented. The test coverage is valid even though tests passed immediately.
 
