@@ -2,7 +2,7 @@
 
 A multi-mode orchestrator/worker harness for [pi](https://github.com/earendil-works/pi-coding-agent) — structured coding with per-unit test strategy, lightweight implementation, or investigation-only workflows.
 
-Pi Coder replaces the default "you're a coding assistant" mode with a structured orchestrator that delegates all implementation to specialized subagents. It offers five modes: **Dev mode** (recommended) provides a full lifecycle with per-unit test strategy — each unit is classified as `tdd`, `verify`, or `skip` during planning, and the FSM enforces the appropriate path; **TDD mode** (legacy) enforces a strict Red→Green→Review lifecycle across all units; **Light mode** provides a spec→implement→review lifecycle without per-unit strategy; **Plan mode** restricts you to investigation and discussion only; **Off** is normal Pi. The orchestrator cannot edit files, read file contents, or run arbitrary commands — it can only delegate, observe, and decide.
+Pi Coder replaces the default "you're a coding assistant" mode with a structured orchestrator that delegates all implementation to specialized subagents. It offers four modes: **Dev mode** (recommended) provides a full lifecycle with per-unit test strategy — each unit is classified as `tdd`, `verify`, or `skip` during planning, and the FSM enforces the appropriate path; **Light mode** provides a spec→implement→review lifecycle without per-unit strategy; **Plan mode** restricts you to investigation and discussion only; **Off** is normal Pi. The orchestrator cannot edit files, read file contents, or run arbitrary commands — it can only delegate, observe, and decide.
 
 ## Table of Contents
 
@@ -81,23 +81,11 @@ Pi Coder adds an **orchestrator mode** to pi. When active, your pi session trans
 
 - The system prompt is replaced with the orchestrator identity
 - Tool access is restricted to delegation and observation tools only
-- In **TDD mode**: a finite state machine (FSM) tracks the lifecycle, subagent calls are validated against FSM state, test results and review verdicts auto-advance the machine
-- In **Dev mode**: the same FSM as TDD mode, but each unit is routed through a test-strategy-appropriate path — tdd units follow RED/GREEN, verify units go through IMPLEMENTING with a test gate on exit, skip units go through IMPLEMENTING with no test gate
+- In **Dev mode**: a finite state machine (FSM) tracks the lifecycle, subagent calls are validated against FSM state, test results and review verdicts auto-advance the machine
+- In **Dev mode**: the same FSM with per-unit test strategy routing — tdd units follow RED/GREEN, verify units go through IMPLEMENTING with a test gate on exit, skip units go through IMPLEMENTING with no test gate
 - In **Light mode**: a simplified FSM enforces spec→implement→review→merge with no TDD phases
 - In **Plan mode**: no FSM, researcher delegation only — investigation and discussion
 - State and mode are persisted to disk — cycles survive crashes and session restarts
-
-In TDD mode, the orchestrator follows this lifecycle:
-
-```
-IDLE → SPEC_WORK → SPEC_APPROVED →
-GIT_CHECKPOINT → TDD_RED_WRITE → TDD_RED_VALIDATE →
-TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING | (next_unit) TDD_RED_WRITE →
-(APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
-(NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING) |
-(TDD_RED_VALIDATE → TDD_GREEN_WRITE | BLOCKED) → user intervention
-(GREEN retry limit: TDD_GREEN_WRITE → BLOCKED) → user intervention
-```
 
 In Dev mode, the FSM routes each unit through a strategy-appropriate path:
 
@@ -199,11 +187,9 @@ Just describe what you want built. The orchestrator will:
 
 **In Dev mode:** Classify each unit as tdd/verify/skip → tdd units follow RED/GREEN, verify units implement then test, skip units implement only → **Review** → merge
 
-**In TDD mode:** Alternate RED (write tests) → GREEN (make tests pass) per unit → **Review** → merge
-
 **In Light mode:** Delegate to implementor → run tests → **Review** → merge (no RED/GREEN phases)
 
-**In Plan mode:** Only investigation and discussion — no spec, no git, no implementation. Switch to Dev, Light, or TDD mode when you're ready to act.
+**In Plan mode:** Only investigation and discussion — no spec, no git, no implementation. Switch to Dev or Light mode when you're ready to act.
 
 ## Modes
 
@@ -242,24 +228,6 @@ NEEDS_CHANGES → TDD_RED_WRITE (tdd, functional) | IMPLEMENTING (verify/skip, f
 
 **Available tools:** `ls`, `find`, `grep`, `subagent`, `pi_coder_git`, `pi_coder_run_tests`, `upsert_knowledge`, `pi_coder_save_spec`, `pi_coder_read_spec`, `pi_coder_advance_fsm`, `interview`, `intercom`
 
-### TDD Mode
-
-Full lifecycle enforcement. The orchestrator must follow the FSM: research → spec → approval → implementation (RED/GREEN) → review → merge. The state machine tracks progress, evidence flags enforce invariants, and the nudge system pushes the orchestrator forward if it stalls.
-
-> **Note:** TDD mode is the legacy single-strategy mode. For new work, **Dev mode** is recommended — it provides the same TDD cycle for units that need it, plus `verify` and `skip` paths for units that don't.
-
-**When to use:** Pure test-first workflows where every unit needs the RED/GREEN cycle. For mixed testability, use Dev mode.
-
-**FSM lifecycle:**
-```
-IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT → TDD_RED_WRITE ↔ TDD_RED_VALIDATE →
-TDD_GREEN_WRITE ↔ TDD_GREEN_VALIDATE → REVIEWING →
-APPROVED → FINAL_APPROVAL → MERGING → COMPLETE
-NEEDS_CHANGES → TDD_RED_WRITE | REVIEWING
-```
-
-**Available tools:** `ls`, `find`, `grep`, `subagent`, `pi_coder_git`, `pi_coder_run_tests`, `upsert_knowledge`, `pi_coder_save_spec`, `pi_coder_read_spec`, `pi_coder_advance_fsm`, `interview`, `intercom`
-
 ### Light Mode
 
 A simplified FSM that enforces spec → implement → review → merge without TDD RED/GREEN phases. The orchestrator writes a spec, gets your approval, delegates to the implementor, and sends the result to the reviewer. There's one implementation state (IMPLEMENTING) instead of four TDD states.
@@ -268,7 +236,7 @@ A simplified FSM that enforces spec → implement → review → merge without T
 
 > If a task in Light mode grows complex enough to need test-first discipline for some units, switch to Dev mode.
 
-**Key differences from TDD mode:**
+**Key differences from Dev mode:**
 - IMPLEMENTING replaces TDD_RED_WRITE / TDD_RED_VALIDATE / TDD_GREEN_WRITE / TDD_GREEN_VALIDATE
 - `pi_coder_run_tests` is advisory — it doesn't gate FSM transitions (no auto-transitions based on pass/fail)
 - No per-unit cycle — the implementor does all the work in one delegation
@@ -436,13 +404,13 @@ Pi Coder persists its mode and FSM state to disk. This means **your TDD cycles s
 ```json
 {
   "version": 1,
-  "piCoderMode": "tdd",
+  "piCoderMode": "dev",
   "activeSpecId": "2026-05-25-1430-user-authentication",
   "updatedAt": "2026-05-25T14:30:00.000Z"
 }
 ```
 
-`piCoderMode` can be `"dev"`, `"tdd"`, `"light"`, `"plan"`, or `"off"`. When set to `"plan"` or `"off"`, there is no active FSM.
+`piCoderMode` can be `"dev"`, `"light"`, `"plan"`, or `"off"`. When set to `"plan"` or `"off"`, there is no active FSM.
 
 **Per-spec state** (`.pi-coder/specs/{id}/state.json`) — FSM + evidence:
 
@@ -900,9 +868,9 @@ Each session directory contains one log file per day. Legacy flat files from old
 Each log entry is a JSON object with dual timestamps:
 
 ```jsonl
-{"timestamp":"2026-05-29T05:39:13.219Z","localTimestamp":"2026-05-29T15:39:13.000+10:00","sessionId":"550e8400-e29b","type":"fsm_transition","payload":{"from":"IDLE","to":"SPEC_WORK","trigger":"auto_subagent_complete","event":"start_research","loopCount":0,"specId":"user-auth","mode":"tdd","turnCount":3}}
-{"timestamp":"2026-05-29T05:39:15.456Z","localTimestamp":"2026-05-29T15:39:15.000+10:00","sessionId":"550e8400-e29b","type":"subagent_end","payload":{"agent":"pi-coder.researcher","model":"anthropic/claude-sonnet-4","durationMs":2233,"tokenUsage":{"input":1200,"output":3500,"cacheRead":6000,"cacheWrite":1500,"cost":0.07},"turns":5,"exitCode":0,"error":null,"outcome":"success","specId":"user-auth","mode":"tdd","turnCount":4}}
-{"timestamp":"2026-05-29T05:39:16.789Z","localTimestamp":"2026-05-29T15:39:16.000+10:00","sessionId":"550e8400-e29b","type":"turn_usage","payload":{"input":500,"output":800,"cacheRead":2000,"cacheWrite":500,"cost":0.02,"model":"anthropic/claude-sonnet-4","specId":"user-auth","fsmState":"SPEC_WORK","mode":"tdd","turnCount":5}}
+{"timestamp":"2026-05-29T05:39:13.219Z","localTimestamp":"2026-05-29T15:39:13.000+10:00","sessionId":"550e8400-e29b","type":"fsm_transition","payload":{"from":"IDLE","to":"SPEC_WORK","trigger":"auto_subagent_complete","event":"start_research","loopCount":0,"specId":"user-auth","mode":"dev","turnCount":3}}
+{"timestamp":"2026-05-29T05:39:15.456Z","localTimestamp":"2026-05-29T15:39:15.000+10:00","sessionId":"550e8400-e29b","type":"subagent_end","payload":{"agent":"pi-coder.researcher","model":"anthropic/claude-sonnet-4","durationMs":2233,"tokenUsage":{"input":1200,"output":3500,"cacheRead":6000,"cacheWrite":1500,"cost":0.07},"turns":5,"exitCode":0,"error":null,"outcome":"success","specId":"user-auth","mode":"dev","turnCount":4}}
+{"timestamp":"2026-05-29T05:39:16.789Z","localTimestamp":"2026-05-29T15:39:16.000+10:00","sessionId":"550e8400-e29b","type":"turn_usage","payload":{"input":500,"output":800,"cacheRead":2000,"cacheWrite":500,"cost":0.02,"model":"anthropic/claude-sonnet-4","specId":"user-auth","fsmState":"SPEC_WORK","mode":"dev","turnCount":5}}
 ```
 
 - **`timestamp`** — always UTC ISO 8601
@@ -1086,7 +1054,7 @@ All four agent `.md` files are copied to `.pi/agents/` during init. Edit them to
 
 | File | Controls |
 |---|---|
-| `pi-coder-orchestrator.md` | The orchestrator's subagent definition — name, package, tools | 
+| `pi-coder-dev.md` | The orchestrator's system prompt template — FSM diagram, tool list, config variables | 
 | `pi-coder-researcher.md` | Researcher behavior — investigation approach, output format |
 | `pi-coder-implementor.md` | Implementor behavior — RED/GREEN/IMPLEMENT mode boundaries, output format |
 | `pi-coder-reviewer.md` | Reviewer behavior — focus/skip areas, verdict format, severity levels |
@@ -1096,7 +1064,6 @@ All four agent `.md` files are copied to `.pi/agents/` during init. Edit them to
 | File | Mode | Controls |
 |---|---|---|
 | `pi-coder-dev.md` | Dev | Per-unit test strategy, IMPLEMENTING state for verify/skip, three implementation paths |
-| `pi-coder-orchestrator.md` | TDD | Full FSM lifecycle, RED/GREEN phases, per-unit TDD cycle |
 | `pi-coder-light.md` | Light | Simplified FSM, IMPLEMENTING state, reviewer fix classification |
 | `pi-coder-plan.md` | Plan | Researcher delegation only, no FSM/spec/git |
 
@@ -1478,14 +1445,13 @@ your-project/
 │           └── state.json   # Per-spec FSM state + evidence flags
 └── .pi/
     ├── agents/
-    │   ├── pi-coder-orchestrator.md    # Orchestrator system prompt (from prompts/)
+    │   ├── )
     │   ├── pi-coder-researcher.md      # Researcher agent definition
     │   ├── pi-coder-implementor.md     # Implementor agent definition
     │   └── pi-coder-reviewer.md        # Reviewer agent definition
     └── settings.json                   # subagents.disableBuiltins + pi settings
 ```
 
-Note: Orchestrator prompts live in `prompts/` (not `agents/`) to prevent pi-subagents from discovering them as delegatable targets. There are four prompt files: `pi-coder-dev.md` (Dev mode), `pi-coder-orchestrator.md` (TDD mode), `pi-coder-light.md` (Light mode), and `pi-coder-plan.md` (Plan mode).
 
 ## Architecture
 
@@ -1493,10 +1459,8 @@ Pi Coder follows a **"fat prompts, thin harness"** philosophy — the intelligen
 
 - **Extension** (`extensions/index.ts`) — event hooks, tool registration, commands
 - **Damage control** (`extensions/damage-control.ts`) — destructive command protection, applies to all sessions including subagents
-- **Prompts** (`prompts/`) — orchestrator identity for each mode: `pi-coder-dev.md` (Dev), `pi-coder-orchestrator.md` (TDD), `pi-coder-light.md` (Light), `pi-coder-plan.md` (Plan)
 - **Modules** (`src/`) — state machines (Dev + TDD + Light), state persistence, spec management, git abstraction, TDD runner, knowledge system, tools, logger
 - **Agent prompts** (`agents/`) — three `.md` files defining subagent behavior (researcher, implementor, reviewer)
-- **Orchestrator prompts** (`prompts/`) — templates with `{{variables}}` for runtime FSM injection. One file per mode: `pi-coder-dev.md` (Dev), `pi-coder-orchestrator.md` (TDD), `pi-coder-light.md` (Light), `pi-coder-plan.md` (Plan). NOT in `agents/` to prevent pi-subagents from discovering them as delegatable targets
 - **Skills** (`skills/`) — orchestrator procedural references: `pi-coder-dev/SKILL.md` (Dev), `pi-coder-tdd/SKILL.md` (TDD), `pi-coder-core/SKILL.md` (shared)
 
 The orchestrator has **bounded awareness** — it can `ls`, `find`, and `grep` to write effective delegation briefs, but it cannot `read` file contents, `edit`, `write`, or run `bash`. This forces delegation and preserves the context window for orchestration decisions.

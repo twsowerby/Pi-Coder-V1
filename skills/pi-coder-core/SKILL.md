@@ -72,17 +72,12 @@ Rules for decomposition:
 
 #### Unit Test Strategy Classification
 
-Each implementation unit has a `testStrategy` field:
+Each implementation unit requires a `testStrategy` field:
 - **`testStrategy: "tdd"`** (default when absent) — Standard RED/GREEN cycle with all guards enforced.
 - **`testStrategy: "verify"`** — IMPLEMENTING with test gate. The FSM blocks advancement until tests pass. Use this for units where test-first development isn't practical but testing IS needed after implementation (integration points, API surfaces). Provide `testStrategyRationale`.
 - **`testStrategy: "skip"`** — IMPLEMENTING with no test gate. Use for changes with no testable behavior (CSS/styling, config, docs, renames). Provide `testStrategyRationale`.
 
-**Backward compat**: The `approach` field is also accepted during Phase 1:
-- `approach: "tdd"` → `testStrategy: "tdd"`
-- `approach: "direct"` → `testStrategy: "skip"`
-- `approach: "component"` → `testStrategy: "tdd"` with `testSuite: "integration"`
-
-When saving the spec, provide `testStrategy` and `testStrategyRationale` (required for verify and skip). Include `approach` for backward compat if desired — it will be migrated on parse.
+When saving the spec, provide `testStrategy` and `testStrategyRationale` (required for verify and skip).
 
 When advancing to TDD_RED_WRITE or IMPLEMENTING, pass the `unitName` parameter to `pi_coder_advance_fsm` so the FSM can track the active unit.
 

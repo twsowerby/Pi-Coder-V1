@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(__dirname, "..");
-const orchestratorPromptPath = join(packageRoot, "prompts", "pi-coder-orchestrator.md");
+const orchestratorPromptPath = join(packageRoot, "prompts", "pi-coder-dev.md");
 
 function createTempDir(): string {
   const dir = join(tmpdir(), `pi-coder-spec13-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -38,8 +38,8 @@ function cleanupDir(dir: string): void {
 // ---------------------------------------------------------------------------
 
 describe("Spec 13 Phase 1: Orchestrator Prompt File", () => {
-  it("the .md file exists at prompts/pi-coder-orchestrator.md", () => {
-    assert.ok(existsSync(orchestratorPromptPath), "Missing prompts/pi-coder-orchestrator.md");
+  it("the .md file exists at prompts/pi-coder-dev.md", () => {
+    assert.ok(existsSync(orchestratorPromptPath), "Missing prompts/pi-coder-dev.md");
   });
 
   it("the file has valid YAML frontmatter with name and package", () => {
@@ -268,7 +268,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
       mkdirSync(agentsDir, { recursive: true });
 
       writeFileSync(
-        join(agentsDir, "pi-coder-orchestrator.md"),
+        join(agentsDir, "pi-coder-dev.md"),
         `---\nname: orchestrator\npackage: pi-coder\n---\n\nYou are a CUSTOM orchestrator. {{currentState}} {{fsmDiagram}} {{toolList}}`,
         "utf-8",
       );
@@ -289,7 +289,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
 
     const tempDir = createTempDir();
     try {
-      // No .pi/agents/pi-coder-orchestrator.md exists in tempDir
+      // No .pi/agents/pi-coder-dev.md exists in tempDir
       resetOrchestratorPromptCache();
       const template = loadOrchestratorPrompt(tempDir);
 
@@ -299,7 +299,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
     }
   });
 
-  it("init command copies pi-coder-orchestrator.md alongside other agent files", () => {
+  it("init command copies pi-coder-dev.md alongside other agent files", () => {
     const tempDir = createTempDir();
     try {
       const agentsDir = join(tempDir, ".pi", "agents");
@@ -324,23 +324,23 @@ describe("Spec 13 Phase 3: Customization Support", () => {
       }
 
       // Orchestrator prompt template comes from prompts/ directory
-      const orchestratorSource = join(packageRoot, "prompts", "pi-coder-orchestrator.md");
-      assert.ok(existsSync(orchestratorSource), "Package prompt source missing: prompts/pi-coder-orchestrator.md");
-      const orchestratorTarget = join(agentsDir, "pi-coder-orchestrator.md");
+      const orchestratorSource = join(packageRoot, "prompts", "pi-coder-dev.md");
+      assert.ok(existsSync(orchestratorSource), "Package prompt source missing: prompts/pi-coder-dev.md");
+      const orchestratorTarget = join(agentsDir, "pi-coder-dev.md");
       writeFileSync(orchestratorTarget, readFileSync(orchestratorSource, "utf-8"), "utf-8");
 
       // Verify all files were copied including orchestrator
-      assert.ok(existsSync(join(agentsDir, "pi-coder-orchestrator.md")), "Orchestrator prompt must be copied");
+      assert.ok(existsSync(join(agentsDir, "pi-coder-dev.md")), "Orchestrator prompt must be copied");
 
       // Verify the copied orchestrator prompt has template variables
-      const copiedContent = readFileSync(join(agentsDir, "pi-coder-orchestrator.md"), "utf-8");
+      const copiedContent = readFileSync(join(agentsDir, "pi-coder-dev.md"), "utf-8");
       assert.ok(copiedContent.includes("{{currentState}}"), "Copied orchestrator must have template vars");
     } finally {
       cleanupDir(tempDir);
     }
   });
 
-  it("init command skips pi-coder-orchestrator.md if it already exists", () => {
+  it("init command skips pi-coder-dev.md if it already exists", () => {
     const tempDir = createTempDir();
     try {
       const agentsDir = join(tempDir, ".pi", "agents");
@@ -348,16 +348,16 @@ describe("Spec 13 Phase 3: Customization Support", () => {
 
       // Pre-create the orchestrator file with custom content
       writeFileSync(
-        join(agentsDir, "pi-coder-orchestrator.md"),
+        join(agentsDir, "pi-coder-dev.md"),
         "MY CUSTOM ORCHESTRATOR PROMPT",
         "utf-8",
       );
 
       // Simulate the init copy logic: skip if exists
-      const target = join(agentsDir, "pi-coder-orchestrator.md");
+      const target = join(agentsDir, "pi-coder-dev.md");
 
       if (!existsSync(target)) {
-        const source = join(packageRoot, "prompts", "pi-coder-orchestrator.md");
+        const source = join(packageRoot, "prompts", "pi-coder-dev.md");
         const content = readFileSync(source, "utf-8");
         writeFileSync(target, content, "utf-8");
       }
@@ -370,7 +370,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
     }
   });
 
-  it("reset-agents command resets pi-coder-orchestrator.md alongside other files", () => {
+  it("reset-agents command resets pi-coder-dev.md alongside other files", () => {
     const tempDir = createTempDir();
     try {
       const agentsDir = join(tempDir, ".pi", "agents");
@@ -378,7 +378,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
 
       // Create existing customized files including orchestrator
       writeFileSync(
-        join(agentsDir, "pi-coder-orchestrator.md"),
+        join(agentsDir, "pi-coder-dev.md"),
         "CUSTOM ORCHESTRATOR CONTENT",
         "utf-8",
       );
@@ -404,13 +404,13 @@ describe("Spec 13 Phase 3: Customization Support", () => {
       }
 
       // Reset orchestrator from prompts/ directory
-      const orchestratorSource = join(packageRoot, "prompts", "pi-coder-orchestrator.md");
+      const orchestratorSource = join(packageRoot, "prompts", "pi-coder-dev.md");
       if (existsSync(orchestratorSource)) {
-        writeFileSync(join(agentsDir, "pi-coder-orchestrator.md"), readFileSync(orchestratorSource, "utf-8"), "utf-8");
+        writeFileSync(join(agentsDir, "pi-coder-dev.md"), readFileSync(orchestratorSource, "utf-8"), "utf-8");
       }
 
       // Verify orchestrator was reset to package default
-      const content = readFileSync(join(agentsDir, "pi-coder-orchestrator.md"), "utf-8");
+      const content = readFileSync(join(agentsDir, "pi-coder-dev.md"), "utf-8");
       assert.ok(content.includes("You are the Pi Coder orchestrator"), "Orchestrator must be reset to package default");
       assert.ok(!content.includes("CUSTOM"), "Custom content must be gone");
     } finally {
@@ -431,7 +431,7 @@ describe("Spec 13 Phase 3: Customization Support", () => {
         "utf-8",
       );
       writeFileSync(
-        join(agentsDir, "pi-coder-orchestrator.md"),
+        join(agentsDir, "pi-coder-dev.md"),
         "CUSTOM ORCHESTRATOR",
         "utf-8",
       );
@@ -452,9 +452,9 @@ describe("Spec 13 Phase 3: Customization Support", () => {
       }
 
       // Orchestrator from prompts/
-      const orchestratorSource = join(packageRoot, "prompts", "pi-coder-orchestrator.md");
+      const orchestratorSource = join(packageRoot, "prompts", "pi-coder-dev.md");
       if (existsSync(orchestratorSource)) {
-        writeFileSync(join(agentsDir, "pi-coder-orchestrator.md"), readFileSync(orchestratorSource, "utf-8"), "utf-8");
+        writeFileSync(join(agentsDir, "pi-coder-dev.md"), readFileSync(orchestratorSource, "utf-8"), "utf-8");
       }
 
       // Verify custom agent is untouched
@@ -515,7 +515,7 @@ describe("Spec 16 Phase 1: Orchestrator Prompt Discipline", () => {
       "Knowledge files",
       "Existing test discovery",
       "Existing test coverage",
-      "Unit name and approach",
+      "Unit name and strategy",
       "Test suite",
     ];
     for (const field of requiredFields) {

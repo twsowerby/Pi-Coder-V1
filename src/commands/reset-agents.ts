@@ -9,7 +9,7 @@ import { existsSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HandlerContext } from "../handlers/types.ts";
-import { resetOrchestratorPromptCache, resetLightModePromptCache, resetPlanModePromptCache } from "../prompts/prompt-builders.ts";
+import { resetLightModePromptCache, resetPlanModePromptCache, resetDevModePromptCache } from "../prompts/prompt-builders.ts";
 
 /** Get the package's default agents directory. */
 function getPackageAgentsDir(): string {
@@ -52,19 +52,19 @@ export function registerResetAgentsCommand(ctx: HandlerContext): void {
         reset.push(filename);
       }
 
-      // Reset orchestrator prompt from prompts/ directory
+      // Reset dev mode prompt from prompts/ directory
       const packagePromptsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts");
-      const orchestratorSource = join(packagePromptsDir, "pi-coder-orchestrator.md");
-      if (existsSync(orchestratorSource)) {
-        copyFileSync(orchestratorSource, join(agentsDir, "pi-coder-orchestrator.md"));
-        reset.push("pi-coder-orchestrator.md");
+      const devSource = join(packagePromptsDir, "pi-coder-dev.md");
+      if (existsSync(devSource)) {
+        copyFileSync(devSource, join(agentsDir, "pi-coder-dev.md"));
+        reset.push("pi-coder-dev.md");
       }
 
       // 3. Invalidate all prompt caches if any agent files were reset
       if (reset.length > 0) {
-        resetOrchestratorPromptCache();
         resetLightModePromptCache();
         resetPlanModePromptCache();
+        resetDevModePromptCache();
       }
 
       // 4. Report which files were reset

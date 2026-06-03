@@ -10,7 +10,7 @@ import type { PiCoderMode } from "../src/types.ts";
 // Tool lists per mode
 // ---------------------------------------------------------------------------
 
-/** Tools available when pi-coder TDD mode is active. Exported for Spec 10 commands. */
+/** Tools available when pi-coder Dev mode is active. Exported for Spec 10 commands. */
 export const ORCHESTRATOR_TOOLS = [
   "ls",
   "find",
@@ -64,7 +64,6 @@ export const MODE_TOOL_SETS: Record<PiCoderMode, string[]> = {
   off: NORMAL_TOOLS,
   plan: PLAN_TOOLS,
   light: LIGHT_TOOLS,
-  tdd: ORCHESTRATOR_TOOLS,
   dev: ORCHESTRATOR_TOOLS,
 };
 

@@ -16,8 +16,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { StateMachine } from "../state-machine.ts";
-import type { StateMachineJSON } from "../state-machine.ts";
+import { DevStateMachine } from "../dev-state-machine.ts";
+import type { DevDevStateMachineJSON } from "../dev-state-machine.ts";
 import { SpecManager } from "../spec.ts";
 import { GitOperations } from "../git.ts";
 import { TddRunner } from "../tdd-runner.ts";
@@ -164,7 +164,7 @@ function createMockExec(testResults?: { exitCode: number; output: string }) {
 
 let tempDir: string;
 let config: PiCoderConfig;
-let stateMachine: StateMachine;
+let stateMachine: DevStateMachine;
 let specManager: SpecManager;
 let gitOps: GitOperations;
 let tddRunner: TddRunner;
@@ -198,7 +198,7 @@ function setupFixture(testConfig?: Partial<PiCoderConfig>, testResults?: { exitC
   const knowledgeDir = join(tempDir, ".pi-coder", "knowledge");
   const specsDir = join(tempDir, ".pi-coder", "specs");
 
-  stateMachine = new StateMachine(config);
+  stateMachine = new DevStateMachine(config);
   specManager = new SpecManager(specsDir);
   gitOps = new GitOperations(config, mockExec as ExecFn);
   tddRunner = new TddRunner(config, mockExec as ExecFn);
@@ -217,7 +217,7 @@ function teardownFixture(): void {
 
 
 /** Force a transition with required evidence set. */
-function forceTransition(sm: StateMachine, to: FSMState): void {
+function forceTransition(sm: DevStateMachine, to: FSMState): void {
   const from = sm.currentState;
   if (from === "SPEC_WORK" && to === "SPEC_APPROVED") {
     sm.setEvidence("spec_saved");
@@ -255,7 +255,7 @@ describe("Phase 1: Test Infrastructure", () => {
   });
 
   it("instantiates all components with test fixture paths", () => {
-    assert.ok(stateMachine instanceof StateMachine);
+    assert.ok(stateMachine instanceof DevStateMachine);
     assert.ok(specManager instanceof SpecManager);
     assert.ok(gitOps instanceof GitOperations);
     assert.ok(tddRunner instanceof TddRunner);
@@ -689,7 +689,7 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.ok(stateMachine.hasEvidence("spec_saved"));
 
     // Simulate: toggle OFF (persist state)
-    const snapshot: StateMachineJSON = stateMachine.toJSON();
+    const snapshot: DevStateMachineJSON = stateMachine.toJSON();
     assert.strictEqual(snapshot.currentState, "TDD_RED_WRITE");
     assert.ok(snapshot.evidence.includes("spec_saved"));
     assert.strictEqual(snapshot.gitRef, "abc1234");
@@ -701,9 +701,9 @@ describe("Phase 3: Failure & Edge Cases", () => {
     assert.strictEqual(persistedState.fsmState.currentState, "TDD_RED_WRITE");
 
     // Simulate: toggle ON — restore from persisted state
-    const restoredMachine = StateMachine.fromJSON(persistedState.fsmState, config);
+    const restoredMachine = DevStateMachine.fromJSON(persistedState.fsmState, config);
     assert.strictEqual(restoredMachine.currentState, "TDD_RED_WRITE");
-    // activeSpecId is module-level, not in StateMachineJSON
+    // activeSpecId is module-level, not in DevStateMachineJSON
     // Check that evidence was preserved
     assert.ok(restoredMachine.hasEvidence("spec_saved"));
     assert.strictEqual(restoredMachine.gitRef, "abc1234");

@@ -10,12 +10,12 @@
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import type { PiCoderConfig, FSMState } from "../src/types.ts";
-import { StateMachine } from "../src/state-machine.ts";
+import type { PiCoderConfig, DevDevFSMState } from "../src/types.ts";
+import { DevStateMachine } from "../src/dev-state-machine.ts";
 import { LightStateMachine } from "../src/light-state-machine.ts";
 import type { IStateMachine } from "../src/types.ts";
 import type { EvidenceFlag } from "../src/types.ts";
-import type { StateMachineJSON } from "../src/state-machine.ts";
+import type { DevStateMachineJSON } from "../src/dev-state-machine.ts";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -67,7 +67,7 @@ function makeConfig(overrides?: Partial<PiCoderConfig>): PiCoderConfig {
 
 
 /** Force a transition with required evidence set. */
-function forceTransition(sm: StateMachine, to: string): void {
+function forceTransition(sm: DevStateMachine, to: string): void {
   const from = sm.currentState;
   if (from === "SPEC_WORK" && to === "SPEC_APPROVED") {
     sm.setEvidence("spec_saved");
@@ -103,7 +103,7 @@ describe("Phase 1: Extension Foundation", () => {
   it("should export piCoderMode (defaults to 'tdd' when extension is loaded)", async () => {
     const mod = await import("./index.ts");
     // Module-level state defaults to 'tdd' — extension is active on load.
-    assert.ok(["off", "light", "tdd"].includes(mod.piCoderMode));
+    assert.ok(["off", "light", "dev"].includes(mod.piCoderMode));
   });
 
   it("should export stateMachine module variable", async () => {
@@ -136,7 +136,7 @@ describe("Phase 2: System Prompt", () => {
 
   it("state machine canNudge returns correct expected actions for each action state", () => {
     // Verify canNudge for states reachable from the FSM path
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
 
     // IDLE
     assert.strictEqual(sm.canNudge().shouldNudge, false);
@@ -157,7 +157,7 @@ TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →
 (NEEDS_CHANGES → TDD_RED_WRITE) | BLOCKED → user intervention`;
 
     // Verify all expected states appear
-    const requiredStates: FSMState[] = [
+    const requiredStates: DevFSMState[] = [
       "IDLE", "SPEC_WORK", "SPEC_APPROVED",
       "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
       "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
@@ -175,7 +175,7 @@ TDD_GREEN_WRITE → TDD_GREEN_VALIDATE → REVIEWING →
 
 describe("Phase 3: FSM Event Guards", () => {
   it("isActionAllowed allows pi_coder_run_tests in all states (alwaysAllowed)", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     // pi_coder_run_tests is in alwaysAllowed — allowed in ALL states
     assert.strictEqual(sm.isActionAllowed("pi_coder_run_tests"), true, "Allowed in IDLE");
     forceTransition(sm, "SPEC_WORK");
@@ -183,7 +183,7 @@ describe("Phase 3: FSM Event Guards", () => {
   });
 
   it("isActionAllowed allows pi_coder_run_tests in TDD_RED_VALIDATE", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     // Navigate to TDD_RED_VALIDATE
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
@@ -194,7 +194,7 @@ describe("Phase 3: FSM Event Guards", () => {
   });
 
   it("isActionAllowed allows subagent with researcher in SPEC_WORK and TDD states", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     // In IDLE, researcher delegation is not allowed
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), false);
 
@@ -206,7 +206,7 @@ describe("Phase 3: FSM Event Guards", () => {
   });
 
   it("isActionAllowed blocks bash and git commands for the orchestrator", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     assert.strictEqual(sm.isActionAllowed("bash"), false);
     assert.strictEqual(sm.isActionAllowed("edit"), false);
     assert.strictEqual(sm.isActionAllowed("write"), false);
@@ -214,21 +214,21 @@ describe("Phase 3: FSM Event Guards", () => {
   });
 
   it("isActionAllowed allows ls/find/grep in any state", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     assert.strictEqual(sm.isActionAllowed("ls"), true);
     assert.strictEqual(sm.isActionAllowed("find"), true);
     assert.strictEqual(sm.isActionAllowed("grep"), true);
   });
 
   it("isActionAllowed allows upsert_knowledge in any state", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     assert.strictEqual(sm.isActionAllowed("upsert_knowledge"), true);
   });
 });
 
 describe("Phase 3: Auto-Transitions", () => {
   it("RED validate + tests fail → TDD_GREEN_WRITE", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -240,7 +240,7 @@ describe("Phase 3: Auto-Transitions", () => {
   });
 
   it("RED validate + tests pass → BLOCKED", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -252,7 +252,7 @@ describe("Phase 3: Auto-Transitions", () => {
   });
 
   it("GREEN validate + tests pass → REVIEWING", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -265,7 +265,7 @@ describe("Phase 3: Auto-Transitions", () => {
   });
 
   it("GREEN validate + tests fail → TDD_GREEN_WRITE (loop)", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -279,7 +279,7 @@ describe("Phase 3: Auto-Transitions", () => {
   });
 
   it("Subagent completion in SPEC_WORK stays in SPEC_WORK (multiple rounds)", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     // After researcher completes, FSM stays in SPEC_WORK — orchestrator can
     // delegate again or advance to SPEC_APPROVED via pi_coder_advance_fsm
@@ -287,7 +287,7 @@ describe("Phase 3: Auto-Transitions", () => {
   });
 
   it("state machine serializes via toJSON", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     const json = sm.toJSON();
     assert.strictEqual(json.currentState, "SPEC_WORK");
@@ -297,13 +297,13 @@ describe("Phase 3: Auto-Transitions", () => {
 
   it("state machine restores via fromJSON", () => {
     const config = makeConfig();
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
     forceTransition(sm, "SPEC_WORK");
     sm.setGitRef("abc1234");
     sm.setEvidence("spec_saved");
 
     const json = sm.toJSON();
-    const restored = StateMachine.fromJSON(json, config);
+    const restored = DevStateMachine.fromJSON(json, config);
     assert.strictEqual(restored.currentState, "SPEC_WORK");
     assert.strictEqual(restored.gitRef, "abc1234");
     assert.ok(restored.hasEvidence("spec_saved"));
@@ -352,7 +352,7 @@ describe("Phase 4: Nudge System", () => {
   });
 
   it("canNudge returns expected action for RESEARCHING", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     const nudge = sm.canNudge();
     assert.strictEqual(nudge.shouldNudge, true);
@@ -361,7 +361,7 @@ describe("Phase 4: Nudge System", () => {
   });
 
   it("canNudge returns expected action for TDD_RED_VALIDATE", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -373,7 +373,7 @@ describe("Phase 4: Nudge System", () => {
   });
 
   it("canNudge returns no nudge for IDLE", () => {
-    const sm = new StateMachine(makeConfig());
+    const sm = new DevStateMachine(makeConfig());
     const nudge = sm.canNudge();
     assert.strictEqual(nudge.shouldNudge, false);
   });
@@ -386,7 +386,7 @@ describe("Phase 4: Nudge System", () => {
 
   it("circuit breaker trips after maxLoops review cycles", () => {
     const config = makeConfig({ maxLoops: 2 });
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
 
     // Navigate to REVIEWING
     forceTransition(sm, "SPEC_WORK");
@@ -431,7 +431,7 @@ describe("Phase 5: Subagent Delegation Guards", () => {
   // These tests verify the FSM allows the three pi-coder agents in the right states.
   it("pi-coder.researcher is allowed in SPEC_WORK and TDD implementation states", () => {
     const config = makeConfig();
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), false); // IDLE
     forceTransition(sm, "SPEC_WORK");
     assert.strictEqual(sm.isActionAllowed("subagent", "pi-coder.researcher"), true); // SPEC_WORK
@@ -445,7 +445,7 @@ describe("Phase 5: Subagent Delegation Guards", () => {
 
   it("pi-coder.implementor is allowed only in implementation states", () => {
     const config = makeConfig();
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -458,7 +458,7 @@ describe("Phase 5: Subagent Delegation Guards", () => {
 
   it("pi-coder.reviewer is allowed only in REVIEWING state", () => {
     const config = makeConfig();
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
     forceTransition(sm, "SPEC_WORK");
     forceTransition(sm, "SPEC_APPROVED");
     forceTransition(sm, "GIT_CHECKPOINT");
@@ -477,7 +477,7 @@ describe("Phase 5: Subagent Delegation Guards", () => {
   //   - Only then checks FSM state
   it("built-in agents (researcher, reviewer, worker) have no special FSM rules", () => {
     const config = makeConfig();
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
     forceTransition(sm, "SPEC_WORK");
     // FSM doesn't explicitly block "researcher" — that's the tool_call handler's job
     // FSM only checks agent-role match for known pi-coder subagents
@@ -563,8 +563,8 @@ describe("FSM mode alignment on session start", () => {
   it("re-creates LightStateMachine when mode is restored to 'light'", () => {
     const config = makeConfig();
     // Simulate the bug: TDD SM created with default mode, then mode changed to light
-    let sm: IStateMachine = new StateMachine(config);
-    assert.ok(sm instanceof StateMachine, "Should start as TDD StateMachine");
+    let sm: IStateMachine = new DevStateMachine(config);
+    assert.ok(sm instanceof DevStateMachine, "Should start as DevStateMachine");
 
     // Simulate mode restoration — the same check from the fix
     const restoredMode = "light";
@@ -575,22 +575,22 @@ describe("FSM mode alignment on session start", () => {
     assert.ok(sm instanceof LightStateMachine, "Should become LightStateMachine after re-alignment");
   });
 
-  it("re-creates StateMachine when mode is restored to 'tdd'", () => {
+  it("re-creates DevStateMachine when mode is restored to 'dev'", () => {
     const config = makeConfig();
     let sm: IStateMachine = new LightStateMachine(config);
     assert.ok(sm instanceof LightStateMachine, "Should start as LightStateMachine");
 
-    const restoredMode = "tdd";
-    if (restoredMode === "tdd" && !(sm instanceof StateMachine)) {
-      sm = new StateMachine(config);
+    const restoredMode = "dev";
+    if (restoredMode === "dev" && !(sm instanceof DevStateMachine)) {
+      sm = new DevStateMachine(config);
     }
 
-    assert.ok(sm instanceof StateMachine, "Should become StateMachine after re-alignment");
+    assert.ok(sm instanceof DevStateMachine, "Should become DevStateMachine after re-alignment");
   });
 
   it("sets stateMachine to null for plan/off modes", () => {
     const config = makeConfig();
-    let sm: IStateMachine | null = new StateMachine(config);
+    let sm: IStateMachine | null = new DevStateMachine(config);
 
     const restoredMode = "plan";
     if (restoredMode === "plan" || restoredMode === "off") {
@@ -618,7 +618,7 @@ describe("FSM mode alignment on session start", () => {
 
   it("TDD state machine does NOT have IMPLEMENTING transition", () => {
     const config = makeConfig();
-    const sm = new StateMachine(config);
+    const sm = new DevStateMachine(config);
     sm.setEvidence("spec_saved");
     sm.setEvidence("spec_user_approved");
     sm.transition("SPEC_WORK");

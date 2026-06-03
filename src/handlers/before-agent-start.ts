@@ -8,7 +8,7 @@
 
 import type { PiCoderMode } from "../types.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
-import { buildOrchestratorPrompt, buildLightModePrompt, buildPlanModePrompt, buildDevModePrompt } from "../prompts/prompt-builders.ts";
+import { buildLightModePrompt, buildPlanModePrompt, buildDevModePrompt } from "../prompts/prompt-builders.ts";
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 import type { HandlerContext } from "../handlers/types.ts";
 
@@ -36,14 +36,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
 
     // Build the appropriate prompt based on mode
     let orchestratorPrompt: string;
-    if (ctx.piCoderMode === "tdd") {
-      orchestratorPrompt = buildOrchestratorPrompt(
-        ctx.stateMachine!,
-        filteredSnippets,
-        ctx.config,
-        ctx.activeSpecId,
-      );
-    } else if (ctx.piCoderMode === "dev") {
+    if (ctx.piCoderMode === "dev") {
       orchestratorPrompt = buildDevModePrompt(ctx.stateMachine!, filteredSnippets, ctx.config, ctx.activeSpecId);
     } else if (ctx.piCoderMode === "light") {
       orchestratorPrompt = buildLightModePrompt(ctx.stateMachine!, filteredSnippets, ctx.config, ctx.activeSpecId);
@@ -56,10 +49,9 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
 
     // Prepend active mode indicator
     const modeIndicator: Record<PiCoderMode, string> = {
-      plan: "[MODE: PLAN] Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
-      light: "[MODE: LIGHT] FSM is active. Follow the lifecycle: spec → implement → review → merge. No TDD phases.",
-      tdd: "[MODE: TDD] FSM state machine is active. Follow the TDD lifecycle: spec → RED/GREEN → review → merge.",
       dev: "[MODE: DEV] FSM is active with per-unit test strategy (tdd/verify/skip). Follow the FSM lifecycle.",
+      light: "[MODE: LIGHT] FSM is active. Follow the lifecycle: spec → implement → review → merge. No TDD phases.",
+      plan: "[MODE: PLAN] Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
       off: "", // Never reached — off mode returns early
     };
     fullPrompt = modeIndicator[ctx.piCoderMode] + "\n\n" + fullPrompt;
@@ -84,7 +76,6 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
     const allSkills = systemPromptOptions.skills ?? [];
     const filteredSkills = allSkills.filter(skill => {
       if (skill.name === 'pi-coder-core') return true;
-      if (ctx.piCoderMode === 'tdd' && skill.name === 'pi-coder-tdd') return true;
       if (ctx.piCoderMode === 'dev' && skill.name === 'pi-coder-dev') return true;
       if (ctx.piCoderMode === 'light' && skill.name === 'pi-coder-light') return true;
       if (ctx.piCoderMode === 'plan' && skill.name === 'pi-coder-plan') return true;
@@ -107,7 +98,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
     // Nudge System (TDD, Light, and Dev modes)
     // -------------------------------------------------------------------
 
-    if (ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light" || ctx.piCoderMode === "dev") {
+    if (ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") {
       // Increment turn counter
       ctx.nudgeEngine.state.turnsSinceEntry++;
 

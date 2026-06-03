@@ -321,9 +321,7 @@ function serializeSpec(spec: SpecFile): string {
     lines.push("## Implementation Plan");
     for (const unit of spec.implementationPlan) {
       const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
-      const strategyStr = unit.testStrategy ? ` (strategy: ${unit.testStrategy})` : 
-                        unit.approach === "direct" ? " (approach: direct)" : 
-                        unit.approach === "component" ? " (approach: component)" : "";
+      const strategyStr = unit.testStrategy ? ` (strategy: ${unit.testStrategy})` : "";
       const rationaleStr = unit.testStrategyRationale ? ` — ${unit.testStrategyRationale}` : "";
       const suiteStr = unit.testSuite ? ` (suite: ${unit.testSuite})` : "";
       const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
@@ -445,7 +443,7 @@ function extractTextSection(content: string, heading: string): string {
  * Extract the Implementation Plan section from a spec file.
  *
  * Format:
- *   - **Unit Name** [AC1, AC2] (approach: direct|component) (depends on: Other Unit)
+ *   - **Unit Name** [AC1, AC2] (strategy: tdd|verify|skip) (depends on: Other Unit)
  *     - `path/to/file.ts`
  *
  * Returns an array of ImplementationUnit objects.
@@ -464,8 +462,8 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
   const section = sectionMatch[1].trim();
   const units: ImplementationUnit[] = [];
 
-  // Match unit lines: - **Name** [AC1, AC2] optionally (approach: direct/tdd) optionally (depends on: X, Y)
-  // The approach and depends-on can appear in any order after the AC refs
+  // Match unit lines: - **Name** [AC1, AC2] optionally (strategy: tdd|verify|skip) optionally (depends on: X, Y)
+  // The strategy and depends-on can appear in any order after the AC refs
   const unitRegex = /^- \*\*(.+?)\*\*\s*\[([^\]]+)\](.*)$/gm;
   let unitMatch: RegExpExecArray | null;
 
@@ -504,33 +502,16 @@ function extractImplementationPlan(content: string): ImplementationUnit[] {
       acceptanceCriteriaIndices: acRefs,
       keyFiles,
       dependsOn,
+      testStrategy: "tdd", // default; may be overwritten by strategy match below
     };
 
-    // Parse strategy (new format)
+    // Parse strategy field
     const strategyMatch = trailing.match(/\(strategy:\s*(tdd|verify|skip)\)/i);
     if (strategyMatch) {
       unit.testStrategy = strategyMatch[1].toLowerCase() as TestStrategy;
-    }
-
-    // Backward compat: if no strategy, check for old approach field
-    if (!unit.testStrategy) {
-      const approachMatch = trailing.match(/\(approach:\s*(tdd|direct|component)\)/i);
-      if (approachMatch) {
-        switch (approachMatch[1].toLowerCase()) {
-          case "tdd":       unit.testStrategy = "tdd"; break;
-          case "direct":    unit.testStrategy = "skip"; break;
-          case "component": unit.testStrategy = "tdd"; if (!unit.testSuite) unit.testSuite = "integration"; break;
-        }
-        // Also set approach for backward compat
-        if (approachMatch[1].toLowerCase() === "direct") {
-          unit.approach = "direct";
-        } else if (approachMatch[1].toLowerCase() === "component") {
-          unit.approach = "component";
-        }
-      } else {
-        // No strategy and no approach — default to tdd (matches current behavior)
-        unit.testStrategy = "tdd";
-      }
+    } else {
+      // No strategy found — default to tdd
+      unit.testStrategy = "tdd";
     }
 
     // Rationale extraction

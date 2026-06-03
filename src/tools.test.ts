@@ -11,8 +11,8 @@
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import type { PiCoderConfig, PiCoderMode, FSMState, GitCheckpointResult, TestRunResult } from "./types.ts";
-import { StateMachine } from "./state-machine.ts";
+import type { PiCoderConfig, PiCoderMode, DevFSMState, GitCheckpointResult, TestRunResult } from "./types.ts";
+import { DevStateMachine } from "./dev-state-machine.ts";
 import { registerTools, type ToolDependencies } from "./tools.ts";
 
 // ---------------------------------------------------------------------------
@@ -179,7 +179,7 @@ function createMockKnowledgeStore() {
 
 function createMockSpecManager() {
   const calls: Array<{ method: string; args: unknown[] }> = [];
-  const specs = new Map<string, { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[] }>; status: string }>();
+  const specs = new Map<string, { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[]; testStrategy: string }>; status: string }>();
   let createShouldThrow = false;
   let createError = "Spec error";
 
@@ -192,7 +192,7 @@ function createMockSpecManager() {
     },
     specManager: {
       specsDir: "/tmp/test-specs",
-      async createSpec(spec: { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[] }>; status: string }) {
+      async createSpec(spec: { id: string; title: string; acceptanceCriteria: string[]; constraints: string[]; keyFiles: string[]; prunedContext: string; implementationPlan: Array<{ name: string; acceptanceCriteriaIndices: number[]; keyFiles: string[]; dependsOn: string[]; testStrategy: string }>; status: string }) {
         calls.push({ method: "createSpec", args: [spec] });
         if (createShouldThrow) throw new Error(createError);
         specs.set(spec.id, spec);
@@ -225,7 +225,7 @@ function createMockSpecManager() {
 /** Build a full set of mock dependencies. */
 function setupMocks(config?: PiCoderConfig) {
   const cfg = config ?? makeConfig();
-  const sm = new StateMachine(cfg);
+  const sm = new DevStateMachine(cfg);
   const mockGit = createMockGitOps();
   const mockTdd = createMockTddRunner();
   const mockKnowledge = createMockKnowledgeStore();
@@ -238,7 +238,7 @@ function setupMocks(config?: PiCoderConfig) {
     stateMachine: { get current() { return sm; } },
     activeSpecId: { get current() { return mockActiveSpecId; } },
     setActiveSpecId: (id: string | null) => { mockActiveSpecId = id; },
-    piCoderMode: { get current() { return "tdd" as PiCoderMode; } },
+    piCoderMode: { get current() { return "dev" as PiCoderMode; } },
     gitOps: mockGit.gitOps as unknown as import("../git.js").GitOperations,
     tddRunner: mockTdd.tddRunner as unknown as import("../tdd-runner.js").TddRunner,
     knowledgeStore: mockKnowledge.knowledgeStore as unknown as import("../knowledge.js").KnowledgeStore,
@@ -258,8 +258,8 @@ function setupMocks(config?: PiCoderConfig) {
 }
 
 /** Helper: advance the state machine through transitions to a target state. */
-function advanceToState(sm: StateMachine, target: FSMState): void {
-  const path: FSMState[] = [
+function advanceToState(sm: DevStateMachine, target: DevFSMState): void {
+  const path: DevFSMState[] = [
     "IDLE", "SPEC_WORK", "SPEC_APPROVED",
     "GIT_CHECKPOINT", "TDD_RED_WRITE", "TDD_RED_VALIDATE",
     "TDD_GREEN_WRITE", "TDD_GREEN_VALIDATE", "REVIEWING",
@@ -1053,8 +1053,8 @@ describe("Phase 6: Spec File Tools", () => {
       keyFiles: ["src/auth.ts"],
       prunedContext: "Auth module uses JWT tokens",
       implementationPlan: [
-        { name: "Login flow", acceptanceCriteriaIndices: [0], keyFiles: ["src/auth.ts"], dependsOn: [] },
-        { name: "Logout flow", acceptanceCriteriaIndices: [1], keyFiles: ["src/auth.ts"], dependsOn: ["Login flow"] },
+        { name: "Login flow", acceptanceCriteriaIndices: [0], keyFiles: ["src/auth.ts"], dependsOn: [], testStrategy: "tdd" },
+        { name: "Logout flow", acceptanceCriteriaIndices: [1], keyFiles: ["src/auth.ts"], dependsOn: ["Login flow"], testStrategy: "tdd" },
       ],
     });
     assert.ok(!result.isError, "Should succeed");
@@ -1185,10 +1185,10 @@ describe("Phase 6: pi_coder_advance_fsm fixType parameter", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Unit 3: pi_coder_advance_fsm with unitName and direct approach
+// Unit 3: pi_coder_advance_fsm with unitName and skip test strategy
 // ---------------------------------------------------------------------------
 
-describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
+describe("Unit 3: pi_coder_advance_fsm unitName and skip test strategy", () => {
   it("sets currentUnitName when unitName is provided with TDD_RED_WRITE", async () => {
     const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
     advanceToState(sm, "GIT_CHECKPOINT");
@@ -1205,7 +1205,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["config.json"],
       prunedContext: "Config update",
       implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], testStrategy: "skip" },
       ],
     });
 
@@ -1217,7 +1217,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
     assert.strictEqual(sm.currentUnitName, "Config update");
   });
 
-  it("auto-sets test_run_this_state evidence for direct approach units", async () => {
+  it("auto-sets test_run_this_state evidence for skip strategy units", async () => {
     const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
     advanceToState(sm, "GIT_CHECKPOINT");
     setActiveSpec("test-spec");
@@ -1233,7 +1233,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["config.json"],
       prunedContext: "Config update",
       implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], testStrategy: "skip" },
       ],
     });
 
@@ -1245,14 +1245,14 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
     assert.ok(sm.hasEvidence("test_run_this_state"), "Should auto-set test_run_this_state for direct units");
   });
 
-  it("does NOT auto-set test_run_this_state for TDD approach units", async () => {
+  it("does NOT auto-set test_run_this_state for TDD strategy units", async () => {
     const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
     advanceToState(sm, "GIT_CHECKPOINT");
     setActiveSpec("test-spec");
     sm.setEvidence("spec_saved");
     sm.setEvidence("spec_user_approved");
 
-    // Save a spec with a TDD unit (explicit approach)
+    // Save a spec with a TDD unit (explicit testStrategy)
     await executeTool(tools, "pi_coder_save_spec", {
       id: "test-spec",
       title: "Test Spec",
@@ -1261,7 +1261,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["src/feature.ts"],
       prunedContext: "Feature implementation",
       implementationPlan: [
-        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [], approach: "tdd" },
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [], testStrategy: "tdd" },
       ],
     });
 
@@ -1277,14 +1277,14 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
     assert.ok(!sm.hasEvidence("test_run_this_state"), "Should NOT auto-set test_run_this_state for TDD units");
   });
 
-  it("does NOT auto-set test_run_this_state when unit has no approach (undefined = tdd)", async () => {
+  it("does NOT auto-set test_run_this_state when unit is tdd strategy (default)", async () => {
     const { tools, sm, setActiveSpec, mockSpec } = setupMocks();
     advanceToState(sm, "GIT_CHECKPOINT");
     setActiveSpec("test-spec");
     sm.setEvidence("spec_saved");
     sm.setEvidence("spec_user_approved");
 
-    // Save a spec with a unit that has no approach
+    // Save a spec with a unit that has tdd testStrategy
     await executeTool(tools, "pi_coder_save_spec", {
       id: "test-spec",
       title: "Test Spec",
@@ -1293,7 +1293,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["src/feature.ts"],
       prunedContext: "Feature implementation",
       implementationPlan: [
-        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [] },
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [], testStrategy: "tdd" },
       ],
     });
 
@@ -1305,7 +1305,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       unitName: "Feature",
     });
 
-    assert.ok(!sm.hasEvidence("test_run_this_state"), "Should NOT auto-set test_run_this_state for units with undefined approach");
+    assert.ok(!sm.hasEvidence("test_run_this_state"), "Should NOT auto-set test_run_this_state for TDD strategy units");
   });
 
   it("advances without unitName (backward compat)", async () => {
@@ -1323,7 +1323,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
     assert.strictEqual(sm.currentUnitName, null, "currentUnitName should remain null when no unitName provided");
   });
 
-  it("saves spec with approach field on implementation plan units", async () => {
+  it("saves spec with testStrategy field on implementation plan units", async () => {
     const { tools, sm, mockSpec } = setupMocks();
     const result = await executeTool(tools, "pi_coder_save_spec", {
       id: "mixed-units",
@@ -1333,17 +1333,17 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["config.json", "src/feature.ts"],
       prunedContext: "Mixed spec",
       implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
-        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: [], approach: "tdd" },
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], testStrategy: "skip" },
+        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: [], testStrategy: "tdd" },
       ],
     });
-    assert.ok(!result.isError, "Should succeed saving spec with approach fields");
-    // Verify approach was persisted
+    assert.ok(!result.isError, "Should succeed saving spec with testStrategy fields");
+    // Verify testStrategy was persisted
     const specCall = mockSpec.calls.find(c => c.method === "createSpec");
     assert.ok(specCall, "Should have called createSpec");
-    const savedSpec = specCall!.args[0] as { implementationPlan: Array<{ name: string; approach?: string }> };
-    assert.strictEqual(savedSpec.implementationPlan[0].approach, "direct");
-    assert.strictEqual(savedSpec.implementationPlan[1].approach, "tdd");
+    const savedSpec = specCall!.args[0] as { implementationPlan: Array<{ name: string; testStrategy: string }> };
+    assert.strictEqual(savedSpec.implementationPlan[0].testStrategy, "skip");
+    assert.strictEqual(savedSpec.implementationPlan[1].testStrategy, "tdd");
   });
 
   it("does NOT auto-set evidence when advancing from NEEDS_CHANGES (prevents infinite loop)", async () => {
@@ -1363,7 +1363,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["config.json"],
       prunedContext: "Config update",
       implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], testStrategy: "skip" },
       ],
     });
 
@@ -1415,7 +1415,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
       keyFiles: ["config.json"],
       prunedContext: "Config update",
       implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
+        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], testStrategy: "skip" },
       ],
     });
 
@@ -1441,7 +1441,7 @@ describe("Unit 3: pi_coder_advance_fsm unitName and direct approach", () => {
     // (it may have been set by running tests, which is fine —
     //  but the isDirectUnit check should return false for green exits)
     // The key invariant: the advance_fsm tool did NOT auto-set evidence
-    // based on the direct approach when exiting GREEN_VALIDATE
+    // based on the skip strategy when exiting GREEN_VALIDATE
     // We can't check a negative, but the isGreenExit guard ensures
     // the auto-set never fires from this state
   });

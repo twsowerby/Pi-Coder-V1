@@ -167,7 +167,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // In Light mode, the extension's tool_call handler validates against
       // LightStateMachine.ACTION_RULES instead — both enforce FSM state, but
       // the tool-level check provides defense-in-depth for TDD only.
-      if (deps.piCoderMode.current === "tdd") {
+      if (deps.piCoderMode.current === "dev") {
         // Validate FSM state
         if (!smRef.current.isActionAllowed("pi_coder_git")) {
           return {
@@ -209,7 +209,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           break;
         }
         case "checkpoint": {
-          if (!activeSpecIdRef.current && deps.piCoderMode.current === "tdd") {
+          if (!activeSpecIdRef.current && deps.piCoderMode.current === "dev") {
             return {
               content: [{ type: "text" as const, text: "Error: Cannot checkpoint without an active spec. Save the spec with pi_coder_save_spec first." }],
               details: { success: false, error: "No active spec ID — save spec before checkpointing", operation: action },
@@ -575,8 +575,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
         acceptanceCriteriaIndices: Type.Array(Type.Number(), { description: "0-based indices into acceptanceCriteria array" }),
         keyFiles: Type.Array(Type.String(), { description: "File paths for this unit" }),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Names of units this depends on" })),
-        approach: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("direct"), Type.Literal("component")], { description: "Approach: 'tdd' = standard RED/GREEN. 'direct' = skip RED. 'component' = RED/GREEN with integration tests. DEPRECATED — use testStrategy instead." })),
-        testStrategy: Type.Optional(Type.Union([Type.Literal("tdd"), Type.Literal("verify"), Type.Literal("skip")], { description: "Test strategy. tdd = full RED/GREEN cycle. verify = IMPLEMENTING with test gate. skip = IMPLEMENTING with no test gate." })),
+        testStrategy: Type.Union([Type.Literal("tdd"), Type.Literal("verify"), Type.Literal("skip")], { description: "Test strategy. tdd = full RED/GREEN cycle. verify = IMPLEMENTING with test gate. skip = IMPLEMENTING with no test gate." }),
         testStrategyRationale: Type.Optional(Type.String({ description: "Why this test strategy was chosen. Required for verify and skip." })),
         testSuite: Type.Optional(Type.String({ description: "Which test suite to validate against (must match a key in testCommands config, e.g. 'unit', 'component', 'e2e')" })),
       }), { description: "Ordered list of atomic implementation units" })),
@@ -611,9 +610,8 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             acceptanceCriteriaIndices: u.acceptanceCriteriaIndices,
             keyFiles: u.keyFiles,
             dependsOn: u.dependsOn ?? [],
-            approach: u.approach,        // Keep for backward compat
-            testStrategy: u.testStrategy, // NEW
-            testStrategyRationale: u.testStrategyRationale, // NEW
+            testStrategy: u.testStrategy,
+            testStrategyRationale: u.testStrategyRationale,
             testSuite: u.testSuite,
           })) ?? [],
           status: smRef.current.currentState,
@@ -695,9 +693,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           lines.push("", "## Implementation Plan");
           for (const unit of spec.implementationPlan) {
             const acRefs = unit.acceptanceCriteriaIndices.map((i) => `AC${i + 1}`).join(", ");
-            const strategyStr = unit.testStrategy ? ` (strategy: ${unit.testStrategy})` : 
-                              unit.approach === "direct" ? " (approach: direct)" : 
-                              unit.approach === "component" ? " (approach: component)" : "";
+            const strategyStr = unit.testStrategy ? ` (strategy: ${unit.testStrategy})` : "";
             const deps = unit.dependsOn.length > 0 ? ` (depends on: ${unit.dependsOn.join(", ")})` : "";
             lines.push(`- **${unit.name}** [${acRefs}]${strategyStr}${deps}`);
             for (const f of unit.keyFiles) {
@@ -771,7 +767,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
       // handler didn't fire (e.g., review output saved to artifact file
       // rather than inline, so extractReviewVerdict couldn't parse it).
       // Light mode does not have this gate — fixType is ignored in Light mode.
-      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && (deps.piCoderMode.current === "tdd" || deps.piCoderMode.current === "dev")) {
+      if (fixType === "non-functional" && smRef.current.currentState === "NEEDS_CHANGES" && targetState === "REVIEWING" && deps.piCoderMode.current === "dev") {
         smRef.current.setEvidence("non_functional_classified");
       }
 

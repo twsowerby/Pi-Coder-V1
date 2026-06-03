@@ -6,7 +6,6 @@
  */
 
 import type { PiCoderMode, FSMState } from "../types.ts";
-import { StateMachine } from "../state-machine.ts";
 import { LightStateMachine } from "../light-state-machine.ts";
 import { DevStateMachine } from "../dev-state-machine.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
@@ -20,10 +19,9 @@ export function registerModeCommand(ctx: HandlerContext): void {
       // Build the mode labels with current state indicators
       const current = ctx.piCoderMode;
       const modes = [
-        { value: "plan", label: `Plan Mode (investigation & discussion)${current === "plan" ? "  ◀" : ""}` },
-        { value: "light", label: `Light Mode (spec → implement → review)${current === "light" ? "  ◀" : ""}` },
         { value: "dev", label: `Dev Mode (spec → per-unit TDD/verify/skip → review)${current === "dev" ? "  ◀" : ""}` },
-        { value: "tdd", label: `TDD Mode (full RED/GREEN lifecycle)${current === "tdd" ? "  ◀" : ""}` },
+        { value: "light", label: `Light Mode (spec → implement → review)${current === "light" ? "  ◀" : ""}` },
+        { value: "plan", label: `Plan Mode (investigation & discussion)${current === "plan" ? "  ◀" : ""}` },
         { value: "off", label: `Off (normal Pi)${current === "off" ? "  ◀" : ""}` },
       ];
 
@@ -79,11 +77,7 @@ export function registerModeCommand(ctx: HandlerContext): void {
         }
 
         // When entering a mode with a FSM, create the appropriate instance
-        if (selectedMode === "tdd") {
-          if (!ctx.stateMachine || !(ctx.stateMachine instanceof StateMachine)) {
-            ctx.stateMachine = new StateMachine(ctx.config);
-          }
-        } else if (selectedMode === "dev") {
+        if (selectedMode === "dev") {
           if (!ctx.stateMachine || !(ctx.stateMachine instanceof DevStateMachine)) {
             ctx.stateMachine = new DevStateMachine(ctx.config);
           }
@@ -116,10 +110,9 @@ export function registerModeCommand(ctx: HandlerContext): void {
 
       // Notify user of mode change
       const modeLabels: Record<PiCoderMode, string> = {
-        plan: "Plan Mode — Investigation and discussion only",
-        tdd: "TDD Mode — Full lifecycle with spec, RED/GREEN, and review",
-        light: "Light Mode — Spec, implementation, and review (no TDD)",
         dev: "Dev Mode — Full lifecycle with per-unit test strategy (tdd/verify/skip)",
+        light: "Light Mode — Spec, implementation, and review (no TDD)",
+        plan: "Plan Mode — Investigation and discussion only",
         off: "Off — Normal Pi mode",
       };
       cmdCtx.ui.notify(`Pi Coder: ${modeLabels[ctx.piCoderMode]}`, "info");
@@ -128,10 +121,9 @@ export function registerModeCommand(ctx: HandlerContext): void {
       // Send a steer message so the LLM knows the mode changed immediately
       if (ctx.piCoderMode !== "off") {
         const modeDescriptions: Record<PiCoderMode, string> = {
-          plan: "Plan mode — Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
-          tdd: "TDD mode — Full lifecycle with FSM, spec approval, RED/GREEN phases, and review. Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
-          light: "Light mode — Spec, implement, and review lifecycle with FSM. No RED/GREEN TDD phases. Follow the FSM state machine.",
           dev: "Dev mode — Full lifecycle with FSM, per-unit test strategy (tdd/verify/skip). Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
+          light: "Light mode — Spec, implement, and review lifecycle with FSM. No RED/GREEN TDD phases. Follow the FSM state machine.",
+          plan: "Plan mode — Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
           off: "",
         };
         ctx.pi.sendMessage(

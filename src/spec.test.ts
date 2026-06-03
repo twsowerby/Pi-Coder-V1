@@ -134,12 +134,14 @@ describe("SpecManager", () => {
         acceptanceCriteriaIndices: [0],
         keyFiles: ["src/auth.ts"],
         dependsOn: [],
+        testStrategy: "tdd",
       },
       {
         name: "User login",
         acceptanceCriteriaIndices: [1],
         keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
         dependsOn: ["User signup"],
+        testStrategy: "tdd",
       },
     ],
     status: "SPEC_WORK",
@@ -334,12 +336,14 @@ describe("Spec round-trip integrity", () => {
           acceptanceCriteriaIndices: [0, 1],
           keyFiles: ["src/api/errors.ts"],
           dependsOn: [],
+          testStrategy: "tdd",
         },
         {
           name: "Correlation ID tracking",
           acceptanceCriteriaIndices: [2],
           keyFiles: ["src/middleware/error-handler.ts"],
           dependsOn: ["Error response format"],
+          testStrategy: "tdd",
         },
       ],
     };
@@ -397,7 +401,7 @@ describe("Spec round-trip integrity", () => {
 // Phase 4: Spec approach field serialization/parsing
 // ---------------------------------------------------------------------------
 
-describe("Spec approach field serialization", () => {
+describe("Spec testStrategy field serialization", () => {
   let tmpDir: string;
   let manager: SpecManager;
 
@@ -410,138 +414,35 @@ describe("Spec approach field serialization", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("serializes approach: direct in markdown", async () => {
+  it("default testStrategy is tdd when not specified", async () => {
     const spec: SpecFile = {
-      id: "approach-test",
-      title: "Approach Test",
-      acceptanceCriteria: ["Config updated", "Feature works"],
-      constraints: [],
-      keyFiles: ["config.json", "src/feature.ts"],
-      prunedContext: "Test context",
-      implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
-        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: ["Config update"] },
-      ],
-      status: "SPEC_WORK",
-    };
-    await manager.createSpec(spec);
-    const raw = await manager.readSpecRaw("approach-test");
-    // Direct approach should be serialized
-    assert.ok(raw.includes("(approach: direct)"), `Should include '(approach: direct)' in markdown, got: ${raw}`);
-    // TDD approach (undefined) should NOT be serialized
-    // The Feature unit has no approach, so there should be no '(approach: tdd)'
-    assert.ok(!raw.includes("(approach: tdd)"), `Should NOT include '(approach: tdd)', got: ${raw}`);
-  });
-
-  it("parses approach: direct from markdown", async () => {
-    const spec: SpecFile = {
-      id: "approach-test",
-      title: "Approach Test",
-      acceptanceCriteria: ["Config updated", "Feature works"],
-      constraints: [],
-      keyFiles: ["config.json", "src/feature.ts"],
-      prunedContext: "Test context",
-      implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
-        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: ["Config update"] },
-      ],
-      status: "SPEC_WORK",
-    };
-    await manager.createSpec(spec);
-    const read = await manager.readSpec("approach-test");
-    assert.ok(read, "Should return a spec");
-    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
-    assert.strictEqual(read!.implementationPlan[1].approach, undefined);
-  });
-
-  it("round-trips approach: direct through serialize/parse", async () => {
-    const spec: SpecFile = {
-      id: "approach-test",
-      title: "Approach Test",
-      acceptanceCriteria: ["Config updated"],
-      constraints: [],
-      keyFiles: ["config.json"],
-      prunedContext: "Test context",
-      implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
-      ],
-      status: "SPEC_WORK",
-    };
-    await manager.createSpec(spec);
-    const read = await manager.readSpec("approach-test");
-    // approach: direct is preserved + testStrategy: skip is migrated from approach
-    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
-    assert.strictEqual(read!.implementationPlan[0].testStrategy, "skip");
-  });
-
-  it("round-trips undefined approach (default tdd) through serialize/parse", async () => {
-    const spec: SpecFile = {
-      id: "approach-test",
-      title: "Approach Test",
+      id: "strategy-default-test",
+      title: "Strategy Default Test",
       acceptanceCriteria: ["Feature works"],
       constraints: [],
       keyFiles: ["src/feature.ts"],
       prunedContext: "Test context",
       implementationPlan: [
-        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [] },
+        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: [], testStrategy: "tdd" },
       ],
       status: "SPEC_WORK",
     };
     await manager.createSpec(spec);
-    const read = await manager.readSpec("approach-test");
-    assert.strictEqual(read!.implementationPlan[0].approach, undefined);
+    const read = await manager.readSpec("strategy-default-test");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "tdd");
   });
 
-  it("handles approach: direct with depends on", async () => {
-    const spec: SpecFile = {
-      id: "approach-test",
-      title: "Approach Test",
-      acceptanceCriteria: ["Config updated", "Feature works"],
-      constraints: [],
-      keyFiles: ["config.json", "src/feature.ts"],
-      prunedContext: "Test context",
-      implementationPlan: [
-        { name: "Config update", acceptanceCriteriaIndices: [0], keyFiles: ["config.json"], dependsOn: [], approach: "direct" },
-        { name: "Feature", acceptanceCriteriaIndices: [1], keyFiles: ["src/feature.ts"], dependsOn: ["Config update"], approach: "direct" },
-      ],
-      status: "SPEC_WORK",
-    };
-    await manager.createSpec(spec);
-    const read = await manager.readSpec("approach-test");
-    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
-    assert.strictEqual(read!.implementationPlan[1].approach, "direct");
-    assert.deepStrictEqual(read!.implementationPlan[1].dependsOn, ["Config update"]);
-  });
 
-  it("backward compat: parses old format without approach field", async () => {
-    const spec: SpecFile = {
-      id: "old-format",
-      title: "Old Format",
-      acceptanceCriteria: ["Feature works"],
-      constraints: [],
-      keyFiles: ["src/feature.ts"],
-      prunedContext: "Test context",
-      implementationPlan: [
-        { name: "Feature", acceptanceCriteriaIndices: [0], keyFiles: ["src/feature.ts"], dependsOn: ["Other Unit"] },
-      ],
-      status: "SPEC_WORK",
-    };
-    await manager.createSpec(spec);
-    const read = await manager.readSpec("old-format");
-    assert.strictEqual(read!.implementationPlan[0].approach, undefined, "Old format should have undefined approach (defaults to tdd)");
-    assert.deepStrictEqual(read!.implementationPlan[0].dependsOn, ["Other Unit"]);
-  });
 
-  it("parses case-insensitive APPROACH: DIRECT from markdown", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-coder-spec-test-"));
-    const manager = new SpecManager(dir);
-    // Manually write a spec with uppercase approach
-    const specDir = join(dir, "case-test");
-    mkdirSync(specDir, { recursive: true });
-    writeFileSync(join(specDir, "spec.md"), `---\nid: case-test\ntitle: Case Test\nstatus: SPEC_WORK\n---\n\n# Case Test\n\n## Acceptance Criteria\n\n1. Config updated\n\n## Implementation Plan\n\n- **Config update** [1] (APPROACH: DIRECT)\n`);
-    const read = await manager.readSpec("case-test");
-    assert.strictEqual(read!.implementationPlan[0].approach, "direct", "Should parse uppercase APPROACH: DIRECT as direct");
-  });
+
+
+
+
+
+
+
+
+
 
 
   // --- testStrategy field (new) ---
@@ -602,27 +503,9 @@ describe("Spec approach field serialization", () => {
     assert.strictEqual(read!.implementationPlan[0].testStrategy, "tdd");
   });
 
-  it("migrates approach: component to testStrategy: tdd + testSuite: integration", async () => {
-    const spec: SpecFile = {
-      id: "strategy-test",
-      title: "Strategy Test",
-      acceptanceCriteria: ["Component renders"],
-      constraints: [],
-      keyFiles: ["widget.tsx"],
-      prunedContext: "context",
-      implementationPlan: [
-        { name: "Widget", acceptanceCriteriaIndices: [0], keyFiles: ["widget.tsx"], dependsOn: [], approach: "component" },
-      ],
-      status: "SPEC_WORK",
-    };
-    await manager.createSpec(spec);
-    const read = await manager.readSpec("strategy-test");
-    assert.strictEqual(read!.implementationPlan[0].approach, "component", "Original approach field preserved");
-    assert.strictEqual(read!.implementationPlan[0].testStrategy, "tdd", "Component migrates to testStrategy: tdd");
-    assert.strictEqual(read!.implementationPlan[0].testSuite, "integration", "Component gets testSuite: integration");
-  });
 
-  it("testStrategy takes precedence over approach when both in markdown", async () => {
+
+  it("testStrategy is parsed correctly from markdown", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-coder-spec-test-"));
     const mgr = new SpecManager(dir);
     const specDir = join(dir, "strategy-override-test");
@@ -630,7 +513,6 @@ describe("Spec approach field serialization", () => {
     writeFileSync(join(specDir, "spec.md"), `---\nid: strategy-override-test\ntitle: Override Test\nstatus: SPEC_WORK\n---\n\n# Override Test\n\n## Acceptance Criteria\n\n1. Feature works\n\n## Implementation Plan\n\n- **Feature** [1] (strategy: verify)\n`);
     const read = await mgr.readSpec("strategy-override-test");
     assert.strictEqual(read!.implementationPlan[0].testStrategy, "verify", "testStrategy parsed when present");
-    assert.strictEqual(read!.implementationPlan[0].approach, undefined, "approach not parsed when strategy is present");
   });
 
   // --- testSuite field ---
@@ -644,8 +526,8 @@ describe("Spec approach field serialization", () => {
       keyFiles: [],
       prunedContext: "context",
       implementationPlan: [
-        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testSuite: "component" },
-        { name: "Helper", acceptanceCriteriaIndices: [0], keyFiles: ["helper.ts"], dependsOn: [] },
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testStrategy: "tdd", testSuite: "component" },
+        { name: "Helper", acceptanceCriteriaIndices: [0], keyFiles: ["helper.ts"], dependsOn: [], testStrategy: "tdd" },
       ],
       status: "SPEC_WORK",
     };
@@ -664,7 +546,7 @@ describe("Spec approach field serialization", () => {
       keyFiles: [],
       prunedContext: "context",
       implementationPlan: [
-        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testSuite: "component" },
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testStrategy: "tdd", testSuite: "component" },
       ],
       status: "SPEC_WORK",
     };
@@ -683,7 +565,7 @@ describe("Spec approach field serialization", () => {
       keyFiles: [],
       prunedContext: "context",
       implementationPlan: [
-        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testSuite: "component" },
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testStrategy: "tdd", testSuite: "component" },
       ],
       status: "SPEC_WORK",
     };
@@ -721,7 +603,7 @@ context
     assert.strictEqual(read!.implementationPlan[0].testSuite, "component", "Should parse 'Component' as 'component'");
   });
 
-  it("combines approach and suite in same unit", async () => {
+  it("combines testStrategy and suite in same unit", async () => {
     const spec: SpecFile = {
       id: "combo-test",
       title: "Combo Test",
@@ -730,17 +612,17 @@ context
       keyFiles: [],
       prunedContext: "context",
       implementationPlan: [
-        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], approach: "direct", testSuite: "component" },
+        { name: "UI Button", acceptanceCriteriaIndices: [0], keyFiles: ["button.tsx"], dependsOn: [], testStrategy: "tdd", testSuite: "component" },
       ],
       status: "SPEC_WORK",
     };
     await manager.createSpec(spec);
     const read = await manager.readSpec("combo-test");
-    assert.strictEqual(read!.implementationPlan[0].approach, "direct");
+    assert.strictEqual(read!.implementationPlan[0].testStrategy, "tdd");
     assert.strictEqual(read!.implementationPlan[0].testSuite, "component");
 
     const raw = await manager.readSpecRaw("combo-test");
-    assert.ok(raw.includes("(approach: direct)"), `Should include approach, got: ${raw}`);
+    assert.ok(raw.includes("(strategy: tdd)"), `Should include strategy, got: ${raw}`);
     assert.ok(raw.includes("(suite: component)"), `Should include suite, got: ${raw}`);
   });
 });

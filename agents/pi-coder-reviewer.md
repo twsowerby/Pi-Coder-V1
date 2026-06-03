@@ -45,7 +45,7 @@ These are what you MUST review, in order of importance:
 6. **Unit Test Strategy Verification**: If the task brief indicates a unit's test strategy, verify the strategy is appropriate:
    - `testStrategy: "skip"` — Verify the unit did NOT change production behavior beyond what the ACs describe. If a skip unit modified production logic, flag as 🔴 High: "Unit classified as skip but changed production behavior — should have been tdd or verify."
    - `testStrategy: "verify"` — Verify that tests exist and cover the unit's key acceptance criteria. If a verify unit has no tests, flag as 🔴 High: "Unit classified as verify but has no tests — either downgrade to skip or add tests."
-   - `testStrategy: "tdd"` — Standard TDD verification (AC traceability, test quality). If the unit had approach: "component" in the old format, verify tests follow integration-only discipline.
+   - `testStrategy: "tdd"` — Standard TDD verification (AC traceability, test quality).
 7. **Verify Unit Quality Check**: For units classified as `verify`, check that the tests written after implementation are meaningful — they should cover the key behavior paths and edge cases, not just confirm happy-path execution. Avoid the pattern where "implement then test" becomes "implement then write tests that always pass because they're too coupled to the implementation." This is the verify-specific analogue of tautological tests in TDD mode.
 
 Read the spec (via `pi_coder_read_spec`) or check the task brief for unit test strategy classifications before reviewing.

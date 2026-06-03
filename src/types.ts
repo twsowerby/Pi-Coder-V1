@@ -122,7 +122,7 @@ export interface TransitionGuardError {
  * allowing mode switches to swap implementations.
  *
  * Plan mode and Off mode set stateMachine to null.
- * TDD mode uses StateMachine. Light mode uses LightStateMachine.
+ * Dev mode uses DevStateMachine. Light mode uses LightStateMachine.
  */
 export interface IStateMachine {
   /** Current FSM state (FSMState for TDD, LightFSMState for Light) */
@@ -292,7 +292,7 @@ export interface NotificationsConfig {
   events?: NotificationEvent[];
 }
 
-export type PiCoderMode = "off" | "plan" | "light" | "tdd" | "dev";
+export type PiCoderMode = "off" | "plan" | "light" | "dev";
 
 export interface TestCommands {
   /** Command to run tests for this suite (e.g. "npx vitest run", "npm test") */
@@ -431,13 +431,10 @@ export interface ImplementationUnit {
   keyFiles: string[];
   /** Names of other units that must be implemented before this one */
   dependsOn: string[];
-  /** Approach classification: "tdd" (default, standard RED/GREEN cycle), "direct" (skip RED phase), or "component" (RED/GREEN with integration tests only) */
-  approach?: "tdd" | "direct" | "component";
   /**
    * Test strategy classification. No default — MUST be set during planning.
-   * Replaces the old `approach` field.
    */
-  testStrategy?: TestStrategy;
+  testStrategy: TestStrategy;
   /**
    * Why this test strategy was chosen.
    * REQUIRED when testStrategy is "verify" or "skip".

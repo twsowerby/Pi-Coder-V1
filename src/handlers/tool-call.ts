@@ -59,8 +59,8 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
       }
     }
 
-    // --- FSM-based guards (TDD and Light modes) ---
-    if (ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light") {
+    // --- FSM-based guards (Dev and Light modes) ---
+    if (ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") {
       if (toolName === "pi_coder_git") {
         if (!ctx.stateMachine!.isActionAllowed("pi_coder_git")) {
           const current = ctx.stateMachine!.currentState;
@@ -123,8 +123,8 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
           };
         }
 
-        // In TDD or Light mode, validate subagent against FSM state
-        if (ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light") {
+        // In Dev or Light mode, validate subagent against FSM state
+        if (ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") {
           if (!ctx.stateMachine!.isActionAllowed("subagent", targetAgent)) {
             const current = ctx.stateMachine!.currentState;
             let guidance = `🛡️ Cannot delegate to ${targetAgent} in ${current}.`;

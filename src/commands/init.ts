@@ -116,21 +116,19 @@ export function registerInitCommand(ctx: HandlerContext): void {
         }
       }
 
-      // 4b. Copy orchestrator prompt template from prompts/ — skip existing
+      // 4b. Copy dev mode prompt template from prompts/ — skip existing
       const packagePromptsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts");
-      const orchestratorSource = join(packagePromptsDir, "pi-coder-orchestrator.md");
-      const orchestratorTarget = join(cwd, ".pi", "agents", "pi-coder-orchestrator.md");
+      const devPromptSource = join(packagePromptsDir, "pi-coder-dev.md");
+      const devPromptTarget = join(cwd, ".pi", "agents", "pi-coder-dev.md");
 
-      if (existsSync(orchestratorSource)) {
-        if (!existsSync(orchestratorTarget)) {
-          mkdirSync(dirname(orchestratorTarget), { recursive: true });
-          copyFileSync(orchestratorSource, orchestratorTarget);
-          created.push(".pi/agents/pi-coder-orchestrator.md (prompt template)");
+      if (existsSync(devPromptSource)) {
+        if (!existsSync(devPromptTarget)) {
+          mkdirSync(dirname(devPromptTarget), { recursive: true });
+          copyFileSync(devPromptSource, devPromptTarget);
+          created.push(".pi/agents/pi-coder-dev.md (prompt template)");
         } else {
-          skipped.push(".pi/agents/pi-coder-orchestrator.md (already exists)");
+          skipped.push(".pi/agents/pi-coder-dev.md (already exists)");
         }
-      } else {
-        warnings.push("Orchestrator prompt template not found in package");
       }
 
       // 4c. Create starter design_system.md in knowledge — skip if exists

@@ -8,7 +8,6 @@
 
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { StateMachine } from "../state-machine.ts";
 import { LightStateMachine } from "../light-state-machine.ts";
 import { DevStateMachine } from "../dev-state-machine.ts";
 import { KnowledgeStore } from "../knowledge.ts";
@@ -20,10 +19,10 @@ import { Logger } from "../logger.ts";
 import { registerTools, type StateMachineRef } from "../tools.ts";
 import { MODE_TOOL_SETS } from "../../extensions/constants.ts";
 import { loadConfig } from "../config.ts";
-import { loadOrchestratorPrompt, resetOrchestratorPromptCache, resetLightModePromptCache, resetPlanModePromptCache, resetDevModePromptCache } from "../prompts/prompt-builders.ts";
+import { resetLightModePromptCache, resetPlanModePromptCache, resetDevModePromptCache } from "../prompts/prompt-builders.ts";
 import { registerCompactionHandler } from "../compaction.ts";
 import type { HandlerContext } from "../handlers/types.ts";
-import type { FSMState, LightFSMState, DevFSMState } from "../types.ts";
+import type { LightFSMState, DevFSMState } from "../types.ts";
 
 /** Register the session_start event handler and its sub-listeners. */
 export function registerSessionStartHandler(ctx: HandlerContext): void {
@@ -62,16 +61,12 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
     }
 
     // Load prompt templates
-    resetOrchestratorPromptCache();
     resetLightModePromptCache();
     resetPlanModePromptCache();
     resetDevModePromptCache();
-    loadOrchestratorPrompt(cwd);
 
     // Initialize state machine based on mode
-    if (ctx.piCoderMode === "tdd") {
-      ctx.stateMachine = new StateMachine(ctx.config);
-    } else if (ctx.piCoderMode === "dev") {
+    if (ctx.piCoderMode === "dev") {
       ctx.stateMachine = new DevStateMachine(ctx.config);
     } else if (ctx.piCoderMode === "light") {
       ctx.stateMachine = new LightStateMachine(ctx.config);
@@ -258,7 +253,7 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
       if (savedGlobalState.piCoderMode) {
         ctx.piCoderMode = savedGlobalState.piCoderMode;
       } else if (savedGlobalState.piCoderActive !== undefined) {
-        ctx.piCoderMode = savedGlobalState.piCoderActive ? "tdd" : "off";
+        ctx.piCoderMode = savedGlobalState.piCoderActive ? "dev" : "off";
       }
 
       // Re-align stateMachine instance with restored mode
@@ -266,8 +261,6 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
         ctx.stateMachine = new LightStateMachine(ctx.config);
       } else if (ctx.piCoderMode === "dev" && !(ctx.stateMachine instanceof DevStateMachine)) {
         ctx.stateMachine = new DevStateMachine(ctx.config);
-      } else if (ctx.piCoderMode === "tdd" && !(ctx.stateMachine instanceof StateMachine)) {
-        ctx.stateMachine = new StateMachine(ctx.config);
       } else if (ctx.piCoderMode === "plan" || ctx.piCoderMode === "off") {
         ctx.stateMachine = null;
       }
@@ -281,10 +274,8 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
         if (specState) {
           const savedState = specState.currentState as string;
           const isTddState = savedState.startsWith("TDD_");
-          const isLightOnlyState = savedState === "IMPLEMENTING";
           const modeMismatch =
-            (ctx.piCoderMode === "light" && isTddState) ||
-            (ctx.piCoderMode === "tdd" && isLightOnlyState);
+            (ctx.piCoderMode === "light" && isTddState);
           // Dev mode handles both TDD and IMPLEMENTING states — no mismatch possible
 
           if (modeMismatch) {
@@ -296,20 +287,12 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
               message: `Spec was created in ${isTddState ? "TDD" : "Light"} mode but current mode is ${ctx.piCoderMode}. Switch modes to resume.`,
             });
             cmdCtx.ui.notify(
-              `Active spec '${savedGlobalState.activeSpecId}' was created in ${isTddState ? "TDD" : "Light"} mode. Switch to ${isTddState ? "TDD" : "Light"} mode with /pi-coder to resume.`,
+              `Active spec '${savedGlobalState.activeSpecId}' was created in ${isTddState ? "TDD" : "Light"} mode but current mode is ${ctx.piCoderMode}. Switch to ${isTddState ? "Dev" : "Light"} mode with /pi-coder to resume.`,
               "warning",
             );
-            ctx.stateMachine = ctx.piCoderMode === "tdd"
-              ? new StateMachine(ctx.config)
+            ctx.stateMachine = ctx.piCoderMode === "dev"
+              ? new DevStateMachine(ctx.config)
               : new LightStateMachine(ctx.config);
-          } else if (ctx.piCoderMode === "tdd") {
-            ctx.stateMachine = StateMachine.fromJSON({
-              currentState: specState.currentState as FSMState,
-              loopCount: specState.loopCount,
-              gitRef: specState.gitRef,
-              currentUnitName: specState.currentUnitName ?? null,
-              evidence: specState.evidence,
-            }, ctx.config);
           } else if (ctx.piCoderMode === "light") {
             ctx.stateMachine = LightStateMachine.fromJSON({
               currentState: specState.currentState as LightFSMState,
@@ -339,13 +322,6 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
               mode: ctx.piCoderMode,
             });
 
-            // Hint: TDD → dev migration path
-            if (ctx.piCoderMode === "tdd" && ctx.stateMachine) {
-              ctx.logEvent("state_restore", {
-                status: "tdd_mode_hint",
-                message: "TDD mode spec restored. Dev mode provides the same TDD lifecycle with per-unit test strategy. Switch with /pi-coder.",
-              });
-            }
           }
         } else {
           ctx.logEvent("state_restore", {

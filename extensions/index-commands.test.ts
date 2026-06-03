@@ -154,11 +154,11 @@ describe("Phase 1: Toggle Command", () => {
     // the GlobalState shape includes the mode field.
     const state = {
       version: 1 as const,
-      piCoderMode: "tdd" as const,
+      piCoderMode: "dev" as const,
       activeSpecId: null,
       updatedAt: new Date().toISOString(),
     };
-    assert.strictEqual(state.piCoderMode, "tdd");
+    assert.strictEqual(state.piCoderMode, "dev");
     assert.strictEqual(state.version, 1);
   });
 

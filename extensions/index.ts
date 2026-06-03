@@ -51,7 +51,7 @@ export { ORCHESTRATOR_TOOLS, LIGHT_TOOLS, PLAN_TOOLS, NORMAL_TOOLS };
 // Module-scope state
 // ---------------------------------------------------------------------------
 
-export let piCoderMode: PiCoderMode = "tdd";
+export let piCoderMode: PiCoderMode = "dev";
 export let subagentsAvailable = false;
 export let stateMachine: IStateMachine | null;
 export let config: PiCoderConfig;
@@ -206,73 +206,6 @@ function refreshUI(): void {
       });
     }
     return;
-  }
-
-  // TDD mode — full FSM UI
-
-  const state = stateMachine!.currentState;
-  const specId = activeSpecId;
-  const loopCount = stateMachine!.loopCount;
-  const style = STATE_STYLE[state] ?? { icon: "●", color: "accent" as const };
-  const label = STATE_LABEL[state] ?? state;
-  const theme = ctx.ui.theme;
-
-  // --- Widget above editor ---
-  const isTdd = state.startsWith("TDD_");
-  const showLoop = isTdd || state === "REVIEWING" || state === "NEEDS_CHANGES";
-
-  // Build widget line using theme colors (string-array overload — no TUI components needed)
-  let widgetLine = theme.fg(style.color, `${style.icon} ${label}`);
-  if (specId) {
-    widgetLine += theme.fg("dim", `  spec: `) + theme.fg("muted", specId);
-  }
-  if (showLoop && loopCount > 0) {
-    widgetLine += theme.fg("dim", `  loop: `) + theme.fg("muted", String(loopCount)) + theme.fg("dim", `/${config.maxLoops}`);
-  }
-  if (subagentMonitor.running) {
-    widgetLine += theme.fg("dim", `  `) + theme.fg("accent", "▶");
-  }
-
-  ctx.ui.setWidget("pi-coder-state", [widgetLine], { placement: "aboveEditor" });
-
-  // --- Footer status line ---
-  let statusText: string;
-  if (state === "BLOCKED") {
-    statusText = theme.fg("error", "⚠ blocked");
-  } else if (state === "COMPLETE") {
-    statusText = theme.fg("success", "✓ complete");
-  } else if (state === "IDLE") {
-    statusText = theme.fg("dim", "idle");
-  } else {
-    statusText = theme.fg(style.color, `${style.icon} ${label}`);
-    if (specId) {
-      statusText += theme.fg("dim", ` · ${specId}`);
-    }
-  }
-  ctx.ui.setStatus("pi-coder", statusText);
-
-  // --- Working indicator ---
-  if (subagentMonitor.running) {
-    // Pulsing dot while subagent is active
-    ctx.ui.setWorkingIndicator({
-      frames: [
-        theme.fg("accent", "⏣"),
-        theme.fg("muted", "⏣"),
-      ],
-      intervalMs: 500,
-    });
-  } else if (state === "IDLE" || state === "COMPLETE" || state === "BLOCKED") {
-    // Restore default for terminal/waiting states
-    ctx.ui.setWorkingIndicator();
-  } else {
-    // Active orchestrator — gentle breathing dot
-    ctx.ui.setWorkingIndicator({
-      frames: [
-        theme.fg("accent", "●"),
-        theme.fg("muted", "●"),
-      ],
-      intervalMs: 600,
-    });
   }
 }
 

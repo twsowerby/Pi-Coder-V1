@@ -11,7 +11,7 @@
  * single implementation step. There are no test-run gates — tests
  * are advisory, not mandatory.
  *
- * Implements the same IStateMachine interface as StateMachine so
+ * Implements the same IStateMachine interface as DevStateMachine so
  * the extension can use either polymorphically.
  */
 

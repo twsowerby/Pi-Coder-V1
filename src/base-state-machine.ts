@@ -318,7 +318,7 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
     // Clear currentUnitName on NEEDS_CHANGES entry to prevent infinite loops.
     // When a direct unit is flagged for needing TDD, re-entry to TDD_RED_WRITE
     // should NOT auto-set evidence from the stale unit name. The orchestrator
-    // must re-save the spec with approach: "tdd" before re-advancing.
+    // must re-save the spec with testStrategy: "tdd" before re-advancing.
     if (to === "NEEDS_CHANGES") {
       this._currentUnitName = null;
     }

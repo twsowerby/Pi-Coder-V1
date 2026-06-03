@@ -17,7 +17,7 @@ import { mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { PiCoderConfig, FSMState } from "../src/types.ts";
-import { StateMachine } from "../src/state-machine.ts";
+import { DevStateMachine } from "../src/dev-state-machine.ts";
 import { Logger, LOG_LEVEL_MAP, type FSMTrigger } from "../src/logger.ts";
 import type { LogEventType } from "../src/logger.ts";
 
@@ -113,7 +113,7 @@ describe("Phase 2: Logging Instrumentation", () => {
     const logDir = createLogDir();
     try {
       const config = makeConfig();
-      const sm = new StateMachine(config);
+      const sm = new DevStateMachine(config);
       const logger = new Logger(logDir, config.logging);
       const sessionId = "test-fsm-transition";
 
@@ -489,7 +489,7 @@ describe("Unit 5h: New Logging Events", () => {
           contextFileCount: 2,
           contextFileChars: 500,
           fsmState: "SPEC_WORK",
-          mode: "tdd",
+          mode: "dev",
         },
       });
 
@@ -521,7 +521,7 @@ describe("Unit 5h: New Logging Events", () => {
           skillPath: "/path/to/skills/pi-coder-tdd/SKILL.md",
           subagentAgent: "pi-coder.implementor",
           fsmState: "TDD_RED_WRITE",
-          mode: "tdd",
+          mode: "dev",
         },
       });
 
@@ -550,7 +550,7 @@ describe("Unit 5h: New Logging Events", () => {
         payload: {
           toolName: "pi_coder_advance_fsm",
           fsmState: "IDLE",
-          mode: "tdd",
+          mode: "dev",
           specId: "user-auth",
           inputSummary: { targetState: "SPEC_WORK", fixType: undefined },
         },
@@ -599,7 +599,7 @@ describe("Unit 5h: New Logging Events", () => {
     const logDir = createLogDir();
     try {
       const config = makeConfig();
-      const sm = new StateMachine(config);
+      const sm = new DevStateMachine(config);
       const logger = new Logger(logDir, config.logging);
 
       // Transition IDLE → SPEC_WORK (the trigger for lifecycle_start)
@@ -706,7 +706,7 @@ describe("Spec 17: New Event Types", () => {
           totalTurns: 42,
           totalTokens: { input: 5000, output: 10000, cacheRead: 2000, cacheWrite: 500, cost: 0.15, turns: 10 },
           specsAttempted: 2,
-          finalMode: "tdd",
+          finalMode: "dev",
           finalFsmState: "IDLE",
           sessionDurationMs: 300000,
         },
@@ -873,7 +873,7 @@ describe("Spec 17: Mode on Every Event", () => {
         timestamp: new Date().toISOString(),
         sessionId: "test-mode-event",
         type: "fsm_transition",
-        payload: { from: "IDLE", to: "SPEC_WORK", turnCount: 5, mode: "tdd" },
+        payload: { from: "IDLE", to: "SPEC_WORK", turnCount: 5, mode: "dev" },
       });
 
       const lines = readLogLines(logDir);

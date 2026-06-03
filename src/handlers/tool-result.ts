@@ -427,7 +427,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
     }
 
     // Evidence: interview tool completion in SPEC_WORK
-    if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "light" || ctx.piCoderMode === "dev") && toolName === "interview" && currentState === "SPEC_WORK") {
+    if ((ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") && toolName === "interview" && currentState === "SPEC_WORK") {
       const interviewDetails = details as { status?: string; responses?: Array<{ id?: string; value?: unknown }> } | undefined;
 
       if (interviewDetails?.status === "completed") {
@@ -583,22 +583,12 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           transitionSteer = "\n\n⚠️ AUTO-TRANSITION: You are now in TDD_GREEN_WRITE. Next step: delegate to pi-coder.implementor to implement the code that makes the tests pass. Do NOT call pi_coder_advance_fsm yet — first get the implementation done.";
         } else {
           const reason = validation.reason ?? "RED_TAUTOLOGY";
-          if (ctx.piCoderMode === "dev") {
             transitionSteer =
               `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
               `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: "Write ONLY failing test files for this unit. Do NOT modify production code." This is the correct TDD path when the implementor skipped the test-first step.` +
               `\n2. **Reclassify as skip strategy**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with testStrategy: "skip" on this unit, then advance to IMPLEMENTING. This records the decision explicitly.` +
               `\n3. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState "TDD_GREEN_WRITE" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
               `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units (CSS/styling, component assembly, config, docs, renames). Option 3 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`;
-          } else {
-            transitionSteer =
-              `\n\n⚠️ Tests PASSED during RED phase (${reason}). You have three options:` +
-              `\n1. **Re-delegate to write tests first**: Stay in TDD_RED_WRITE. Do NOT advance. Re-delegate to pi-coder.implementor with explicit instructions: "Write ONLY failing test files for this unit. Do NOT modify production code." This is the correct TDD path when the implementor skipped the test-first step.` +
-              `\n2. **Classify as approach: direct**: If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with approach: "direct" on this unit, then acknowledge the tautology with pi_coder_advance_fsm TDD_GREEN_WRITE. This records the decision explicitly.` +
-              `\n3. **Classify as approach: component**: If this component has custom business logic you own (data transformation, complex state management, error handling) that should be tested, re-save the spec with approach: "component". The RED brief will instruct integration tests only. Then re-delegate the RED phase. ONLY use this if the component has real custom logic — if it is just assembling library components (shadcn/Radix/MUI), use approach: "direct" (option 2) instead.` +
-              `\n4. **Acknowledge and proceed**: Use pi_coder_advance_fsm with targetState "TDD_GREEN_WRITE" — this skips GREEN since the code already works. Only do this if new tests WERE written and they pass because the feature already partially exists.` +
-              `\n\nMost RED tautologies indicate the implementor did not write tests first. Option 1 is the default correct response. Option 2 is for genuinely non-behavioral units (including CSS/styling and component assembly). Option 3 is RARE — only for components with custom business logic that should be tested. Option 4 is ONLY for when new tests exist that test real new behavior but pass because the feature was already partially implemented.`;
-          }
         }
       }
 
@@ -854,7 +844,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
       // This eliminates the manual advance step where LLMs most commonly make FSM errors.
       const subAgentName = subDetails?.results?.[0]?.agent ?? "";
       if (
-        ctx.piCoderMode === "tdd" &&
+        ctx.piCoderMode === "dev" &&
         previousState === "TDD_RED_WRITE" &&
         subAgentName.includes("implementor") &&
         (subUsage?.exitCode ?? 0) === 0
@@ -955,12 +945,12 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           ctx.tokenTracker.emitStateUsageAndTransition("REVIEWING", target, ctx.activeSpecId);
           transitionTrigger = "auto_review_verdict";
 
-          if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "dev") && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
+          if ((ctx.piCoderMode === "dev") && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional" && target === "NEEDS_CHANGES") {
             ctx.stateMachine!.setEvidence("non_functional_classified");
           }
 
           let reclassificationGuidance = "";
-          if ((ctx.piCoderMode === "tdd" || ctx.piCoderMode === "dev") && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
+          if ((ctx.piCoderMode === "dev") && reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "functional") {
             reclassificationGuidance = " If the reviewer flagged a direct/skip unit as needing TDD, re-save the spec with that unit's testStrategy changed to 'tdd', and proceed with a full RED/GREEN cycle.";
           }
           const reviewSteer = reviewVerdict.verdict === "approved"

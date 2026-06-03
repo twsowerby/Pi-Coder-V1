@@ -364,12 +364,14 @@ describe("SpecFile", () => {
           acceptanceCriteriaIndices: [0],
           keyFiles: ["src/auth.ts"],
           dependsOn: [],
+          testStrategy: "tdd",
         },
         {
           name: "User login",
           acceptanceCriteriaIndices: [1],
           keyFiles: ["src/auth.ts", "src/middleware/auth.ts"],
           dependsOn: ["User signup"],
+          testStrategy: "tdd",
         },
       ],
       status: "SPEC_WORK",
@@ -405,6 +407,7 @@ describe("ImplementationUnit", () => {
       acceptanceCriteriaIndices: [2, 3],
       keyFiles: ["src/middleware/auth.ts", "src/routes/auth.ts"],
       dependsOn: ["User signup"],
+      testStrategy: "tdd",
     };
     assert.strictEqual(unit.name, "Session persistence");
     assert.deepStrictEqual(unit.acceptanceCriteriaIndices, [2, 3]);
@@ -417,61 +420,54 @@ describe("ImplementationUnit", () => {
       acceptanceCriteriaIndices: [0],
       keyFiles: ["src/feature.ts"],
       dependsOn: [],
+      testStrategy: "tdd",
     };
     assert.strictEqual(unit.dependsOn.length, 0);
   });
 
-  it("should accept approach: 'tdd'", () => {
+  it("should require testStrategy field", () => {
     const unit: ImplementationUnit = {
       name: "Feature with TDD",
       acceptanceCriteriaIndices: [0],
       keyFiles: ["src/feature.ts"],
       dependsOn: [],
-      approach: "tdd",
+      testStrategy: "tdd",
     };
-    assert.strictEqual(unit.approach, "tdd");
+    assert.strictEqual(unit.testStrategy, "tdd");
   });
 
-  it("should accept approach: 'direct'", () => {
+  it("should accept testStrategy: 'verify'", () => {
+    const unit: ImplementationUnit = {
+      name: "API integration",
+      acceptanceCriteriaIndices: [0],
+      keyFiles: ["api.ts"],
+      dependsOn: [],
+      testStrategy: "verify",
+    };
+    assert.strictEqual(unit.testStrategy, "verify");
+  });
+
+  it("should accept testStrategy: 'skip'", () => {
     const unit: ImplementationUnit = {
       name: "Config change",
       acceptanceCriteriaIndices: [0],
       keyFiles: ["config.json"],
       dependsOn: [],
-      approach: "direct",
+      testStrategy: "skip",
     };
-    assert.strictEqual(unit.approach, "direct");
+    assert.strictEqual(unit.testStrategy, "skip");
   });
 
-  it("should allow approach to be undefined (default tdd)", () => {
-    const unit: ImplementationUnit = {
-      name: "Default unit",
-      acceptanceCriteriaIndices: [0],
-      keyFiles: ["src/feature.ts"],
-      dependsOn: [],
-    };
-    assert.strictEqual(unit.approach, undefined);
-  });
-
-  it("should round-trip approach through JSON", () => {
+  it("should round-trip testStrategy through JSON", () => {
     const unit: ImplementationUnit = {
       name: "Config change",
       acceptanceCriteriaIndices: [0],
       keyFiles: ["config.json"],
       dependsOn: [],
-      approach: "direct",
+      testStrategy: "skip",
     };
     const parsed = JSON.parse(JSON.stringify(unit)) as ImplementationUnit;
-    assert.strictEqual(parsed.approach, "direct");
-    // Undefined approach should be omitted from JSON
-    const defaultUnit: ImplementationUnit = {
-      name: "Default",
-      acceptanceCriteriaIndices: [0],
-      keyFiles: [],
-      dependsOn: [],
-    };
-    const defaultParsed = JSON.parse(JSON.stringify(defaultUnit)) as ImplementationUnit;
-    assert.strictEqual(defaultParsed.approach, undefined);
+    assert.strictEqual(parsed.testStrategy, "skip");
   });
 });
 

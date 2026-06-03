@@ -64,8 +64,8 @@ export function resetDevModePromptCache(): void {
 /**
  * Load the orchestrator prompt template from the .md file.
  *
- * Checks for a project-scope customization at .pi/agents/pi-coder-orchestrator.md
- * first, falling back to the package default at agents/pi-coder-orchestrator.md.
+ * Checks for a project-scope customization at .pi/agents/pi-coder-dev.md
+ * first, falling back to the package default at prompts/pi-coder-dev.md.
  *
  * Strips the HTML comment block (template variable documentation) from the top,
  * then caches the template string in module scope.
@@ -77,11 +77,11 @@ export function loadOrchestratorPrompt(cwd?: string): string {
 
   // Resolve the package's own agents/ directory relative to this extension file
   const thisDir = dirname(fileURLToPath(import.meta.url));
-  const packageDefaultPath = join(thisDir, "..", "..", "prompts", "pi-coder-orchestrator.md");
+  const packageDefaultPath = join(thisDir, "..", "..", "prompts", "pi-coder-dev.md");
 
   // Check for project-scope customization
   const projectOverridePath = cwd
-    ? join(cwd, ".pi", "agents", "pi-coder-orchestrator.md")
+    ? join(cwd, ".pi", "agents", "pi-coder-dev.md")
     : null;
 
   let filePath = packageDefaultPath;
