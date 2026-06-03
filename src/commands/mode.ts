@@ -113,6 +113,7 @@ export function registerModeCommand(ctx: HandlerContext): void {
         plan: "Plan Mode — Investigation and discussion only",
         tdd: "TDD Mode — Full lifecycle with spec, RED/GREEN, and review",
         light: "Light Mode — Spec, implementation, and review (no TDD)",
+        dev: "Dev Mode — Full lifecycle with per-unit test strategy (tdd/verify/skip)",
         off: "Off — Normal Pi mode",
       };
       cmdCtx.ui.notify(`Pi Coder: ${modeLabels[ctx.piCoderMode]}`, "info");
@@ -124,6 +125,7 @@ export function registerModeCommand(ctx: HandlerContext): void {
           plan: "Plan mode — Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
           tdd: "TDD mode — Full lifecycle with FSM, spec approval, RED/GREEN phases, and review. Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
           light: "Light mode — Spec, implement, and review lifecycle with FSM. No RED/GREEN TDD phases. Follow the FSM state machine.",
+          dev: "Dev mode — Full lifecycle with FSM, per-unit test strategy (tdd/verify/skip). Follow the FSM state machine. Use pi_coder_advance_fsm to advance states.",
           off: "",
         };
         ctx.pi.sendMessage(

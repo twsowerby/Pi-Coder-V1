@@ -57,6 +57,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
       plan: "[MODE: PLAN] Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
       light: "[MODE: LIGHT] FSM is active. Follow the lifecycle: spec → implement → review → merge. No TDD phases.",
       tdd: "[MODE: TDD] FSM state machine is active. Follow the TDD lifecycle: spec → RED/GREEN → review → merge.",
+      dev: "[MODE: DEV] FSM is active with per-unit test strategy (tdd/verify/skip). Follow the FSM lifecycle.",
       off: "", // Never reached — off mode returns early
     };
     fullPrompt = modeIndicator[ctx.piCoderMode] + "\n\n" + fullPrompt;

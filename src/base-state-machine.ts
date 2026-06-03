@@ -328,8 +328,20 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       this.incrementRetryCounter("green_retries");
     }
     // Reset GREEN retry counter on unit transitions
-    if (from === "TDD_GREEN_VALIDATE" && (to === "REVIEWING" || to === "TDD_RED_WRITE")) {
+    // (in Dev FSM, TDD_GREEN_VALIDATE exits are TDD_RED_WRITE, IMPLEMENTING, and REVIEWING;
+    //  in TDD FSM, exits are REVIEWING and TDD_RED_WRITE — the broader condition covers both)
+    if (from === "TDD_GREEN_VALIDATE" && (to === "TDD_RED_WRITE" || to === "IMPLEMENTING" || to === "REVIEWING")) {
       this.resetRetryCounter("green_retries");
+    }
+
+    // IMPLEMENTING retry tracking (parallels green_retries for verify units)
+    if (from === "IMPLEMENTING" && to === "IMPLEMENTING") {
+      this.incrementRetryCounter("impl_retries");
+    }
+
+    // IMPLEMENTING retry reset on exit to non-IMPLEMENTING state
+    if (from === "IMPLEMENTING" && to !== "IMPLEMENTING" && to !== "BLOCKED") {
+      this.resetRetryCounter("impl_retries");
     }
 
     // Reset loop counter, evidence, currentUnitName, and retry counters on IDLE entry

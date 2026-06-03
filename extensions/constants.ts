@@ -65,6 +65,7 @@ export const MODE_TOOL_SETS: Record<PiCoderMode, string[]> = {
   plan: PLAN_TOOLS,
   light: LIGHT_TOOLS,
   tdd: ORCHESTRATOR_TOOLS,
+  dev: ORCHESTRATOR_TOOLS,
 };
 
 // ---------------------------------------------------------------------------

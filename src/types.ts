@@ -37,6 +37,47 @@ export type FSMState =
   | "BLOCKED";
 
 /**
+ * Test strategy classification for an implementation unit.
+ * No default — MUST be explicitly set during planning.
+ *
+ * tdd:    Can write a failing test first. Full RED/GREEN cycle enforced.
+ * verify: Must be tested, but test needs implementation to exist. IMPLEMENTING with test gate.
+ * skip:   No testable contract. IMPLEMENTING with no test gate.
+ */
+export type TestStrategy = "tdd" | "verify" | "skip";
+
+/**
+ * FSM states for Dev mode — TDD lifecycle with per-unit test strategy routing.
+ *
+ * Flow:
+ *   IDLE → SPEC_WORK → SPEC_APPROVED → GIT_CHECKPOINT →
+ *   [tdd unit]     → TDD_RED_WRITE → TDD_RED_VALIDATE → TDD_GREEN_WRITE → TDD_GREEN_VALIDATE →
+ *                        [next tdd] → TDD_RED_WRITE | [next verify/skip] → IMPLEMENTING | [done] → REVIEWING
+ *   [verify/skip]  → IMPLEMENTING →
+ *                        [next tdd] → TDD_RED_WRITE | [next verify/skip] → IMPLEMENTING | [done] → REVIEWING
+ *   [zero units]   → REVIEWING
+ *   REVIEWING → (APPROVED → FINAL_APPROVAL → MERGING → COMPLETE) |
+ *                (NEEDS_CHANGES → TDD_RED_WRITE | TDD_GREEN_WRITE | IMPLEMENTING | REVIEWING) | BLOCKED
+ */
+export type DevFSMState =
+  | "IDLE"
+  | "SPEC_WORK"
+  | "SPEC_APPROVED"
+  | "GIT_CHECKPOINT"
+  | "TDD_RED_WRITE"
+  | "TDD_RED_VALIDATE"
+  | "TDD_GREEN_WRITE"
+  | "TDD_GREEN_VALIDATE"
+  | "IMPLEMENTING"
+  | "REVIEWING"
+  | "APPROVED"
+  | "NEEDS_CHANGES"
+  | "FINAL_APPROVAL"
+  | "MERGING"
+  | "COMPLETE"
+  | "BLOCKED";
+
+/**
  * FSM states for Light mode — same lifecycle as TDD but with the
  * RED/GREEN phases collapsed into a single IMPLEMENTING state.
  *
@@ -251,7 +292,7 @@ export interface NotificationsConfig {
   events?: NotificationEvent[];
 }
 
-export type PiCoderMode = "off" | "plan" | "light" | "tdd";
+export type PiCoderMode = "off" | "plan" | "light" | "tdd" | "dev";
 
 export interface TestCommands {
   /** Command to run tests for this suite (e.g. "npx vitest run", "npm test") */
@@ -392,6 +433,16 @@ export interface ImplementationUnit {
   dependsOn: string[];
   /** Approach classification: "tdd" (default, standard RED/GREEN cycle), "direct" (skip RED phase), or "component" (RED/GREEN with integration tests only) */
   approach?: "tdd" | "direct" | "component";
+  /**
+   * Test strategy classification. No default — MUST be set during planning.
+   * Replaces the old `approach` field.
+   */
+  testStrategy?: TestStrategy;
+  /**
+   * Why this test strategy was chosen.
+   * REQUIRED when testStrategy is "verify" or "skip".
+   */
+  testStrategyRationale?: string;
   /** Which test suite to validate this unit against (must match a key in config.testCommands) */
   testSuite?: string;
 }
