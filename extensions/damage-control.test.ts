@@ -240,6 +240,97 @@ describe("damage-control: continueFeedback", () => {
   });
 });
 
+describe("damage-control: SQL destructive command patterns", () => {
+  const SQL_RULES = [
+    { pattern: "\\bdrop\\s+database\\b", reason: "Dropping a database is irreversible" },
+    { pattern: "\\bDROP\\s+(?:TABLE|DATABASE|SCHEMA)\\b", reason: "Dropping database objects is destructive" },
+    { pattern: "\\bTRUNCATE\\s+", reason: "Truncating tables destroys data" },
+    { pattern: "\\bDELETE\\s+FROM\\b(?![^;]*\\bWHERE\\b)", reason: "DELETE without WHERE removes all rows" },
+  ];
+
+  it("blocks 'drop database'", () => {
+    const regex = new RegExp(SQL_RULES[0].pattern);
+    assert.ok(regex.test("drop database mydb"));
+    // Uppercase 'DROP DATABASE' is covered by the second pattern (DROP TABLE/DATABASE/SCHEMA),
+    // not this one — this pattern only matches lowercase 'drop database'
+    assert.ok(!regex.test("DROP DATABASE production"));
+  });
+
+  it("blocks DROP TABLE / DROP DATABASE / DROP SCHEMA", () => {
+    const regex = new RegExp(SQL_RULES[1].pattern);
+    assert.ok(regex.test("DROP TABLE users"));
+    assert.ok(regex.test("DROP DATABASE production"));
+    assert.ok(regex.test("DROP SCHEMA public"));
+    assert.ok(!regex.test("DROP FUNCTION")); // not in the pattern
+  });
+
+  it("blocks TRUNCATE with table name", () => {
+    const regex = new RegExp(SQL_RULES[2].pattern);
+    assert.ok(regex.test("TRUNCATE users"));
+    // Lowercase 'truncate' as bash command is covered by a separate pattern (\btruncate\b),
+    // not this SQL-specific one — this pattern only matches uppercase 'TRUNCATE '
+    assert.ok(!regex.test("truncate table_name"));
+    assert.ok(!regex.test("SELECT * FROM users"));
+  });
+
+  it("blocks DELETE FROM without WHERE", () => {
+    const regex = new RegExp(SQL_RULES[3].pattern);
+    assert.ok(regex.test("DELETE FROM users"));
+    assert.ok(!regex.test("DELETE FROM users WHERE id = 1"));
+    assert.ok(!regex.test("DELETE FROM users WHERE active = false"));
+  });
+});
+
+describe("damage-control: supabase destructive command patterns", () => {
+  const SUPABASE_RULES = [
+    { pattern: "\\b(?:supabase\\s+db\\s+dump|pg_dump|mysqldump)\\b", reason: "Full schema dumps produce massive output" },
+    { pattern: "\\bsupabase\\s+(?:db\\s+reset|migration\\s+reset)\\b", reason: "supabase db/migration reset destroys the local database" },
+    { pattern: "\\bsupabase\\s+db\\s+push\\s+.*--force\\b", reason: "Force-pushing schema changes overwrites remote state" },
+    { pattern: "\\bsupabase\\s+(?:stop|db\\s+remove)\\b", reason: "Stopping or removing the Supabase instance destroys the local database" },
+  ];
+
+  it("blocks supabase db dump (exfiltration)", () => {
+    const regex = new RegExp(SUPABASE_RULES[0].pattern);
+    assert.ok(regex.test("supabase db dump"));
+    assert.ok(regex.test("pg_dump -U postgres mydb"));
+    assert.ok(regex.test("mysqldump -u root mydb"));
+    // These should NOT match
+    assert.ok(!regex.test("supabase db reset"));
+    assert.ok(!regex.test("supabase db push"));
+  });
+
+  it("blocks supabase db reset", () => {
+    const regex = new RegExp(SUPABASE_RULES[1].pattern);
+    assert.ok(regex.test("supabase db reset"));
+    assert.ok(regex.test("supabase db reset --debug"));
+    assert.ok(regex.test("supabase migration reset"));
+    // These should NOT match
+    assert.ok(!regex.test("supabase db push"));
+    assert.ok(!regex.test("supabase start"));
+    assert.ok(!regex.test("supabase db dump"));
+  });
+
+  it("does NOT block supabase db push (safe incremental migration)", () => {
+    const regex = new RegExp(SUPABASE_RULES[1].pattern);
+    assert.ok(!regex.test("supabase db push"));
+  });
+
+  it("blocks supabase db push --force", () => {
+    const regex = new RegExp(SUPABASE_RULES[2].pattern);
+    assert.ok(regex.test("supabase db push --force"));
+    assert.ok(!regex.test("supabase db push"));
+    assert.ok(!regex.test("supabase db push --linked"));
+  });
+
+  it("blocks supabase stop and supabase db remove", () => {
+    const regex = new RegExp(SUPABASE_RULES[3].pattern);
+    assert.ok(regex.test("supabase stop"));
+    assert.ok(regex.test("supabase db remove"));
+    assert.ok(!regex.test("supabase start"));
+    assert.ok(!regex.test("supabase status"));
+  });
+});
+
 describe("damage-control: rule evaluation scenarios", () => {
   const cwd = "/home/user/project";
 

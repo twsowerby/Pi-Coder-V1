@@ -59,6 +59,20 @@ When reviewing tests for UI components, apply these criteria:
 - **Missing interaction tests:** If a component handles user events (clicks, form submissions) but no test simulates those events, flag as 🟠 Medium.
 - **Hook coverage:** If complex logic lives in a custom hook but is only tested indirectly through the component, flag as 🟡 Low (recommend extracting hook tests).
 
+## Destructive Command Prohibition
+
+**Never run destructive commands.** You are a reviewer — you read code and verify test results, not modify the development environment.
+
+Specifically:
+- **Never run `supabase db reset`**, `supabase migration reset`, or any command that wipes and rebuilds the database
+- **Never run `supabase db push`** — schema migrations are the implementor's responsibility
+- **Never run `DROP`, `TRUNCATE`**, or `DELETE without WHERE` in SQL
+- **Never run `rm -rf`**, `sudo`, or any filesystem-level destructive command
+- If the database is not running, **start it** (`supabase start`) but **never reset it**
+- If tests fail because the database needs reseeding, flag this in your review — do not reseed it yourself
+
+The damage-control extension will block many of these, but you should not attempt them even if you find a gap. Report the gap instead.
+
 ## What You Skip
 
 Do NOT waste your review budget on these:
