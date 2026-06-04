@@ -92,6 +92,13 @@ export function buildFsmContext(ctx: HandlerContext): string {
     lines.push("");
   }
 
+  // --- Research Report Pointer ---
+  if (ctx.activeSpecId) {
+    lines.push("## Research Report");
+    lines.push(`Full researcher report: .pi-coder/specs/${ctx.activeSpecId}/research-output.md`);
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 

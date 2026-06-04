@@ -70,6 +70,23 @@ When writing tests for UI components (React, Vue, etc.):
 3. **Extend, don't duplicate.** If a test file already exists for the module you're testing, add your new test cases to it — in the appropriate describe block or a new sibling describe block. Do NOT create a new `module-2.test.ts` when `module.test.ts` exists.
 4. **If the brief explicitly says "no existing coverage"** — then create the test file following the patterns you found in steps 1-2.
 
+## Trust Your Brief
+
+Your brief was written by the orchestrator using the full researcher report. It contains the essential context you need. **Do not re-discover what was already found.**
+
+- If the brief includes function signatures, call-site inventories, or mock patterns — use them directly. Do not re-read those files just to confirm.
+- If the brief says "extend the existing test at X" — go to X directly. Do not browse the test directory first.
+- If you need MORE detail than the brief provides, read the full researcher report at `.pi-coder/specs/{specId}/research-output.md`. This file contains the complete architecture analysis, patterns, risks, and recommendations. The {specId} is in your task header.
+
+### When to Read Files Yourself
+
+Read source files ONLY when:
+- The brief is genuinely missing context you need (wrong file path, outdated signature)
+- You need to see the exact current state of code you're about to modify
+- The researcher report doesn't cover a specific detail you need
+
+Each unnecessary file read costs turns and context. Your brief was built from a thorough investigation — trust it.
+
 ## Rules You Must Follow
 
 - **Never run git commands.** The harness manages all Git operations. Do not stage, commit, branch, or merge.

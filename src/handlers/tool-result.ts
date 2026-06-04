@@ -19,55 +19,177 @@ import { resolve } from "node:path";
 /** Maximum consecutive verdict extraction failures before forced re-delegation. */
 const MAX_VERDICT_EXTRACTION_RETRIES = 3;
 
-/** Token threshold for proactive compaction at FSM boundaries (R4).
+/** Token threshold for proactive compaction at FSM boundaries.
  *  Set to 80K — with KV-cached providers, each compaction invalidates the prompt
  *  cache (~35K re-read cost). Compacting at 50K was too aggressive, causing 5
  *  compactions per spec with 3–4 barely exceeding the threshold. 80K allows
  *  ~3 unit cycles of cache continuity before compaction, reducing cache busting
  *  by ~3x while still preventing context from growing unboundedly. */
-const PROACTIVE_COMPACTION_THRESHOLD_TOKENS = 80_000;
+const DEFAULT_COMPACTION_THRESHOLD_TOKENS = 80_000;
+
+/** Cooldown between compactions to prevent double-compact at boundary chains. */
+const COMPACTION_COOLDOWN_MS = 60_000; // 1 minute
+let lastCompactionTime = 0;
+
+
+
+import type { CompactionBoundary } from "../types.ts";
 
 /**
- * Proactive Compaction at FSM Boundaries (R4).
+ * Boundary-aware compaction table.
  *
- * After each TDD unit completion (GREEN_VALIDATE transition), check context
- * token usage and compact if above threshold. This is a natural compaction
- * boundary — the FSm has just completed a unit and is about to start a new
- * one, making it safe to compress old context.
+ * Each entry defines an FSM transition where proactive compaction should fire
+ * with boundary-specific instructions. The compactor needs to know what's safe
+ * to discard (varies by boundary) and what MUST be preserved (always the FSM
+ * state block).
  *
- * Only triggers in TDD or Light mode (not plan/off mode), and only after
- * GREEN_VALIDATE transitions (unit completion = natural boundary).
+ * customInstructions supports {specId} and {previousUnitName} interpolation.
  */
-function checkProactiveCompaction(ctx: HandlerContext, afterState: string, previousState: string): void {
+const COMPACTION_BOUNDARIES: CompactionBoundary[] = [
+  {
+    name: "SPEC_COMPLETE",
+    fromState: "MERGING",
+    toStates: ["COMPLETE"],
+    threshold: null, // Force regardless of token count — prior spec is entirely waste
+    customInstructions:
+      "A spec has just completed and the FSM is transitioning to COMPLETE then IDLE. " +
+      "The previous spec is fully done — ALL prior spec conversation (research output, " +
+      "implementation details, test results, review verdicts, subagent delegation briefs, " +
+      "tool call I/O) is now irrelevant. Compress it into a single line: 'Spec {specId} completed and merged.' " +
+      "Preserve ONLY the FSM state block at the top of this summary — it is CRITICAL and must not be abbreviated.",
+    resumeMessage: (afterState: string, _specId: string | null) =>
+      `Spec complete. You are in ${afterState}. The previous spec has been compacted. When ready, start a new spec with pi_coder_advance_fsm IDLE → SPEC_WORK.`,
+  },
+  {
+    name: "UNIT_COMPLETE_TDD",
+    fromState: "TDD_GREEN_VALIDATE",
+    toStates: ["TDD_RED_WRITE", "IMPLEMENTING", "REVIEWING"],
+    threshold: DEFAULT_COMPACTION_THRESHOLD_TOKENS,
+    customInstructions:
+      "Unit {previousUnitName} just completed GREEN validation. This unit's test output, " +
+      "implementor results, and tool I/O can be compressed into a one-line summary. " +
+      "Preserve: the FSM state block (CRITICAL), active spec ID, the spec's acceptance criteria " +
+      "and implementation plan with remaining units, evidence flags, and retry/loop counters. " +
+      "The next unit is about to start — its brief will be built from the preserved spec context.",
+    resumeMessage: (afterState: string, _specId: string | null) =>
+      `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`,
+  },
+  {
+    name: "UNIT_COMPLETE_VERIFY_SKIP",
+    fromState: "IMPLEMENTING",
+    toStates: ["TDD_RED_WRITE", "IMPLEMENTING", "REVIEWING"],
+    threshold: DEFAULT_COMPACTION_THRESHOLD_TOKENS,
+    customInstructions:
+      "Unit {previousUnitName} just completed in IMPLEMENTING. This unit's implementor results " +
+      "and tool I/O can be compressed into a one-line summary. Preserve: the FSM state block (CRITICAL), " +
+      "active spec ID, the spec's acceptance criteria and implementation plan with remaining units, " +
+      "evidence flags, and retry/loop counters.",
+    resumeMessage: (afterState: string, _specId: string | null) =>
+      `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`,
+  },
+  {
+    name: "REVIEW_PASSED",
+    fromState: "REVIEWING",
+    toStates: ["APPROVED"],
+    threshold: DEFAULT_COMPACTION_THRESHOLD_TOKENS,
+    customInstructions:
+      "Review just approved for spec {specId}. All review iteration details and test output can " +
+      "be compressed. The full review is saved to .pi-coder/specs/{specId}/review.md if needed later. " +
+      "Preserve: the FSM state block (CRITICAL), spec ID, and the verdict 'approved'.",
+    resumeMessage: (afterState: string, _specId: string | null) =>
+      `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`,
+  },
+  {
+    name: "SPEC_APPROVED",
+    fromState: "SPEC_WORK",
+    toStates: ["SPEC_APPROVED"],
+    threshold: DEFAULT_COMPACTION_THRESHOLD_TOKENS,
+    customInstructions:
+      "Spec {specId} just approved. The spec is saved and available via pi_coder_read_spec. " +
+      "All research output and interview responses can be compressed — they've been incorporated " +
+      "into the spec. Preserve: the FSM state block (CRITICAL) and the spec ID.",
+    resumeMessage: (afterState: string, _specId: string | null) =>
+      `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`,
+  },
+];
+
+/**
+ * Find a matching compaction boundary for a given FSM transition.
+ */
+function findCompactionBoundary(previousState: string, newState: string): CompactionBoundary | undefined {
+  return COMPACTION_BOUNDARIES.find(
+    (b) => b.fromState === previousState && b.toStates.includes(newState),
+  );
+}
+
+/**
+ * Boundary-Aware Compaction at FSM Transitions.
+ *
+ * After each FSM transition, check whether the transition crosses a compaction
+ * boundary. If it does, and the token threshold is exceeded (or the boundary
+ * forces compaction regardless), compact with boundary-specific instructions.
+ *
+ * Replaces the old single-trigger checkProactiveCompaction() which only
+ * fired after TDD_GREEN_VALIDATE with generic instructions.
+ */
+function checkBoundaryCompaction(ctx: HandlerContext, previousState: string, newState: string): void {
   // Only trigger in active FSM modes
   if (ctx.piCoderMode === "off" || ctx.piCoderMode === "plan") return;
 
-  // Only trigger after GREEN_VALIDATE completions (unit completion = natural boundary)
-  // This guard checks the ACTUAL previous state, not just the destination,
-  // making it safe even if called from a different code path.
-  if (previousState !== "TDD_GREEN_VALIDATE") return;
+  // Find matching boundary
+  const boundary = findCompactionBoundary(previousState, newState);
+  if (!boundary) return;
 
   // Check token usage
   const usage = ctx.sessionCtx?.getContextUsage();
   if (!usage || usage.tokens === null) return;
 
-  if (usage.tokens <= PROACTIVE_COMPACTION_THRESHOLD_TOKENS) return;
+  // Forced boundaries (threshold === null) always compact; others check threshold
+  const isForced = boundary.threshold === null;
+  if (!isForced && usage.tokens <= (boundary.threshold ?? DEFAULT_COMPACTION_THRESHOLD_TOKENS)) return;
+
+  // Cooldown guard — prevent double-compaction at boundary chains
+  // Exception: forced boundaries (SPEC_COMPLETE) bypass cooldown
+  if (!isForced && Date.now() - lastCompactionTime < COMPACTION_COOLDOWN_MS) {
+    ctx.logEvent("boundary_compaction_skipped_cooldown", {
+      boundary: boundary.name,
+      tokensBefore: usage.tokens,
+      previousState,
+      newState,
+      specId: ctx.activeSpecId,
+    });
+    return;
+  }
 
   // Don't compact during an active subagent run
   if (ctx.subagentMonitor.running) return;
 
-  ctx.logEvent("proactive_compaction_initiated", {
+  // Interpolate {specId} and {previousUnitName} in instructions
+  const specId = ctx.activeSpecId ?? "unknown";
+  const previousUnitName = ctx.stateMachine?.currentUnitName ?? "unknown";
+  const interpolatedInstructions = boundary.customInstructions
+    .replace(/\{specId\}/g, specId)
+    .replace(/\{previousUnitName\}/g, previousUnitName);
+
+  ctx.logEvent("boundary_compaction_initiated", {
+    boundary: boundary.name,
     tokensBefore: usage.tokens,
-    threshold: PROACTIVE_COMPACTION_THRESHOLD_TOKENS,
+    threshold: boundary.threshold,
+    isForced,
     previousState,
-    afterState,
+    newState,
     specId: ctx.activeSpecId,
   });
 
   ctx.sessionCtx?.compact({
-    customInstructions: "Preserve FSM state, spec progress, and recent subagent results. The Pi-Coder FSM State block at the top of the summary is CRITICAL — do not discard or abbreviate it.",
+    customInstructions: interpolatedInstructions,
     onComplete: () => {
-      ctx.logEvent("proactive_compaction_completed", { afterState, specId: ctx.activeSpecId });
+      lastCompactionTime = Date.now();
+      ctx.logEvent("boundary_compaction_completed", {
+        boundary: boundary.name,
+        newState,
+        specId: ctx.activeSpecId,
+      });
       // Auto-resume: compact() aborts the current agent turn. Without this,
       // the session stalls until the user manually sends a message.
       // pi.sendUserMessage always triggers a new turn, so the orchestrator
@@ -77,24 +199,25 @@ function checkProactiveCompaction(ctx: HandlerContext, afterState: string, previ
       // is already in the correct state after the transition. Telling it to
       // "use pi_coder_advance_fsm" causes a redundant advance that creates
       // duplicate unit_start events.
-      const resumeMessage = `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`;
+      const resumeMessage = boundary.resumeMessage(newState, ctx.activeSpecId);
       try {
         ctx.pi.sendUserMessage(resumeMessage);
-        ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId });
+        ctx.logEvent("boundary_compaction_resume", { boundary: boundary.name, newState, specId: ctx.activeSpecId });
       } catch (err: unknown) {
-        ctx.logEvent("proactive_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), afterState, specId: ctx.activeSpecId });
+        ctx.logEvent("boundary_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), boundary: boundary.name, newState, specId: ctx.activeSpecId });
       }
     },
     onError: (error: Error) => {
-      ctx.logEvent("proactive_compaction_error", { error: error.message, afterState, specId: ctx.activeSpecId });
+      lastCompactionTime = Date.now();
+      ctx.logEvent("boundary_compaction_error", { error: error.message, boundary: boundary.name, newState, specId: ctx.activeSpecId });
       // Attempt resume even on compaction error — the session may still be usable
       // Same fix as onComplete: don't tell orchestrator to advance the FSM
       try {
-        const resumeMessage = `Continue with the current task. You are in ${afterState}. Proceed with the next step for this state.`;
+        const resumeMessage = boundary.resumeMessage(newState, ctx.activeSpecId);
         ctx.pi.sendUserMessage(resumeMessage);
-        ctx.logEvent("proactive_compaction_resume", { afterState, specId: ctx.activeSpecId, afterError: true });
+        ctx.logEvent("boundary_compaction_resume", { boundary: boundary.name, newState, specId: ctx.activeSpecId, afterError: true });
       } catch (err: unknown) {
-        ctx.logEvent("proactive_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), afterState, specId: ctx.activeSpecId, afterError: true });
+        ctx.logEvent("boundary_compaction_resume_failed", { error: err instanceof Error ? err.message : String(err), boundary: boundary.name, newState, specId: ctx.activeSpecId, afterError: true });
       }
     },
   });
@@ -414,15 +537,11 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
           ctx.nudgeEngine.reset(ctx.stateMachine.currentState);
         }
 
-        // R4: Proactive compaction after GREEN_VALIDATE completions
-        // Pass both previous and new state so the function can verify
-        // it was actually triggered by a GREEN_VALIDATE transition.
-        if (
-          advDetails.previousState === "TDD_GREEN_VALIDATE" &&
-          (advDetails.newState === "REVIEWING" || advDetails.newState === "TDD_RED_WRITE")
-        ) {
-          checkProactiveCompaction(ctx, advDetails.newState, advDetails.previousState!);
-        }
+        // Boundary-aware compaction after FSM transitions.
+        // Replaces the old single-trigger checkProactiveCompaction() which only
+        // fired after TDD_GREEN_VALIDATE. Now checks ALL transitions against the
+        // compaction boundary table for boundary-specific compaction.
+        checkBoundaryCompaction(ctx, advDetails.previousState!, advDetails.newState);
       }
     }
 
@@ -804,6 +923,11 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         ctx.tokenTracker.resetLifecycleTracking();
         ctx.nudgeEngine.reset(ctx.stateMachine!.currentState);
         await ctx.persistState();
+
+        // B1: SPEC_COMPLETE compaction — force compact after merge.
+        // The entire prior spec conversation is waste at this point.
+        // FSM will transition to COMPLETE then IDLE on the next user action.
+        checkBoundaryCompaction(ctx, "MERGING", "COMPLETE");
 
         if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
           const textBlock = rawContent[0] as { type: "text"; text: string };

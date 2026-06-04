@@ -512,6 +512,25 @@ export interface KnowledgeEntry {
  * Evidence flags that tools set when they complete specific work.
  * The StateMachine checks these before allowing transitions.
  */
+/**
+ * Defines a compaction boundary — an FSM transition where proactive compaction
+ * should fire with boundary-specific instructions.
+ */
+export interface CompactionBoundary {
+  /** Human-readable name for logging */
+  name: string;
+  /** The previousState that triggers this boundary */
+  fromState: string;
+  /** The newState(s) that trigger this boundary */
+  toStates: string[];
+  /** Token threshold — compact only if above this. null = force regardless of tokens */
+  threshold: number | null;
+  /** Boundary-specific instructions for the compactor (supports {specId} and {previousUnitName} interpolation) */
+  customInstructions: string;
+  /** Build a resume message sent after compaction completes */
+  resumeMessage: (afterState: string, specId: string | null) => string;
+}
+
 export type EvidenceFlag =
   | "spec_saved"
   | "spec_user_approved"

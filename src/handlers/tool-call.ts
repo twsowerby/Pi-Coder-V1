@@ -182,6 +182,16 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
           (input as Record<string, unknown>).outputMode = "file-only";
         }
 
+        // Inject `output` parameter for researcher subagent calls.
+        // Persists the full researcher report to disk so the implementor can
+        // reference it for additional detail beyond what the brief includes.
+        // Unlike reviews, research doesn't cycle — one report per spec.
+        if (targetAgent === "pi-coder.researcher" && ctx.activeSpecId) {
+          const outputParts = [".pi-coder", "specs", ctx.activeSpecId, "research-output.md"];
+          (input as Record<string, unknown>).output = outputParts.join("/");
+          (input as Record<string, unknown>).outputMode = "file-only";
+        }
+
         // Track subagent timing
         ctx.subagentMonitor.startTime = Date.now();
         ctx.subagentMonitor.lastAgent = targetAgent;

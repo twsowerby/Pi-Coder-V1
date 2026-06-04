@@ -146,12 +146,57 @@ Every implementor task MUST include these fields in the brief. Do not delegate w
 | **Knowledge files** | Which `.pi-coder/knowledge/` files to read | Same | Same | Same + reviewer notes |
 | **Existing test discovery** | Run discovery commands (see below) BEFORE delegating. Include results in the brief. | N/A | N/A for skip; run discovery for verify | Same as original RED brief |
 | **Existing test coverage** | "Extend" or "create" directive (see below) | N/A | N/A for skip; directive for verify | Same as original brief |
+| **Target code snippet** | 5-15 lines of the function signature / class definition / interface to modify. Implementor should NOT need to discover this. | Same | Same | Same |
+| **Call-site inventory** | N/A | N/A | Required for migrations: each `this.db.from('table')` call to replace, grouped by method | Same |
+| **Retry context** | N/A | N/A | N/A | Previous attempt summary (see Re-delegation section) |
 
 **Test discovery commands for RED phase:** Run `grep -r 'describe\|it(\|test(' <key-file-dirs>` and `find . -name '*.test.*' -o -name '*.spec.*' -print \| grep -i <key-file-stem>` before delegating. Include results in the brief so the implementor knows what test structure already exists.
 
 **Coverage directive for RED phase:** If tests exist for the target module: "Extend the existing test file(s), do NOT create a new parallel test file." If no tests: "No existing test coverage — create a new test file following project conventions."
 | **Unit name and strategy** | Unit name from plan + `testStrategy` | Same | Same | Same |
 | **Test suite** | Unit's `testSuite` field or "unit" default | Same | Same | Same |
+
+### Researcher → Implementor Context Transport
+
+The researcher's full report is saved to `.pi-coder/specs/{specId}/research-output.md`. The implementor knows to read this file if it needs more detail than the brief provides. This means:
+
+- **Don't overstuff the brief** with every finding. Include the KEY context (signatures, call-sites, mock patterns) but let the implementor deep-dive the research report for secondary details.
+- **Do include the specId** in the brief header so the implementor knows where to find the research report.
+- **Include "must-read" directives** for critical findings: "Read .pi-coder/specs/{specId}/research-output.md → Key Tables section for the exact column types this migration depends on."
+
+When you delegate to the researcher before an implementor delegation, the researcher returns file paths, function signatures, mock patterns, and call-site details. **You MUST include these findings in the implementor's brief.** Do not make the implementor re-discover what the researcher already found.
+
+Add a `### Research Context` section to the brief containing:
+- Function signatures the researcher identified for the target files
+- Mock patterns the researcher noted for the test files
+- Call-site inventory the researcher catalogued
+
+This typically saves 4-7 implementor turns per delegation.
+
+### Brief Anti-Patterns
+
+Do NOT do these — they cause implementor runaway:
+
+1. **Multi-service bundling**: "Migrate ServiceA + ServiceB" is ALWAYS two briefs. One service per delegation. The only exception: two services share a single method that must be updated atomically.
+
+2. **Migration without call-site inventory**: "Migrate XService to use repos" without listing the exact `this.db.from()` calls that need replacing. The implementor must instead read the entire service file and catalog the calls themselves — 3-5 waste turns guaranteed.
+
+3. **GREEN briefs that don't reference RED tests**: "Implement the code to make 4 failing tests pass" without naming the test file. The implementor must find the tests. ALWAYS include the test file path and the test case names from the RED phase.
+
+4. **Retry without prior context**: Re-delegating the same task with the same wording after an implementor failure. This produces the same result. ALWAYS include what was tried, what failed, and what to do differently.
+
+5. **Vague scope**: "Complete the repository pattern for this module" instead of listing the specific methods to create and the exact calls to replace.
+
+### Turn Budget Rule
+
+If a unit's brief would require the implementor to:
+- Modify more than 10 distinct code locations, OR
+- Touch a file with more than 500 lines of active changes, OR
+- Migrate more than 15 `.from()` calls across more than 5 tables
+
+...split the unit. Each delegation should complete in ≤25 implementor turns. If a brief describes work that might need >25 turns, it's too broad — the unit sizing rule was violated.
+
+When in doubt, err on the side of more, smaller delegations.
 
 ### Test-to-AC Mapping (RED phase only)
 
@@ -245,6 +290,7 @@ When you re-delegate to the implementor from NEEDS_CHANGES:
 6. **For functional fixes going through IMPLEMENTING (verify/skip units):** "You are re-entering IMPLEMENT phase for a verify/skip unit. Apply the fix described by the reviewer." For verify units: "After applying the fix, tests will be run to verify."
 7. **For non-functional fixes** (style, naming, docs): "This is a non-functional change. Modify the code directly — no new tests needed."
 8. **For component fix briefs with multiple failing interdependent tests:** Instruct the implementor to fix and verify ONE test at a time. Do NOT batch-fix multiple interdependent DOM/component tests. The whack-a-mole pattern (fixing one test breaks another) is the #1 cause of implementor runaway spirals. Explicit: "Fix the first failing test, run the test suite, then fix the next. Do not attempt to fix all failing tests simultaneously."
+9. **Include the implementor's output as context**: When re-delegating after NEEDS_CHANGES, include a summary of what the previous implementor did — what files were modified and what approach was taken. This prevents the fix implementor from re-discovering the same problems or reverting changes that were partially correct. Format: "Previous attempt: delegation #N, M turns, exit code X. What was tried: [summary]. Files already modified: [list]. What to do differently: [instruction]."
 
 {{referenceProjects}}
 {{dbCommands}}
