@@ -1,5 +1,7 @@
 # Agent Operational Protocol
 
+**Start a new branch before you start working. If there are uncommitted changes, or a branch that is not main active, stop and ask me what the best action is before you start changing files.**
+
 ## Primary Directives
 Execute the following workflow for all user requests:
 

@@ -185,11 +185,15 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         // Inject `output` parameter for researcher subagent calls.
         // Persists the full researcher report to disk so the implementor can
         // reference it for additional detail beyond what the brief includes.
-        // Unlike reviews, research doesn't cycle — one report per spec.
-        if (targetAgent === "pi-coder.researcher" && ctx.activeSpecId) {
-          const outputParts = [".pi-coder", "specs", ctx.activeSpecId, "research-output.md"];
-          (input as Record<string, unknown>).output = outputParts.join("/");
-          (input as Record<string, unknown>).outputMode = "file-only";
+        // Uses a stable tmp path that doesn't depend on activeSpecId — research
+        // typically happens BEFORE the spec is saved, so specId is null.
+        // The file is overwritten each time the researcher runs (no accumulation).
+        // Cleaned up on spec completion (MERGING→COMPLETE) and new spec start
+        // (IDLE→SPEC_WORK) by the tool-result handler.
+        if (targetAgent === "pi-coder.researcher") {
+          (input as Record<string, unknown>).output = ".pi-coder/tmp/research-output.md";
+          // NOT file-only: the orchestrator needs the full report inline to
+          // write effective briefs. The file on disk is a bonus for the implementor.
         }
 
         // Track subagent timing

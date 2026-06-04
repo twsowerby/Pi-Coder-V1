@@ -80,7 +80,9 @@ export type LogEventType =
   | "boundary_compaction_resume"
   | "boundary_compaction_resume_failed"
   | "review_saved_to_file"
-  | "review_save_failed";
+  | "review_save_failed"
+  | "research_tmp_cleaned"
+  | "research_tmp_cleanup_failed";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -150,6 +152,8 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   boundary_compaction_resume_failed: "standard",
   review_saved_to_file: "standard",
   review_save_failed: "standard",
+  research_tmp_cleaned: "standard",
+  research_tmp_cleanup_failed: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

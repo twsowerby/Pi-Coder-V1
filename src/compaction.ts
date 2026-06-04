@@ -93,11 +93,11 @@ export function buildFsmContext(ctx: HandlerContext): string {
   }
 
   // --- Research Report Pointer ---
-  if (ctx.activeSpecId) {
-    lines.push("## Research Report");
-    lines.push(`Full researcher report: .pi-coder/specs/${ctx.activeSpecId}/research-output.md`);
-    lines.push("");
-  }
+  // Uses stable tmp path (doesn't depend on specId). File may not exist if
+  // research hasn't been done yet or tmp has been cleaned up on spec completion.
+  lines.push("## Research Report");
+  lines.push("Full researcher report: .pi-coder/tmp/research-output.md");
+  lines.push("");
 
   return lines.join("\n");
 }

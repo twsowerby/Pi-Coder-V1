@@ -76,7 +76,7 @@ Your brief was written by the orchestrator using the full researcher report. It 
 
 - If the brief includes function signatures, call-site inventories, or mock patterns — use them directly. Do not re-read those files just to confirm.
 - If the brief says "extend the existing test at X" — go to X directly. Do not browse the test directory first.
-- If you need MORE detail than the brief provides, read the full researcher report at `.pi-coder/specs/{specId}/research-output.md`. This file contains the complete architecture analysis, patterns, risks, and recommendations. The {specId} is in your task header.
+- If you need MORE detail than the brief provides, read the full researcher report at `.pi-coder/tmp/research-output.md`. This file contains the complete architecture analysis, patterns, risks, and recommendations.
 
 ### When to Read Files Yourself
 

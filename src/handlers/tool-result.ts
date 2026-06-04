@@ -12,7 +12,7 @@ import { notify } from "../notification-manager.ts";
 import { formatTokenCount, formatDurationMs } from "../ui/formatting.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { FSMTrigger } from "../logger.ts";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -343,6 +343,28 @@ function formatIssuesSteer(issues?: IssueDetail[]): string {
 /** Track consecutive verdict extraction failures per spec. */
 const verdictExtractionFailures = new Map<string, number>();
 
+/**
+ * Clean up the researcher output tmp directory.
+ *
+ * Called on spec completion (MERGING→COMPLETE) and new spec start
+ * (IDLE→SPEC_WORK) to prevent stale research files from leaking across
+ * spec lifecycles. Best-effort — logs failures but doesn't throw.
+ */
+async function cleanupResearchTmp(ctx: HandlerContext): Promise<void> {
+  const tmpDir = resolve(ctx.projectCwd, ".pi-coder", "tmp");
+  try {
+    if (existsSync(tmpDir)) {
+      await rm(tmpDir, { recursive: true, force: true });
+      ctx.logEvent("research_tmp_cleaned", { path: tmpDir });
+    }
+  } catch (err: unknown) {
+    ctx.logEvent("research_tmp_cleanup_failed", {
+      path: tmpDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /** Register the tool_result event handler. */
 export function registerToolResultHandler(ctx: HandlerContext): void {
   ctx.pi.on("tool_result", async (event) => {
@@ -491,6 +513,12 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         specId: ctx.activeSpecId ?? "none",
         userRequest: "(spec work initiated)",
       });
+
+      // Clean up stale researcher output tmp from previous spec lifecycle.
+      // Handles crash recovery — if the previous session didn't reach MERGING→COMPLETE,
+      // the tmp file would persist. Clearing on new spec start prevents the
+      // implementor from reading outdated research from a different spec.
+      await cleanupResearchTmp(ctx);
     }
 
     // Track all FSM transitions via pi_coder_advance_fsm
@@ -928,6 +956,9 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
         // The entire prior spec conversation is waste at this point.
         // FSM will transition to COMPLETE then IDLE on the next user action.
         checkBoundaryCompaction(ctx, "MERGING", "COMPLETE");
+
+        // Clean up researcher output tmp directory — spec lifecycle is complete.
+        await cleanupResearchTmp(ctx);
 
         if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
           const textBlock = rawContent[0] as { type: "text"; text: string };

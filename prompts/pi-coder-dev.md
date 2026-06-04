@@ -158,11 +158,10 @@ Every implementor task MUST include these fields in the brief. Do not delegate w
 
 ### Researcher → Implementor Context Transport
 
-The researcher's full report is saved to `.pi-coder/specs/{specId}/research-output.md`. The implementor knows to read this file if it needs more detail than the brief provides. This means:
+The researcher's full report is saved to `.pi-coder/tmp/research-output.md` (a stable path that doesn't depend on specId). The implementor knows to read this file if it needs more detail than the brief provides. This means:
 
 - **Don't overstuff the brief** with every finding. Include the KEY context (signatures, call-sites, mock patterns) but let the implementor deep-dive the research report for secondary details.
-- **Do include the specId** in the brief header so the implementor knows where to find the research report.
-- **Include "must-read" directives** for critical findings: "Read .pi-coder/specs/{specId}/research-output.md → Key Tables section for the exact column types this migration depends on."
+- **Include "must-read" directives** for critical findings: "Read .pi-coder/tmp/research-output.md → Key Tables section for the exact column types this migration depends on."
 
 When you delegate to the researcher before an implementor delegation, the researcher returns file paths, function signatures, mock patterns, and call-site details. **You MUST include these findings in the implementor's brief.** Do not make the implementor re-discover what the researcher already found.
 
