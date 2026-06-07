@@ -24,6 +24,36 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
       notify(ctx.config, "spec_approval", "Pi Coder · 📋 Review", `Spec ${ctx.activeSpecId ?? "unknown"} ready for your approval`);
       ctx.tokenTracker.specApprovalInterviewStartTime = Date.now();
     }
+    // Also notify for the dedicated approval tools
+    if (ctx.stateMachine && (toolName === "pi_coder_approve_spec") && ctx.stateMachine.currentState === "SPEC_WORK") {
+      notify(ctx.config, "spec_approval", "Pi Coder · 📋 Review", `Spec ${ctx.activeSpecId ?? "unknown"} ready for your approval`);
+      ctx.tokenTracker.specApprovalInterviewStartTime = Date.now();
+    }
+    if (ctx.stateMachine && toolName === "pi_coder_approve_final" && ctx.stateMachine.currentState === "APPROVED") {
+      notify(ctx.config, "spec_approval", "Pi Coder · ✅ Final Report", `Spec ${ctx.activeSpecId ?? "unknown"} final report ready for review`);
+    }
+
+    // --- Interview reliability: timeout injection + structured approval nudge ---
+    if (toolName === "interview") {
+      // Inject timeout from config on ALL interview calls (if not already set)
+      if ((input as Record<string, unknown>).timeout === undefined || (input as Record<string, unknown>).timeout === null) {
+        (input as Record<string, unknown>).timeout = ctx.config.interviewTimeout;
+      }
+
+      // Nudge toward dedicated approval tool in SPEC_WORK (don't hard-block —
+      // the dedicated tool may not work if pi-interview import fails)
+      if (ctx.stateMachine && ctx.stateMachine.currentState === "SPEC_WORK") {
+        // Log the nudge — the prompt/skill instructions guide the LLM toward
+        // the dedicated tool, but raw interview is allowed as fallback.
+        ctx.logEvent("tool_call_blocked", {
+          toolName,
+          specId: ctx.activeSpecId,
+          note: "Consider pi_coder_approve_spec for structured format, but raw interview is allowed as fallback",
+          blocked: false,
+        });
+      }
+      // APPROVED: no special handling — agent may ask mid-flight questions.
+    }
 
     // Determine which tools are allowed based on current mode
     const allowedTools = MODE_TOOL_SETS[ctx.piCoderMode];

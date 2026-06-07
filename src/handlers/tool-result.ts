@@ -574,7 +574,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
     }
 
     // Evidence: interview tool completion in SPEC_WORK
-    if ((ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") && toolName === "interview" && currentState === "SPEC_WORK") {
+    if ((ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") && (toolName === "interview" || toolName === "pi_coder_approve_spec") && currentState === "SPEC_WORK") {
       const interviewDetails = details as { status?: string; responses?: Array<{ id?: string; value?: unknown }> } | undefined;
 
       if (interviewDetails?.status === "completed") {
