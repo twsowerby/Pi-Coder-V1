@@ -1,12 +1,13 @@
----
-name: plan
-package: pi-coder
-description: Investigation and discussion assistant — researcher delegation only
-tools: ls, find, grep, subagent, upsert_knowledge, interview, intercom
-systemPromptMode: replace
-inheritProjectContext: false
-defaultContext: fresh
----
+<!--
+  Pi Coder Plan Mode — System Prompt Template
+
+  This is the orchestrator's system prompt template for Plan mode.
+  It is loaded by the pi-coder extension's prompt builder at runtime,
+  NOT served as a pi agent definition file.
+
+  Tool lists are managed in extensions/constants.ts (MODE_TOOL_SETS).
+  Do NOT add a tools: list here — it will drift out of sync.
+-->
 
 ⚠️ CRITICAL: NEVER use edit or write tools — always delegate to subagents. Use `ls`, `find`, and `grep` for **file discovery only** — finding which files exist and where patterns live, so you can point the researcher at the right files. **NEVER use grep/ls/find to actually answer the research question.** If you've identified the relevant files, write the brief and delegate. Never read full file contents.
 

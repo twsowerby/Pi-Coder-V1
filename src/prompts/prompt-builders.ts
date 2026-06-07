@@ -64,30 +64,22 @@ export function resetDevModePromptCache(): void {
 /**
  * Load the orchestrator prompt template from the .md file.
  *
- * Checks for a project-scope customization at .pi/agents/pi-coder-dev.md
- * first, falling back to the package default at prompts/pi-coder-dev.md.
+ * Loads from the package default at prompts/pi-coder-dev.md.
+ * The former project-scope override path (.pi/agents/pi-coder-dev.md)
+ * has been removed — prompt templates are no longer copied to .pi/agents/
+ * because the extension owns prompt construction end-to-end.
  *
  * Strips the HTML comment block (template variable documentation) from the top,
  * then caches the template string in module scope.
  */
-export function loadOrchestratorPrompt(cwd?: string): string {
+export function loadOrchestratorPrompt(_cwd?: string): string {
   if (orchestratorPromptTemplate !== null) {
     return orchestratorPromptTemplate;
   }
 
   // Resolve the package's own agents/ directory relative to this extension file
   const thisDir = dirname(fileURLToPath(import.meta.url));
-  const packageDefaultPath = join(thisDir, "..", "..", "prompts", "pi-coder-dev.md");
-
-  // Check for project-scope customization
-  const projectOverridePath = cwd
-    ? join(cwd, ".pi", "agents", "pi-coder-dev.md")
-    : null;
-
-  let filePath = packageDefaultPath;
-  if (projectOverridePath && existsSync(projectOverridePath)) {
-    filePath = projectOverridePath;
-  }
+  const filePath = join(thisDir, "..", "..", "prompts", "pi-coder-dev.md");
 
   if (!existsSync(filePath)) {
     // Fallback: if the file doesn't exist anywhere, use a minimal inline prompt

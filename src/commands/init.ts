@@ -116,20 +116,12 @@ export function registerInitCommand(ctx: HandlerContext): void {
         }
       }
 
-      // 4b. Copy dev mode prompt template from prompts/ — skip existing
-      const packagePromptsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts");
-      const devPromptSource = join(packagePromptsDir, "pi-coder-dev.md");
-      const devPromptTarget = join(cwd, ".pi", "agents", "pi-coder-dev.md");
-
-      if (existsSync(devPromptSource)) {
-        if (!existsSync(devPromptTarget)) {
-          mkdirSync(dirname(devPromptTarget), { recursive: true });
-          copyFileSync(devPromptSource, devPromptTarget);
-          created.push(".pi/agents/pi-coder-dev.md (prompt template)");
-        } else {
-          skipped.push(".pi/agents/pi-coder-dev.md (already exists)");
-        }
-      }
+      // NOTE: Dev/Light/Plan prompt templates are NOT copied to .pi/agents/.
+      // The extension loads them from prompts/ at runtime via the prompt builder
+      // and injects them via the before_agent_start hook. Copying them to
+      // .pi/agents/ would create a dual-path where pi's agent discovery tries
+      // to serve them as agent definitions with stale frontmatter and
+      // unsubstituted template variables.
 
       // 4c. Create starter design_system.md in knowledge — skip if exists
       const designSystemPath = join(knowledgeDir, "design_system.md");

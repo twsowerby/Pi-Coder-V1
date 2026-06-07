@@ -1,12 +1,16 @@
----
-name: dev
-package: pi-coder
-description: Dev mode orchestrator with per-unit test strategy
-tools: ls, find, grep, subagent, pi_coder_git, pi_coder_run_tests, upsert_knowledge, pi_coder_advance_fsm, pi_coder_save_spec, pi_coder_read_spec, pi_coder_approve_spec, pi_coder_final_signoff, intercom
-systemPromptMode: replace
-inheritProjectContext: false
-defaultContext: fresh
----
+<!--
+  Pi Coder Dev Mode — System Prompt Template
+
+  This is the orchestrator's system prompt template for Dev mode.
+  It is loaded by the pi-coder extension's prompt builder at runtime,
+  NOT served as a pi agent definition file.
+
+  The extension strips this comment block and substitutes template
+  variables ({{fsmDiagram}}, {{currentState}}, etc.) before injecting
+  the prompt via the before_agent_start hook.
+
+  Tool lists are managed in extensions/constants.ts (MODE_TOOL_SETS).
+  Do NOT add a tools: list here — it will drift out of sync.
 
 <!--
   TEMPLATE VARIABLES — substituted at runtime by the pi-coder extension.
