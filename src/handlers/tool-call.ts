@@ -15,7 +15,7 @@ import type { HandlerContext } from "../handlers/types.ts";
 /** Register the tool_call event handler. */
 export function registerToolCallHandler(ctx: HandlerContext): void {
   ctx.pi.on("tool_call", async (event) => {
-    if (ctx.piCoderMode === "off") return;
+    if (ctx.piCoderMode === "off" || ctx.piCoderMode === "subagent-guard") return;
 
     const { toolName, input } = event;
 
@@ -222,8 +222,11 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         // (IDLE→SPEC_WORK) by the tool-result handler.
         if (targetAgent === "pi-coder.researcher") {
           (input as Record<string, unknown>).output = ".pi-coder/tmp/research-output.md";
-          // NOT file-only: the orchestrator needs the full report inline to
-          // write effective briefs. The file on disk is a bonus for the implementor.
+          // file-only: return compact file reference instead of full output.
+          // The orchestrator's tool_result handler reads the file and injects
+          // a pruned summary, preventing 10-30K of research output from
+          // bloating the orchestrator's context.
+          (input as Record<string, unknown>).outputMode = "file-only";
         }
 
         // Track subagent timing

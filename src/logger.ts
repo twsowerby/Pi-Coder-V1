@@ -83,7 +83,12 @@ export type LogEventType =
   | "review_save_failed"
   | "research_tmp_cleaned"
   | "research_tmp_cleanup_failed"
-  | "final_signoff";
+  | "final_signoff"
+  | "subagent_guard_activated"
+  | "guard_truncated"
+  | "guard_context_pruned"
+  | "guard_compaction_summary"
+  | "research_summary_injected";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -156,6 +161,13 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   research_tmp_cleaned: "standard",
   research_tmp_cleanup_failed: "standard",
   final_signoff: "minimal",
+
+  // Subagent context guard events
+  subagent_guard_activated: "standard",
+  guard_truncated: "standard",
+  guard_context_pruned: "verbose",
+  guard_compaction_summary: "standard",
+  research_summary_injected: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

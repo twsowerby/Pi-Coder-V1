@@ -60,6 +60,9 @@ export const PLAN_TOOLS = [
 /** Tools available when pi-coder is off (normal pi mode). Exported for use by Spec 10 commands. */
 export const NORMAL_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
+/** Tools available in subagent-guard mode — all pi builtins through, no orchestrator tools. */
+export const GUARD_TOOLS = NORMAL_TOOLS;
+
 // ---------------------------------------------------------------------------
 // Mode → tool-set mapping (deduplicated from 3x inline rebuilds in index.ts)
 // ---------------------------------------------------------------------------
@@ -69,6 +72,7 @@ export const MODE_TOOL_SETS: Record<PiCoderMode, string[]> = {
   plan: PLAN_TOOLS,
   light: LIGHT_TOOLS,
   dev: ORCHESTRATOR_TOOLS,
+  "subagent-guard": GUARD_TOOLS,
 };
 
 // ---------------------------------------------------------------------------

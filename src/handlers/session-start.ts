@@ -23,6 +23,7 @@ import { resetLightModePromptCache, resetPlanModePromptCache, resetDevModePrompt
 import { registerCompactionHandler } from "../compaction.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { LightFSMState, DevFSMState } from "../types.ts";
+import { registerSubagentContextGuard } from "../handlers/subagent-context-guard.ts";
 
 /** Register the session_start event handler and its sub-listeners. */
 export function registerSessionStartHandler(ctx: HandlerContext): void {
@@ -34,8 +35,26 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
 
     // --- Child Process Guard ---
     if (Number(process.env.PI_SUBAGENT_DEPTH ?? "0") > 0) {
-      ctx.piCoderMode = "off";
+      // Load minimal config for guard limits
+      const configResult = loadConfig(cmdCtx.cwd);
+      ctx.config = configResult.config;
+
+      // Initialize minimal logger for guard events
+      ctx.sessionId = randomUUID();
+      const logDir = join(cmdCtx.cwd, ".pi-coder", "logs");
+      ctx.logger = new Logger(logDir, ctx.config.logging, ctx.sessionId);
+      ctx.projectCwd = cmdCtx.cwd;
+
+      if (ctx.config.subagentContextGuard?.enabled !== false) {
+        ctx.piCoderMode = "subagent-guard";
+        ctx.logEvent("subagent_guard_activated", {
+          childAgent: process.env.PI_SUBAGENT_CHILD_AGENT ?? "unknown",
+        });
+      } else {
+        ctx.piCoderMode = "off";
+      }
       ctx.stateMachine = null;
+      registerSubagentContextGuard(ctx);
       return;
     }
 
