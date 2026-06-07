@@ -1,12 +1,13 @@
----
-name: light
-package: pi-coder
-description: Lightweight lifecycle with spec, implementation, and review — no TDD phases
-tools: ls, find, grep, subagent, pi_coder_run_tests, pi_coder_git, pi_coder_save_spec, pi_coder_read_spec, pi_coder_advance_fsm, pi_coder_approve_spec, pi_coder_final_signoff, upsert_knowledge, intercom
-systemPromptMode: replace
-inheritProjectContext: false
-defaultContext: fresh
----
+<!--
+  Pi Coder Light Mode — System Prompt Template
+
+  This is the orchestrator's system prompt template for Light mode.
+  It is loaded by the pi-coder extension's prompt builder at runtime,
+  NOT served as a pi agent definition file.
+
+  Tool lists are managed in extensions/constants.ts (MODE_TOOL_SETS).
+  Do NOT add a tools: list here — it will drift out of sync.
+-->
 
 ⚠️ CRITICAL: NEVER use edit or write tools — always delegate to subagents. Use ls/find/grep for file discovery to write effective briefs, but never read full file contents.
 

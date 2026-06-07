@@ -52,13 +52,10 @@ export function registerResetAgentsCommand(ctx: HandlerContext): void {
         reset.push(filename);
       }
 
-      // Reset dev mode prompt from prompts/ directory
-      const packagePromptsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts");
-      const devSource = join(packagePromptsDir, "pi-coder-dev.md");
-      if (existsSync(devSource)) {
-        copyFileSync(devSource, join(agentsDir, "pi-coder-dev.md"));
-        reset.push("pi-coder-dev.md");
-      }
+      // NOTE: Dev/Light/Plan prompt templates are not reset here.
+      // They live in prompts/ and are loaded by the extension's prompt builder.
+      // Resetting the in-memory caches (below) is sufficient — the next
+      // before_agent_start call will reload from disk.
 
       // 3. Invalidate all prompt caches if any agent files were reset
       if (reset.length > 0) {
