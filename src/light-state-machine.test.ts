@@ -24,6 +24,9 @@ function forceTransition(sm: LightStateMachine, to: LightFSMState): void {
   if (from === "REVIEWING" && to === "APPROVED") {
     sm.setEvidence("review_completed");
   }
+  if (from === "APPROVED" && to === "MERGING") {
+    sm.setEvidence("user_approved_merge");
+  }
   const result = sm.transition(to);
   if (result) {
     throw new Error(`Transition guard blocked ${from} → ${to}: ${result.message}`);
@@ -48,6 +51,7 @@ describe("LightStateMachine: State & Transition Table", () => {
       { from: "NEEDS_CHANGES", to: "REVIEWING", event: "non_functional_fix" },
       { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
       { from: "APPROVED", to: "MERGING", event: "merge_approved" },
+      { from: "APPROVED", to: "NEEDS_CHANGES", event: "user_requested_changes" },
       { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
       { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
     ];

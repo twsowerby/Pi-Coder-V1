@@ -47,6 +47,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     // Merge — identical to TDD
     { from: "APPROVED", to: "FINAL_APPROVAL", event: "final_approval" },
     { from: "APPROVED", to: "MERGING", event: "merge_approved" },
+    { from: "APPROVED", to: "NEEDS_CHANGES", event: "user_requested_changes" },
     { from: "FINAL_APPROVAL", to: "MERGING", event: "merge_start" },
     { from: "MERGING", to: "COMPLETE", event: "merge_complete" },
   ],
@@ -76,6 +77,14 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
         "The auto-transition handler sets this evidence when the reviewer returns a verdict. " +
         "If the auto-transition failed, re-delegate the reviewer instead of skipping review.",
     },
+    {
+      from: "APPROVED",
+      to: "MERGING",
+      requiredEvidence: ["user_approved_merge"],
+      errorMessage:
+        "Cannot advance to MERGING without user approval. " +
+        "Call pi_coder_final_signoff first — the user must approve the implementation before merging.",
+    },
   ],
 
   actionRules: [
@@ -104,10 +113,10 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
 
   alwaysAllowed: [
     "upsert_knowledge", "pi_coder_save_spec", "pi_coder_read_spec",
-    "intercom", "ls", "find", "grep", "pi_coder_advance_fsm", "pi_coder_run_tests",
+    "intercom", "ls", "find", "grep", "pi_coder_advance_fsm", "pi_coder_run_tests", "pi_coder_final_signoff",
   ],
 
-  persistentEvidence: ["spec_saved", "spec_user_approved", "review_completed"],
+  persistentEvidence: ["spec_saved", "spec_user_approved", "review_completed", "user_approved_merge"],
 
   nudgeExpectations: {
     IDLE: { shouldNudge: false, expectedAction: "", expectedTool: "" },
@@ -116,7 +125,7 @@ const LIGHT_DEFINITION: StateMachineDefinition<LightFSMState> = {
     GIT_CHECKPOINT: { shouldNudge: true, expectedAction: "Create git checkpoint", expectedTool: "pi_coder_git" },
     IMPLEMENTING: { shouldNudge: true, expectedAction: "Delegate to pi-coder.implementor", expectedTool: "subagent" },
     REVIEWING: { shouldNudge: true, expectedAction: "Delegate to pi-coder.reviewer", expectedTool: "subagent" },
-    APPROVED: { shouldNudge: false, expectedAction: "", expectedTool: "" },
+    APPROVED: { shouldNudge: true, expectedAction: "Present final sign-off to user", expectedTool: "pi_coder_final_signoff" },
     NEEDS_CHANGES: { shouldNudge: true, expectedAction: "Delegate implementor for fix, then advance to REVIEWING; or advance to IMPLEMENTING for full reimplementation", expectedTool: "subagent" },
     FINAL_APPROVAL: { shouldNudge: false, expectedAction: "", expectedTool: "" },
     MERGING: { shouldNudge: true, expectedAction: "Merge feature branch", expectedTool: "pi_coder_git" },

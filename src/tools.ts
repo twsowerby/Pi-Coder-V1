@@ -20,7 +20,7 @@ import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 import { SpecManager, generateSpecId } from "./spec.ts";
-import { buildSpecApprovalQuestions, buildFinalReportQuestions } from "./interview-builder.ts";
+import { buildSpecApprovalQuestions } from "./interview-builder.ts";
 import type { IStateMachine } from "./types.ts";
 import type { LogEventType } from "./logger.ts";
 
@@ -1111,75 +1111,107 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
   });
 
   // ---------------------------------------------------------------------------
-  // pi_coder_approve_final
+  // pi_coder_final_signoff
   // ---------------------------------------------------------------------------
   pi.registerTool({
-    name: "pi_coder_approve_final",
-    label: "Final Report Interview",
+    name: "pi_coder_final_signoff",
+    label: "Final Sign-Off",
     description:
-      "Present a final report for user approval. " +
-      "This tool builds the interview questions programmatically from the saved spec — " +
-      "you do NOT construct interview JSON. It writes the questions to a file and tells you " +
-      "how to call the interview tool with that file. This guarantees correct format and timeout.",
-    promptSnippet: "Present the final report for user approval",
+      "Present a TUI dialog for the user to approve or reject the implementation. " +
+      "This is a MANDATORY gate — the FSM cannot advance from APPROVED to MERGING without it. " +
+      "Call this when the FSM is in APPROVED state.",
+    promptSnippet: "Present final sign-off to user (Approve / Needs changes)",
     promptGuidelines: [
-      "Call this after the review is complete and you're ready for the user to sign off on merging.",
-      "Follow the instructions in the tool output — call interview with the exact file path and timeout shown.",
-      "If the user selects 'Rollback', the changes will not be merged — address the concerns and re-run.",
+      "Call this when the FSM is in APPROVED state. It presents a native TUI dialog — no interview needed.",
+      "If the user approves, the tool sets the user_approved_merge evidence. Then call pi_coder_advance_fsm to advance to MERGING.",
+      "If the user requests changes, the tool transitions FSM to NEEDS_CHANGES automatically. Include the user's feedback in the next implementor delegation.",
+      "You MUST call this before advancing to MERGING — the evidence guard will block the transition without it.",
     ],
     parameters: Type.Object({
-      specId: Type.String({ description: "The active spec ID for the final report" }),
+      specId: Type.String({ description: "The active spec ID for the sign-off" }),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       try {
-        const spec = await specManager.readSpec(params.specId);
-        if (!spec) {
+        const sm = smRef.current;
+        if (!sm) {
           return {
-            content: [{ type: "text" as const, text: `Spec "${params.specId}" not found.` }],
-            details: { success: false, error: "spec_not_found" },
+            content: [{ type: "text" as const, text: "Error: No active state machine." }],
+            details: { success: false, error: "no_state_machine" },
             isError: true,
           };
         }
 
-        // Build questions programmatically
-        const questionsFile = buildFinalReportQuestions(spec);
+        if (sm.currentState !== "APPROVED") {
+          return {
+            content: [{ type: "text" as const, text: `Error: Final sign-off can only be called in APPROVED state. Current state: ${sm.currentState}` }],
+            details: { success: false, error: "wrong_state", currentState: sm.currentState },
+            isError: true,
+          };
+        }
 
-        // Write to a temp file that the interview tool can load
-        const filePath = await writeInterviewFile(questionsFile, "final-report");
+        // Show native TUI select dialog
+        const choice = await _ctx.ui.select(
+          "Implementation Complete",
+          ["Approve and merge", "Needs changes"],
+        );
 
-        const timeoutValue = config.interviewTimeout;
-        const timeoutNote = timeoutValue === 0 ? "no timeout (unlimited)" : `${timeoutValue}s`;
+        if (!choice) {
+          // User dismissed the dialog (pressed Escape)
+          return {
+            content: [{ type: "text" as const, text: "Final sign-off cancelled — user dismissed the dialog. Try again when ready." }],
+            details: { success: false, error: "user_cancelled" },
+          };
+        }
+
+        if (choice === "Needs changes") {
+          // Ask for user feedback
+          const feedback = await _ctx.ui.input(
+            "What needs fixing?",
+            "Describe what needs to change...",
+          );
+
+          // Transition FSM: APPROVED → NEEDS_CHANGES
+          sm.transition("NEEDS_CHANGES");
+          deps.logEvent("fsm_transition", {
+            from: "APPROVED",
+            to: "NEEDS_CHANGES",
+            trigger: "user_requested_changes",
+            event: "user_requested_changes",
+            specId: params.specId,
+          });
+
+          return {
+            content: [{ type: "text" as const, text: `⚠️ User requested changes: ${feedback || "(no detail provided)"}` }],
+            details: {
+              success: true,
+              verdict: "needs_changes",
+              feedback: feedback || "",
+              newState: "NEEDS_CHANGES",
+            },
+          };
+        }
+
+        // User approved — set evidence flag
+        sm.setEvidence("user_approved_merge");
+
+        const mergeGuidance = config.mergeBranch
+          ? `User approved. Call pi_coder_advance_fsm to advance to MERGING, then call pi_coder_git merge to merge the feature branch (strategy: ${config.mergeBranch}).`
+          : `User approved. Call pi_coder_advance_fsm to advance to MERGING. Merge is disabled in this project's config — the feature branch is ready for a PR or manual merge.`;
 
         return {
-          content: [{
-            type: "text" as const,
-            text: [
-              `✅ Final report interview questions built for: ${spec.title}`,
-              `📂 Questions file: ${filePath}`,
-              `⏱️ Timeout: ${timeoutNote}`,
-              "",
-              "Now call the interview tool with this exact command:",
-              '```',
-              `interview({ questions: "${filePath}", timeout: ${timeoutValue} })`,
-              '```',
-              "",
-              "The questions cover: changes summary, test results, review verdict, knowledge learnings,",
-              "and a final Approve / Rollback question.",
-            ].join("\n"),
-          }],
+          content: [{ type: "text" as const, text: `✅ User approved merge. ${mergeGuidance}` }],
           details: {
             success: true,
-            specId: params.specId,
-            questionsFile: filePath,
-            timeout: timeoutValue,
-            questionCount: questionsFile.questions.length,
+            verdict: "approved",
+            newState: "APPROVED", // Still in APPROVED — orchestrator must advance to MERGING
+            evidenceSet: ["user_approved_merge"],
           },
         };
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         return {
-          content: [{ type: "text" as const, text: `Error building final report interview: ${error}` }],
+          content: [{ type: "text" as const, text: `Error during final sign-off: ${error}` }],
           details: { success: false, error },
           isError: true,
         };

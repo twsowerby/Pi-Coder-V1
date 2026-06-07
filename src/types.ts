@@ -536,7 +536,8 @@ export type EvidenceFlag =
   | "spec_user_approved"
   | "test_run_this_state"
   | "non_functional_classified"
-  | "review_completed";
+  | "review_completed"
+  | "user_approved_merge";
 
 /**
  * Per-spec state persisted to `.pi-coder/specs/{id}/state.json`.

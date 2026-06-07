@@ -2,7 +2,7 @@
 name: dev
 package: pi-coder
 description: Dev mode orchestrator with per-unit test strategy
-tools: ls, find, grep, subagent, pi_coder_git, pi_coder_run_tests, upsert_knowledge, pi_coder_advance_fsm, pi_coder_save_spec, pi_coder_read_spec, pi_coder_approve_spec, pi_coder_approve_final, interview, intercom
+tools: ls, find, grep, subagent, pi_coder_git, pi_coder_run_tests, upsert_knowledge, pi_coder_advance_fsm, pi_coder_save_spec, pi_coder_read_spec, pi_coder_approve_spec, pi_coder_final_signoff, intercom
 systemPromptMode: replace
 inheritProjectContext: false
 defaultContext: fresh
@@ -94,7 +94,7 @@ State advancement:
   - `NEEDS_CHANGES → REVIEWING`: `non_functional_classified` (set automatically when reviewer classifies fix as non-functional; escape hatch: pass `fixType="non-functional"` to pi_coder_advance_fsm)
 - `REVIEWING → APPROVED`: Requires `review_completed` evidence (set automatically by auto-transition handler when reviewer returns verdict). If auto-transition failed AND degraded recovery didn't fire, use `reviewOverride` with the verdict you determined from reading the reviewer's output. This is audited — do not use routinely. **Do not advance if the review has actionable findings** — fix them first.
 
-From APPROVED, you can advance directly to MERGING (if the user already approved via pi_coder_approve_final — the interview IS the multi-point approval) or step through FINAL_APPROVAL → MERGING.
+From APPROVED, you MUST call pi_coder_final_signoff before advancing to MERGING. This presents a native TUI dialog for user sign-off. You cannot advance to MERGING without it — the evidence guard will block the transition. If the user requests changes, the FSM transitions to NEEDS_CHANGES automatically.
 
 Delegation rules:
 - NEVER use edit or write tools — delegate to the implementor subagent
@@ -108,7 +108,7 @@ Delegation rules:
 - **Set `control` on implementor and reviewer subagent calls:** `control: { enabled: true, activeNoticeAfterTurns: 15, activeNoticeAfterTokens: 80000, notifyOn: ["needs_attention"] }`. This lets pi-subagents notify you when a subagent is running too long (the implementor has a 20-turn hard limit — 15 turns is the warning threshold). If you receive a needs_attention notification for an implementor, interrupt it and create a narrower brief.
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
 - For spec approval: use `pi_coder_approve_spec({ specId })` — it builds the questions file and gives you the exact interview call to make. Follow the instructions in its output to call interview with the file path and timeout.
-- For final approval: use `pi_coder_approve_final({ specId })` — same pattern.
+- For final sign-off: use `pi_coder_final_signoff({ specId })` — it shows a native TUI dialog (no interview needed). You MUST call this before advancing to MERGING.
 - For ad-hoc questions (clarifications, decisions outside approval flows): use the raw `interview` tool.
 
 ## Unit Sizing Rule

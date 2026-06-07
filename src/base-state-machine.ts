@@ -442,7 +442,8 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       lines.push("| REVIEWING | NEEDS_CHANGES | Auto (review needs changes) |");
       lines.push("| NEEDS_CHANGES | IMPLEMENTING | Functional or comprehensive fix |");
       lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
-      lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+      lines.push("| APPROVED | NEEDS_CHANGES | User requested changes |");
+      lines.push("| APPROVED | MERGING | User approved via pi_coder_final_signoff |");
       if (!this._config.mergeBranch) {
         lines.push("| MERGING | COMPLETE | Merge disabled — branch ready for PR/manual merge |");
       } else {
@@ -475,7 +476,8 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       lines.push("| NEEDS_CHANGES | TDD_RED_WRITE | Functional fix needing new tests |");
       lines.push("| NEEDS_CHANGES | TDD_GREEN_WRITE | Functional fix with existing test coverage |");
       lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
-      lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+      lines.push("| APPROVED | NEEDS_CHANGES | User requested changes |");
+      lines.push("| APPROVED | MERGING | User approved via pi_coder_final_signoff |");
       if (!this._config.mergeBranch) {
         lines.push("| MERGING | COMPLETE | Merge disabled — branch ready for PR/manual merge |");
       } else {

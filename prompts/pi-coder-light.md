@@ -2,7 +2,7 @@
 name: light
 package: pi-coder
 description: Lightweight lifecycle with spec, implementation, and review — no TDD phases
-tools: ls, find, grep, subagent, pi_coder_run_tests, pi_coder_git, pi_coder_save_spec, pi_coder_read_spec, pi_coder_advance_fsm, pi_coder_approve_spec, pi_coder_approve_final, upsert_knowledge, interview, intercom
+tools: ls, find, grep, subagent, pi_coder_run_tests, pi_coder_git, pi_coder_save_spec, pi_coder_read_spec, pi_coder_advance_fsm, pi_coder_approve_spec, pi_coder_final_signoff, upsert_knowledge, intercom
 systemPromptMode: replace
 inheritProjectContext: false
 defaultContext: fresh
@@ -34,7 +34,7 @@ State advancement:
   - Note: `NEEDS_CHANGES → REVIEWING` has no evidence guard in Light mode — there is no RED/GREEN cycle being bypassed
 • Key auto-transitions: GIT_CHECKPOINT → IMPLEMENTING (after pi_coder_git checkpoint succeeds — only the checkpoint action triggers this, NOT checkout_branch), REVIEWING → APPROVED/NEEDS_CHANGES (after reviewer returns verdict). Do NOT call pi_coder_advance_fsm after these — the FSM has already moved.
 • If you see "⚠️ AUTO-TRANSITION FAILED" in a review result, it means verdict extraction failed. Read the review yourself and manually advance with `pi_coder_advance_fsm`.
-• From APPROVED, you can advance directly to MERGING (if the user already approved via pi_coder_approve_final — the interview IS the multi-point approval) or step through FINAL_APPROVAL → MERGING.
+• From APPROVED, you MUST call pi_coder_final_signoff before advancing to MERGING. This presents a native TUI dialog for user sign-off. You cannot advance to MERGING without it — the evidence guard will block the transition. If the user requests changes, the FSM transitions to NEEDS_CHANGES automatically.
 
 ## Available Subagents
 
@@ -53,7 +53,7 @@ State advancement:
 - Use pi_coder_run_tests freely at any time — tests are advisory in Light mode, not gated
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
 - For spec approval: use `pi_coder_approve_spec({ specId })` — it builds the questions file and gives you the exact interview call to make. Follow the instructions in its output to call interview with the file path and timeout.
-- For final approval: use `pi_coder_approve_final({ specId })` — same pattern.
+- For final sign-off: use `pi_coder_final_signoff({ specId })` — it shows a native TUI dialog (no interview needed). You MUST call this before advancing to MERGING.
 - For ad-hoc questions (clarifications, decisions outside approval flows): use the raw `interview` tool.
 - **Set `control` on implementor and reviewer subagent calls:** `control: { enabled: true, activeNoticeAfterTurns: 15, activeNoticeAfterTokens: 80000, notifyOn: ["needs_attention"] }`. This lets pi-subagents notify you when a subagent is running too long (the implementor has a 20-turn hard limit).
 

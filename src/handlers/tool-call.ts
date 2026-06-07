@@ -29,8 +29,8 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
       notify(ctx.config, "spec_approval", "Pi Coder · 📋 Review", `Spec ${ctx.activeSpecId ?? "unknown"} ready for your approval`);
       ctx.tokenTracker.specApprovalInterviewStartTime = Date.now();
     }
-    if (ctx.stateMachine && toolName === "pi_coder_approve_final" && ctx.stateMachine.currentState === "APPROVED") {
-      notify(ctx.config, "spec_approval", "Pi Coder · ✅ Final Report", `Spec ${ctx.activeSpecId ?? "unknown"} final report ready for review`);
+    if (ctx.stateMachine && toolName === "pi_coder_final_signoff" && ctx.stateMachine.currentState === "APPROVED") {
+      notify(ctx.config, "spec_approval", "Pi Coder · ✅ Final Sign-Off", `Spec ${ctx.activeSpecId ?? "unknown"} ready for final approval`);
     }
 
     // --- Interview reliability: timeout injection + structured approval nudge ---

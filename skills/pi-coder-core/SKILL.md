@@ -184,17 +184,28 @@ The human's original spec approval covered the OLD classification. The reclassif
 
 ---
 
-## Final Approval & Merge
+## Final Sign-Off & Merge
 
 When your FSM is in APPROVED:
 
-1. Present a final report to the user using `pi_coder_approve_final`:
+1. Present a sign-off dialog to the user using `pi_coder_final_signoff`:
    ```
-   pi_coder_approve_final({ specId: "your-spec-id" })
+   pi_coder_final_signoff({ specId: "your-spec-id" })
    ```
-   This tool builds the final report questions and writes them to a file. Its output tells you the exact `interview` call to make. The interview covers: changes summary, test results, review verdict, knowledge learnings, and a final Approve / Rollback question.
-2. If the user approves, use `pi_coder_advance_fsm` to advance to MERGING (direct path — the interview IS the multi-point approval) or through FINAL_APPROVAL → MERGING → COMPLETE
-3. If the user rejects, offer a rollback — call `pi_coder_git` with action `rollback` using the stored pre-implementation ref
+   This shows a native TUI dialog with two options: **Approve and merge** or **Needs changes**.
+
+2. If the user approves:
+   - The tool sets `user_approved_merge` evidence (required for MERGING transition)
+   - Call `pi_coder_advance_fsm` to advance to MERGING
+   - Then call `pi_coder_git` with action `merge` (if mergeBranch is configured)
+   - The FSM will auto-transition MERGING → COMPLETE after merge
+
+3. If the user requests changes:
+   - The tool transitions FSM to NEEDS_CHANGES automatically
+   - Include the user's feedback in the next implementor delegation
+   - After fixes and re-review, the cycle continues
+
+⚠️ **You MUST call `pi_coder_final_signoff` before advancing to MERGING.** The evidence guard will block APPROVED → MERGING without it. Do not skip this step.
 
 When in MERGING:
 

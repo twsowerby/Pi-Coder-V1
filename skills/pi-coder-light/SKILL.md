@@ -26,7 +26,7 @@ In Light mode, a simplified FSM guides the lifecycle: spec → implement → rev
 6. **Run tests freely** — `pi_coder_run_tests` is advisory in Light mode — use it to check progress, but it doesn't gate FSM transitions
 7. **Review** — `pi_coder_advance_fsm` to `REVIEWING`, then delegate to `pi-coder.reviewer` (the auto-transition handler will advance to APPROVED or NEEDS_CHANGES based on the verdict)
 8. **Fix if needed** — If the reviewer finds issues
-9. **Final approval & merge** — APPROVED → MERGING → COMPLETE (direct path if user already approved via pi_coder_approve_final) or APPROVED → FINAL_APPROVAL → MERGING → COMPLETE (step-by-step)
+9. **Final sign-off & merge** — APPROVED → (user approves via pi_coder_final_signoff) → MERGING → COMPLETE, or (user requests changes) → NEEDS_CHANGES
 
 ### IMPLEMENTING State
 

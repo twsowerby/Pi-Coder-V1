@@ -323,7 +323,9 @@ describe("Phase 1: Tool Registration Framework", () => {
     assert.ok(tools.has("pi_coder_advance_fsm"), "pi_coder_advance_fsm not registered");
     assert.ok(tools.has("pi_coder_save_spec"), "pi_coder_save_spec not registered");
     assert.ok(tools.has("pi_coder_read_spec"), "pi_coder_read_spec not registered");
-    assert.strictEqual(tools.size, 6, "Expected exactly 6 tools");
+    assert.ok(tools.has("pi_coder_approve_spec"), "pi_coder_approve_spec not registered");
+    assert.ok(tools.has("pi_coder_final_signoff"), "pi_coder_final_signoff not registered");
+    assert.strictEqual(tools.size, 8, "Expected exactly 8 tools");
   });
 
   it("each tool has a promptSnippet", () => {

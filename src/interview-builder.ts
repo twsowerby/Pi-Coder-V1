@@ -2,7 +2,7 @@
  * Interview Builder — Pure functions that construct QuestionsFile objects from spec data.
  *
  * No side effects, no I/O, no server calls. Just data transformation.
- * Used by pi_coder_approve_spec and pi_coder_approve_final tools.
+ * Used by pi_coder_approve_spec tool.
  */
 
 import type { SpecFile, ImplementationUnit } from "./types.ts";
@@ -264,94 +264,4 @@ export function buildSpecApprovalQuestions(spec: SpecFile): QuestionsFile {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Final Report Questions
-// ---------------------------------------------------------------------------
 
-/**
- * Build the final report interview questions from a saved spec.
- *
- * Structure: changes summary → test results → review verdict →
- * knowledge learnings → final approval.
- *
- * Info panels use placeholder text because the tool doesn't have access to
- * live test/review/knowledge data — those context panels show the spec's
- * structure, and the real data is in the LLM's conversation context.
- */
-export function buildFinalReportQuestions(spec: SpecFile): QuestionsFile {
-	const questions: Question[] = [];
-
-	// 1. Changes summary (info)
-	questions.push({
-		id: "changes-summary",
-		type: "info",
-		question: "Summary of Changes",
-		content: {
-			source: [
-				`# ${spec.title} — Implementation Summary`,
-				"",
-				`All ${spec.implementationPlan.length} implementation unit(s) have been processed.`,
-				"Review the detailed changes in the conversation above.",
-			].join("\n"),
-			lang: "md",
-		},
-	});
-
-	// 2. Test results (info with table)
-	questions.push({
-		id: "test-results",
-		type: "info",
-		question: "Test Results",
-		media: {
-			type: "table",
-			table: {
-				headers: ["Unit", "Strategy", "Result"],
-				rows: spec.implementationPlan.map((u) => [
-					u.name,
-					u.testStrategy,
-					"See conversation",
-				]),
-			},
-		},
-	});
-
-	// 3. Review verdict (info)
-	questions.push({
-		id: "review-verdict",
-		type: "info",
-		question: "Review Verdict",
-		content: {
-			source: "Review the verdict details in the conversation above.",
-			lang: "md",
-		},
-	});
-
-	// 4. Knowledge learnings (info)
-	questions.push({
-		id: "knowledge-learnings",
-		type: "info",
-		question: "Knowledge Learnings",
-		content: {
-			source:
-				"Any learnings discovered during this cycle have been persisted via upsert_knowledge. Review them in the conversation above.",
-			lang: "md",
-		},
-	});
-
-	// 5. Final approval
-	questions.push({
-		id: "final-approval",
-		type: "single",
-		question: "Do you approve merging these changes?",
-		options: ["Approve", "Rollback"],
-		recommended: "Approve",
-		weight: "critical",
-	});
-
-	return {
-		title: `Final Report: ${spec.title}`,
-		description:
-			"Review the implementation results and approve merge or rollback.",
-		questions,
-	};
-}

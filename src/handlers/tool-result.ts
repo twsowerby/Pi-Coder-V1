@@ -1109,7 +1109,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
             reclassificationGuidance = " If the reviewer flagged a direct/skip unit as needing TDD, re-save the spec with that unit's testStrategy changed to 'tdd', and proceed with a full RED/GREEN cycle.";
           }
           const reviewSteer = reviewVerdict.verdict === "approved"
-            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Advance to MERGING (if user already approved) or FINAL_APPROVAL (for separate sign-off)."
+            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Call pi_coder_final_signoff to get user sign-off before merging."
             : ctx.piCoderMode === "light" && reviewVerdict.verdict === "needs_changes"
               ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
               : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"
