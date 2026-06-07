@@ -2,7 +2,7 @@
  * Interview Builder — Pure functions that construct QuestionsFile objects from spec data.
  *
  * No side effects, no I/O, no server calls. Just data transformation.
- * Used by pi_coder_approve_spec tool.
+ * Used by pi_coder_approve_spec and pi_coder_final_signoff tools.
  */
 
 import type { SpecFile, ImplementationUnit } from "./types.ts";
@@ -260,6 +260,113 @@ export function buildSpecApprovalQuestions(spec: SpecFile): QuestionsFile {
 		title: `Spec Approval: ${spec.title}`,
 		description:
 			"Review the spec and approve or request changes for each section.",
+		questions,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Final Sign-Off Questions
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the final sign-off interview questions from a saved spec.
+ *
+ * Structure: changes summary → implementation plan table → acceptance
+ * criteria → constraints → final approval → feedback textarea.
+ *
+ * This is the MANDATORY gate between APPROVED and MERGING. The user sees
+ * a rich overview of what was implemented before approving or requesting
+ * changes. Feedback is captured via a textarea question (type: "text").
+ */
+export function buildFinalSignoffQuestions(spec: SpecFile): QuestionsFile {
+	const questions: Question[] = [];
+
+	// 1. Changes summary (info)
+	const unitSummaryLines = spec.implementationPlan
+		.map((u) => `• **${u.name}**${u.keyFiles.length > 0 ? ` — ${u.keyFiles.join(", ")}` : ""}`)
+		.join("\n");
+
+	questions.push({
+		id: "changes-summary",
+		type: "info",
+		question: "Summary of Changes",
+		content: {
+			source: [
+				`# ${spec.title} — Implementation Summary`,
+				"",
+				`All ${spec.implementationPlan.length} implementation unit(s) have been processed.`,
+				"",
+				spec.implementationPlan.length > 0
+					? `## Units\n${unitSummaryLines}`
+					: null,
+			]
+				.filter(Boolean)
+				.join("\n"),
+			lang: "md",
+		},
+	});
+
+	// 2. Implementation plan (info with table)
+	questions.push({
+		id: "implementation-plan",
+		type: "info",
+		question: "Implementation Plan",
+		media: {
+			type: "table",
+			table: {
+				headers: ["Unit", "ACs", "Strategy", "Key Files"],
+				rows: buildImplPlanRows(spec.implementationPlan),
+			},
+		},
+	});
+
+	// 3. Acceptance criteria (info)
+	questions.push({
+		id: "acceptance-criteria",
+		type: "info",
+		question: "Acceptance Criteria",
+		content: {
+			source: `## Acceptance Criteria\n\n${numberedList(spec.acceptanceCriteria)}`,
+			lang: "md",
+		},
+	});
+
+	// 4. Constraints (info)
+	questions.push({
+		id: "constraints",
+		type: "info",
+		question: "Constraints",
+		content: {
+			source: spec.constraints.length > 0
+				? `## Constraints\n\n${bulletList(spec.constraints)}`
+				: "No constraints defined for this spec.",
+			lang: "md",
+		},
+	});
+
+	// 5. Final approval (critical)
+	questions.push({
+		id: "final-approval",
+		type: "single",
+		question: "Do you approve merging these changes?",
+		options: ["Approve and merge", "Needs changes"],
+		recommended: "Approve and merge",
+		weight: "critical",
+	});
+
+	// 6. Feedback (text — textarea in the interview UI)
+	questions.push({
+		id: "feedback",
+		type: "text",
+		question: "If you have specific feedback or concerns, describe them here.",
+		context:
+			"This is optional — leave blank if you approved. If you selected 'Needs changes', please describe what should change.",
+	});
+
+	return {
+		title: `Final Sign-Off: ${spec.title}`,
+		description:
+			"Review the implementation and approve for merge, or request changes.",
 		questions,
 	};
 }

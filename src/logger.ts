@@ -82,7 +82,8 @@ export type LogEventType =
   | "review_saved_to_file"
   | "review_save_failed"
   | "research_tmp_cleaned"
-  | "research_tmp_cleanup_failed";
+  | "research_tmp_cleanup_failed"
+  | "final_signoff";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -154,6 +155,7 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   review_save_failed: "standard",
   research_tmp_cleaned: "standard",
   research_tmp_cleanup_failed: "standard",
+  final_signoff: "minimal",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

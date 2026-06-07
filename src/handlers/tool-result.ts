@@ -618,6 +618,79 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
       }
     }
 
+    // Evidence: interview tool completion in APPROVED (final sign-off)
+    // When pi_coder_final_signoff writes a temp questions file and the LLM calls interview
+    // with that file, we intercept the interview result here to set user_approved_merge
+    // evidence or transition to NEEDS_CHANGES, mirroring the SPEC_WORK pattern.
+    if ((ctx.piCoderMode === "dev" || ctx.piCoderMode === "light") && toolName === "interview" && currentState === "APPROVED") {
+      const interviewDetails = details as { status?: string; responses?: Array<{ id?: string; value?: unknown }> } | undefined;
+
+      if (interviewDetails?.status === "completed") {
+        const responses = interviewDetails.responses ?? [];
+
+        // Find the final approval single-choice question (typically id "final-approval")
+        const singleChoiceResponses = responses.filter((r) => {
+          if (!r.value || typeof r.value !== "object") return false;
+          const val = r.value as Record<string, unknown>;
+          return "option" in val && typeof val.option === "string";
+        });
+
+        // Check if the user approved (any option containing "approve") or rejected
+        const allApproved = singleChoiceResponses.length > 0 && singleChoiceResponses.every((r) => {
+          const choice = r.value as { option: string; note?: string };
+          return choice.option.toLowerCase().includes("approve");
+        });
+
+        if (allApproved) {
+          ctx.stateMachine!.setEvidence("user_approved_merge");
+          const mergeGuidance = ctx.config.mergeBranch
+            ? `User approved merge. Call pi_coder_advance_fsm to advance to MERGING, then call pi_coder_git merge to merge the feature branch (strategy: ${ctx.config.mergeBranch}).`
+            : `User approved merge. Call pi_coder_advance_fsm to advance to MERGING. Merge is disabled in this project's config — the feature branch is ready for a PR or manual merge.`;
+          ctx.logEvent("final_signoff", { status: "approved", responseCount: responses.length, specId: ctx.activeSpecId });
+          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+            const textBlock = rawContent[0] as { type: "text"; text: string };
+            textBlock.text += `\n\n✅ User approved merge. ${mergeGuidance}`;
+          }
+        } else {
+          // User requested changes — transition to NEEDS_CHANGES
+          // Extract feedback from any text-type responses
+          const textResponses = responses.filter((r) => {
+            if (!r.value || typeof r.value !== "object") return false;
+            const val = r.value as Record<string, unknown>;
+            return "text" in val && typeof val.text === "string" && (val.text as string).trim().length > 0;
+          });
+          const feedbackParts = textResponses.map((r) => {
+            const val = r.value as { text: string };
+            return val.text.trim();
+          });
+          const feedback = feedbackParts.length > 0 ? feedbackParts.join("\n") : "(no detail provided)";
+
+          ctx.stateMachine!.transition("NEEDS_CHANGES");
+          ctx.logEvent("fsm_transition", {
+            from: "APPROVED",
+            to: "NEEDS_CHANGES",
+            trigger: "user_requested_changes",
+            event: "user_requested_changes",
+            specId: ctx.activeSpecId,
+          });
+          ctx.logEvent("final_signoff", { status: "rejected", feedback, responseCount: responses.length, specId: ctx.activeSpecId });
+
+          if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+            const textBlock = rawContent[0] as { type: "text"; text: string };
+            textBlock.text += `\n\n⚠️ User requested changes: ${feedback}`;
+          }
+        }
+      } else {
+        const status = interviewDetails?.status ?? "unknown";
+        ctx.logEvent("final_signoff", { status: "not_completed", interviewStatus: status, specId: ctx.activeSpecId });
+        const notCompletedSteer = `\n\n⚠️ Final sign-off interview was not completed (status: ${status}). Re-run pi_coder_final_signoff when ready.`;
+        if (Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const textBlock = rawContent[0] as { type: "text"; text: string };
+          textBlock.text += notCompletedSteer;
+        }
+      }
+    }
+
     // Handle pi_coder_run_tests results
     if (toolName === "pi_coder_run_tests") {
       const details2 = details as {
@@ -1109,7 +1182,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
             reclassificationGuidance = " If the reviewer flagged a direct/skip unit as needing TDD, re-save the spec with that unit's testStrategy changed to 'tdd', and proceed with a full RED/GREEN cycle.";
           }
           const reviewSteer = reviewVerdict.verdict === "approved"
-            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Call pi_coder_final_signoff to get user sign-off before merging."
+            ? "\n\n✅ AUTO-TRANSITION: Review approved. You are now in APPROVED. Call pi_coder_final_signoff to present the sign-off interview to the user — do not advance to MERGING without it."
             : ctx.piCoderMode === "light" && reviewVerdict.verdict === "needs_changes"
               ? `\n\n⚠️ AUTO-TRANSITION: Review needs changes${reviewVerdict.fixType === "non-functional" ? " (non-functional fix)" : ""}.${formatIssuesSteer(reviewVerdict.issues)} You are now in NEEDS_CHANGES. Delegate implementor to apply the fix, then advance to REVIEWING; or advance to IMPLEMENTING for a full reimplementation.`
               : reviewVerdict.verdict === "needs_changes" && reviewVerdict.fixType === "non-functional"

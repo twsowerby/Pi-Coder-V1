@@ -20,7 +20,7 @@ import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 import { SpecManager, generateSpecId } from "./spec.ts";
-import { buildSpecApprovalQuestions } from "./interview-builder.ts";
+import { buildSpecApprovalQuestions, buildFinalSignoffQuestions } from "./interview-builder.ts";
 import type { IStateMachine } from "./types.ts";
 import type { LogEventType } from "./logger.ts";
 
@@ -1117,14 +1117,16 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
     name: "pi_coder_final_signoff",
     label: "Final Sign-Off",
     description:
-      "Present a TUI dialog for the user to approve or reject the implementation. " +
+      "Present a structured interview for the user to approve or reject the implementation. " +
       "This is a MANDATORY gate — the FSM cannot advance from APPROVED to MERGING without it. " +
-      "Call this when the FSM is in APPROVED state.",
+      "Call this when the FSM is in APPROVED state. It writes interview questions to a temp file " +
+      "and instructs you to call the interview tool with that file path.",
     promptSnippet: "Present final sign-off to user (Approve / Needs changes)",
     promptGuidelines: [
-      "Call this when the FSM is in APPROVED state. It presents a native TUI dialog — no interview needed.",
+      "Call this when the FSM is in APPROVED state. It builds a structured interview with changes summary, implementation plan, and acceptance criteria for the user to review.",
+      "Follow the instructions in the tool output — call interview with the exact file path and timeout shown.",
+      "If the user selects 'Needs changes', the FSM transitions to NEEDS_CHANGES automatically. Include the user's feedback in the next implementor delegation.",
       "If the user approves, the tool sets the user_approved_merge evidence. Then call pi_coder_advance_fsm to advance to MERGING.",
-      "If the user requests changes, the tool transitions FSM to NEEDS_CHANGES automatically. Include the user's feedback in the next implementor delegation.",
       "You MUST call this before advancing to MERGING — the evidence guard will block the transition without it.",
     ],
     parameters: Type.Object({
@@ -1150,68 +1152,57 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
           };
         }
 
-        // Show native TUI select dialog
-        const choice = await _ctx.ui.select(
-          "Implementation Complete",
-          ["Approve and merge", "Needs changes"],
-        );
-
-        if (!choice) {
-          // User dismissed the dialog (pressed Escape)
+        const spec = await specManager.readSpec(params.specId);
+        if (!spec) {
           return {
-            content: [{ type: "text" as const, text: "Final sign-off cancelled — user dismissed the dialog. Try again when ready." }],
-            details: { success: false, error: "user_cancelled" },
+            content: [{ type: "text" as const, text: `Spec "${params.specId}" not found. Save it with pi_coder_save_spec first.` }],
+            details: { success: false, error: "spec_not_found" },
+            isError: true,
           };
         }
 
-        if (choice === "Needs changes") {
-          // Ask for user feedback
-          const feedback = await _ctx.ui.input(
-            "What needs fixing?",
-            "Describe what needs to change...",
-          );
+        // Build interview questions programmatically
+        const questionsFile = buildFinalSignoffQuestions(spec);
 
-          // Transition FSM: APPROVED → NEEDS_CHANGES
-          sm.transition("NEEDS_CHANGES");
-          deps.logEvent("fsm_transition", {
-            from: "APPROVED",
-            to: "NEEDS_CHANGES",
-            trigger: "user_requested_changes",
-            event: "user_requested_changes",
-            specId: params.specId,
-          });
+        // Write to a temp file that the interview tool can load
+        const filePath = await writeInterviewFile(questionsFile, "final-signoff");
 
-          return {
-            content: [{ type: "text" as const, text: `⚠️ User requested changes: ${feedback || "(no detail provided)"}` }],
-            details: {
-              success: true,
-              verdict: "needs_changes",
-              feedback: feedback || "",
-              newState: "NEEDS_CHANGES",
-            },
-          };
-        }
-
-        // User approved — set evidence flag
-        sm.setEvidence("user_approved_merge");
-
-        const mergeGuidance = config.mergeBranch
-          ? `User approved. Call pi_coder_advance_fsm to advance to MERGING, then call pi_coder_git merge to merge the feature branch (strategy: ${config.mergeBranch}).`
-          : `User approved. Call pi_coder_advance_fsm to advance to MERGING. Merge is disabled in this project's config — the feature branch is ready for a PR or manual merge.`;
+        const timeoutValue = config.interviewTimeout;
+        const timeoutNote = timeoutValue === 0 ? "no timeout (unlimited)" : `${timeoutValue}s`;
 
         return {
-          content: [{ type: "text" as const, text: `✅ User approved merge. ${mergeGuidance}` }],
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Final sign-off interview questions built for: ${spec.title}`,
+              `📂 Questions file: ${filePath}`,
+              `⏱️ Timeout: ${timeoutNote}`,
+              "",
+              "Now call the interview tool with this exact command:",
+              '```',
+              `interview({ questions: "${filePath}", timeout: ${timeoutValue} })`,
+              '```',
+              "",
+              "The questions cover: changes summary, implementation plan, acceptance criteria, constraints,",
+              "and a final Approve and merge / Needs changes question with optional feedback textarea.",
+              "",
+              "⚠️ IMPORTANT: After the interview completes, check the user's response.",
+              "- If they approved → call pi_coder_advance_fsm to advance to MERGING.",
+              "- If they requested changes → the FSM will be transitioned to NEEDS_CHANGES automatically.",
+            ].join("\n"),
+          }],
           details: {
             success: true,
-            verdict: "approved",
-            newState: "APPROVED", // Still in APPROVED — orchestrator must advance to MERGING
-            evidenceSet: ["user_approved_merge"],
+            specId: params.specId,
+            questionsFile: filePath,
+            timeout: timeoutValue,
+            questionCount: questionsFile.questions.length,
           },
         };
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         return {
-          content: [{ type: "text" as const, text: `Error during final sign-off: ${error}` }],
+          content: [{ type: "text" as const, text: `Error building final sign-off interview: ${error}` }],
           details: { success: false, error },
           isError: true,
         };
