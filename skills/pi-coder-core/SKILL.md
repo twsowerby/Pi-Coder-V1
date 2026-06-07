@@ -115,18 +115,15 @@ pi_coder_save_spec({
 
 This persists the spec to `.pi-coder/specs/{id}.md`. **Always save before presenting for approval.**
 
-Then present the spec for approval using `interview` with **multiple focused questions** — not one big dump:
+Then present the spec for approval using `pi_coder_approve_spec`:
+```
+pi_coder_approve_spec({ specId: "your-spec-id" })
+```
+This tool builds the interview questions programmatically and writes them to a file. Its output tells you the exact `interview` call to make — copy it exactly and call it as your next step.
 
-**Each question MUST be a `single`-choice type with options "Approve" and "Needs changes".** This is required — the extension inspects your interview responses and only sets `spec_user_approved` when ALL questions have "Approve" selected.
+**Each approval question uses "Approve" / "Needs changes" options.** The extension inspects your interview responses and only sets `spec_user_approved` when ALL questions have "Approve" selected.
 
-1. **Scope question**: `type: "single"`, options: ["Approve", "Needs changes"]. "We're building [title]. Scope: [2-sentence summary]. Does this match your intent?"
-2. **Acceptance criteria question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Acceptance criteria: [bulleted list]. Are these the right tests of 'done'?"
-3. **Constraints question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Constraints: [bulleted list]. Anything missing or wrong?"
-4. **Implementation plan question**: `type: "single"`, options: ["Approve", "Needs changes"]. "Implementation plan: [unit names with AC references]. Does this decomposition look right?"
-5. **Non-TDD strategy question** (ONLY if any units have `testStrategy: "verify"` or `testStrategy: "skip"`): `type: "single"`, options: ["Approve", "Change to TDD"]. "N of M units use verify or skip strategy: [list unit names with strategy and rationale]. If any of these could have a test-first contract, consider reclassifying as tdd. Approve these classifications?"
-  6. **Test suite question** (ONLY if any units have `testSuite` set): `type: "single"`, options: ["Approve", "Change"]. "The following units map to non-default test suites: [list unit names with suite]. Approve these test suite assignments?"
-
-If the user selects "Needs changes" for any question, `spec_user_approved` will NOT be set — review the feedback and revise the spec, then re-present for approval.
+If the user selects "Needs changes" for any question, `spec_user_approved` will NOT be set — review the feedback and revise the spec, then re-run `pi_coder_approve_spec`.
 
 When all questions are approved, use `pi_coder_advance_fsm` with targetState `SPEC_APPROVED`.
 
@@ -179,7 +176,7 @@ When your FSM is in REVIEWING (all implementation units complete):
 If the reviewer finds that a verify or skip unit changed production behavior and should have been tdd:
 
 1. Re-save the spec with `pi_coder_save_spec`, changing the unit's testStrategy to `"tdd"`
-2. Present the reclassification to the user via interview for approval
+2. Present the reclassification to the user via `pi_coder_approve_spec` for approval
 3. The NEEDS_CHANGES → TDD_RED_WRITE flow will run a full RED/GREEN cycle for the unit
 4. The test_run_this_state evidence will NOT be auto-set (the spec now says "tdd"), so the RED phase gate is enforced normally
 
@@ -191,12 +188,11 @@ The human's original spec approval covered the OLD classification. The reclassif
 
 When your FSM is in APPROVED:
 
-1. Present a final report to the user using `interview`:
-   - Summary of changes made
-   - Test results per unit
-   - Review verdict
-   - Any deferred items
-   - Knowledge learnings discovered during the cycle
+1. Present a final report to the user using `pi_coder_approve_final`:
+   ```
+   pi_coder_approve_final({ specId: "your-spec-id" })
+   ```
+   This tool builds the final report questions and writes them to a file. Its output tells you the exact `interview` call to make. The interview covers: changes summary, test results, review verdict, knowledge learnings, and a final Approve / Rollback question.
 2. If the user approves, use `pi_coder_advance_fsm` to advance to MERGING (direct path — the interview IS the multi-point approval) or through FINAL_APPROVAL → MERGING → COMPLETE
 3. If the user rejects, offer a rollback — call `pi_coder_git` with action `rollback` using the stored pre-implementation ref
 
@@ -225,10 +221,18 @@ Research the following implementation request: {user request}
 Before investigating the codebase, read these knowledge files in .pi-coder/knowledge/:
 {relevant filenames from ls .pi-coder/knowledge/}
 
-Return a structured report with: Summary, Architecture, Key Files (with purpose), Applied Knowledge (rules found), Existing Patterns, Risks & Constraints, Feasibility Assessment, Recommendations.
+{External research signals: If the user's request mentions researching, looking up, or finding out about external topics, list them here. If the request involves unfamiliar libraries, version-specific questions, or security best practices, note that external search is likely needed. If the request is purely internal (business logic, existing patterns), omit this section.}
+
+Return a structured report with: Summary, Architecture, Key Files (with purpose), Applied Knowledge (rules found), Existing Patterns, Risks & Constraints, External References (if you searched externally), Feasibility Assessment, Recommendations.
 ```
 
 Include only the knowledge filenames that are relevant to the request. If no knowledge files exist or none are relevant, omit the knowledge section entirely — do not send the researcher on a wild goose chase.
+
+**External research signals** — When constructing the researcher task, inspect the user's original request for signals that external search is needed:
+- Explicit words: "research", "look up", "find out", "what's the best way to", "how does X handle"
+- Implicit signals: the request involves a library not currently in the codebase, a version upgrade/migration, or security/auth concerns
+- If you detect these signals, add an **External Research** section to the task like: `External research likely needed: {specific topic}. Check official docs, changelogs, or API references.`
+- If no signals are present (purely internal business logic), omit the section — do not prompt the researcher to search externally for no reason
 
 ### Implementor — RED Phase (per unit)
 
@@ -391,7 +395,7 @@ When RED tests pass unexpectedly, the extension presents guidance with three opt
 
 1. **Re-delegate to write tests first** — Stay in TDD_RED_WRITE and re-delegate to the implementor with explicit instructions to write ONLY failing test files. This is the correct TDD response when the implementor wrote production code without tests. Do NOT advance the FSM.
 
-2. **Reclassify as skip strategy** — If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with `testStrategy: "skip"` on this unit, then advance to IMPLEMENTING. This records the decision explicitly and the human must approve it via interview.
+2. **Reclassify as skip strategy** — If this unit genuinely doesn't benefit from test-first development (config changes, documentation, non-behavioral changes), re-save the spec with `testStrategy: "skip"` on this unit, then advance to IMPLEMENTING. This records the decision explicitly and the human must approve it via `pi_coder_approve_spec`.
 
 3. **Acknowledge and proceed** (`pi_coder_advance_fsm TDD_GREEN_WRITE`) — Only valid when new tests WERE written that test real new behavior, but they pass because the feature was already partially implemented. The test coverage is valid even though tests passed immediately.
 
