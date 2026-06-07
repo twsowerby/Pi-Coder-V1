@@ -434,7 +434,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
       // Runaway detection: flag subagent sessions that burned excessive tokens
       const subagentTurns = subUsage?.turns ?? 0;
       const subagentOutput = subUsage?.output ?? 0;
-      const isRunaway = subagentTurns > 40 || subagentOutput > 40000;
+      const isRunaway = subagentTurns > 20 || subagentOutput > 40000;
       if (isRunaway) {
         ctx.logEvent("subagent_runaway", {
           agent: ctx.subagentMonitor.lastAgent ?? "unknown",

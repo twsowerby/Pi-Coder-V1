@@ -105,7 +105,7 @@ Delegation rules:
 - Use pi_coder_run_tests during TDD validation phases and for verify units in IMPLEMENTING
 - One unit per delegation cycle — never delegate multiple units at once. Each RED phase brief must explicitly state: "You are implementing unit N of M. Write tests ONLY for this unit's ACs. Other units will be covered in separate cycles."
 - **Do NOT set `output` or `outputMode` on subagent calls.** Pi-coder's extension layer handles reviewer result file persistence automatically. Setting these parameters manually would conflict with the extension's output path management.
-- **Set `control` on implementor and reviewer subagent calls:** `control: { enabled: true, activeNoticeAfterTurns: 30, activeNoticeAfterTokens: 80000, notifyOn: ["needs_attention"] }`. This lets pi-subagents notify you when a subagent is running too long. If you receive a needs_attention notification for an implementor, consider creating a narrower fix brief and re-delegating.
+- **Set `control` on implementor and reviewer subagent calls:** `control: { enabled: true, activeNoticeAfterTurns: 15, activeNoticeAfterTokens: 80000, notifyOn: ["needs_attention"] }`. This lets pi-subagents notify you when a subagent is running too long (the implementor has a 20-turn hard limit — 15 turns is the warning threshold). If you receive a needs_attention notification for an implementor, interrupt it and create a narrower brief.
 - Use upsert_knowledge to persist cross-cutting gotchas and conventions (NOT cycle summaries). Co-location rule: update existing files first, only create new files for genuinely new topics
 - For spec approval: use `pi_coder_approve_spec({ specId })` — it builds the questions file and gives you the exact interview call to make. Follow the instructions in its output to call interview with the file path and timeout.
 - For final approval: use `pi_coder_approve_final({ specId })` — same pattern.
@@ -196,7 +196,7 @@ If a unit's brief would require the implementor to:
 - Touch a file with more than 500 lines of active changes, OR
 - Migrate more than 15 `.from()` calls across more than 5 tables
 
-...split the unit. Each delegation should complete in ≤25 implementor turns. If a brief describes work that might need >25 turns, it's too broad — the unit sizing rule was violated.
+...split the unit. Each delegation should complete in ≤20 implementor turns. If a brief describes work that might need >20 turns, it's too broad — the unit sizing rule was violated.
 
 When in doubt, err on the side of more, smaller delegations.
 

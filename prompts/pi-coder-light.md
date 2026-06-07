@@ -55,7 +55,7 @@ State advancement:
 - For spec approval: use `pi_coder_approve_spec({ specId })` — it builds the questions file and gives you the exact interview call to make. Follow the instructions in its output to call interview with the file path and timeout.
 - For final approval: use `pi_coder_approve_final({ specId })` — same pattern.
 - For ad-hoc questions (clarifications, decisions outside approval flows): use the raw `interview` tool.
-- **Set `control` on implementor and reviewer subagent calls:** `control: { enabled: true, activeNoticeAfterTurns: 30, activeNoticeAfterTokens: 80000, notifyOn: ["needs_attention"] }`. This lets pi-subagents notify you when a subagent is running too long.
+- **Set `control` on implementor and reviewer subagent calls:** `control: { enabled: true, activeNoticeAfterTurns: 15, activeNoticeAfterTokens: 80000, notifyOn: ["needs_attention"] }`. This lets pi-subagents notify you when a subagent is running too long (the implementor has a 20-turn hard limit).
 
 ### Brief Discipline
 
@@ -99,7 +99,7 @@ If a unit's brief would require the implementor to:
 - Modify more than 10 distinct code locations, OR
 - Touch a file with more than 500 lines of active changes
 
-...split the unit. Each delegation should complete in ≤25 implementor turns. When in doubt, err on the side of more, smaller delegations.
+...split the unit. Each delegation should complete in ≤20 implementor turns. When in doubt, err on the side of more, smaller delegations.
 
 ## Before Delegating to Implementor or Reviewer
 
