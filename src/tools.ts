@@ -20,8 +20,39 @@ import { GitOperations } from "./git.ts";
 import { TddRunner } from "./tdd-runner.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 import { SpecManager, generateSpecId } from "./spec.ts";
+import { buildSpecApprovalQuestions, buildFinalReportQuestions } from "./interview-builder.ts";
 import type { IStateMachine } from "./types.ts";
 import type { LogEventType } from "./logger.ts";
+
+// ---------------------------------------------------------------------------
+// Interview server integration (dynamic import with fallback)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write interview questions JSON to a temp file and return instructions for
+ * calling the interview tool with the file path.
+ *
+ * Why this approach: pi-interview is installed in pi's node_modules context
+ * (~/.pi/agent/npm/node_modules/), not in pi-coder's. Dynamic import from
+ * pi-coder's module context can't resolve it. Instead, we write the questions
+ * to disk and let the LLM call the interview tool (which runs in pi's context)
+ * with the file path. The interview tool natively supports file paths.
+ */
+async function writeInterviewFile(
+  questionsFile: { questions: unknown[]; title?: string; description?: string },
+  prefix: string,
+): Promise<string> {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { randomUUID } = await import("node:crypto");
+
+  const dir = join(tmpdir(), "pi-coder-interview");
+  await mkdir(dir, { recursive: true });
+  const filePath = join(dir, `${prefix}-${randomUUID().slice(0, 8)}.json`);
+  await writeFile(filePath, JSON.stringify(questionsFile, null, 2), "utf-8");
+  return filePath;
+}
 
 /** Dependencies injected from the extension main. */
 export interface StateMachineRef {
@@ -995,6 +1026,161 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDependencies): void {
             previousState,
             validTargets,
           },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // pi_coder_approve_spec
+  // ---------------------------------------------------------------------------
+  pi.registerTool({
+    name: "pi_coder_approve_spec",
+    label: "Spec Approval Interview",
+    description:
+      "Present the spec for user approval in a structured interview. " +
+      "This tool builds the interview questions programmatically from the saved spec — " +
+      "you do NOT construct interview JSON. It writes the questions to a file and tells you " +
+      "how to call the interview tool with that file. This guarantees the correct format " +
+      "(spec overview, acceptance criteria, constraints, implementation plan) and timeout.",
+    promptSnippet: "Present the spec for structured user approval",
+    promptGuidelines: [
+      "Call this after saving the spec with pi_coder_save_spec. It writes a questions file and tells you the interview call to make.",
+      "Follow the instructions in the tool output — call interview with the exact file path and timeout shown.",
+      "If the user selects 'Needs changes' for any question, spec_user_approved will NOT be set — revise the spec and re-run.",
+    ],
+    parameters: Type.Object({
+      specId: Type.String({ description: "The active spec ID to present for approval" }),
+    }),
+
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      try {
+        const spec = await specManager.readSpec(params.specId);
+        if (!spec) {
+          return {
+            content: [{ type: "text" as const, text: `Spec "${params.specId}" not found. Save it with pi_coder_save_spec first.` }],
+            details: { success: false, error: "spec_not_found" },
+            isError: true,
+          };
+        }
+
+        // Build questions programmatically — never let the LLM construct interview JSON
+        const questionsFile = buildSpecApprovalQuestions(spec);
+
+        // Write to a temp file that the interview tool can load
+        const filePath = await writeInterviewFile(questionsFile, "spec-approval");
+
+        const timeoutValue = config.interviewTimeout;
+        const timeoutNote = timeoutValue === 0 ? "no timeout (unlimited)" : `${timeoutValue}s`;
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Spec approval interview questions built for: ${spec.title}`,
+              `📂 Questions file: ${filePath}`,
+              `⏱️ Timeout: ${timeoutNote}`,
+              "",
+              "Now call the interview tool with this exact command:",
+              '```',
+              `interview({ questions: "${filePath}", timeout: ${timeoutValue} })`,
+              '```',
+              "",
+              "The questions cover: spec overview, acceptance criteria, constraints, implementation plan," +
+              " and any non-TDD strategy classifications. Each section has an Approve / Needs changes question.",
+            ].join("\n"),
+          }],
+          details: {
+            success: true,
+            specId: params.specId,
+            questionsFile: filePath,
+            timeout: timeoutValue,
+            questionCount: questionsFile.questions.length,
+          },
+        };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error building spec approval interview: ${error}` }],
+          details: { success: false, error },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // pi_coder_approve_final
+  // ---------------------------------------------------------------------------
+  pi.registerTool({
+    name: "pi_coder_approve_final",
+    label: "Final Report Interview",
+    description:
+      "Present a final report for user approval. " +
+      "This tool builds the interview questions programmatically from the saved spec — " +
+      "you do NOT construct interview JSON. It writes the questions to a file and tells you " +
+      "how to call the interview tool with that file. This guarantees correct format and timeout.",
+    promptSnippet: "Present the final report for user approval",
+    promptGuidelines: [
+      "Call this after the review is complete and you're ready for the user to sign off on merging.",
+      "Follow the instructions in the tool output — call interview with the exact file path and timeout shown.",
+      "If the user selects 'Rollback', the changes will not be merged — address the concerns and re-run.",
+    ],
+    parameters: Type.Object({
+      specId: Type.String({ description: "The active spec ID for the final report" }),
+    }),
+
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      try {
+        const spec = await specManager.readSpec(params.specId);
+        if (!spec) {
+          return {
+            content: [{ type: "text" as const, text: `Spec "${params.specId}" not found.` }],
+            details: { success: false, error: "spec_not_found" },
+            isError: true,
+          };
+        }
+
+        // Build questions programmatically
+        const questionsFile = buildFinalReportQuestions(spec);
+
+        // Write to a temp file that the interview tool can load
+        const filePath = await writeInterviewFile(questionsFile, "final-report");
+
+        const timeoutValue = config.interviewTimeout;
+        const timeoutNote = timeoutValue === 0 ? "no timeout (unlimited)" : `${timeoutValue}s`;
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Final report interview questions built for: ${spec.title}`,
+              `📂 Questions file: ${filePath}`,
+              `⏱️ Timeout: ${timeoutNote}`,
+              "",
+              "Now call the interview tool with this exact command:",
+              '```',
+              `interview({ questions: "${filePath}", timeout: ${timeoutValue} })`,
+              '```',
+              "",
+              "The questions cover: changes summary, test results, review verdict, knowledge learnings,",
+              "and a final Approve / Rollback question.",
+            ].join("\n"),
+          }],
+          details: {
+            success: true,
+            specId: params.specId,
+            questionsFile: filePath,
+            timeout: timeoutValue,
+            questionCount: questionsFile.questions.length,
+          },
+        };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error building final report interview: ${error}` }],
+          details: { success: false, error },
           isError: true,
         };
       }

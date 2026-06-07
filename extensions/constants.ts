@@ -22,6 +22,8 @@ export const ORCHESTRATOR_TOOLS = [
   "pi_coder_save_spec",
   "pi_coder_read_spec",
 "pi_coder_advance_fsm",
+  "pi_coder_approve_spec",
+  "pi_coder_approve_final",
   "interview",
   "intercom",
 ];
@@ -37,6 +39,8 @@ export const LIGHT_TOOLS = [
   "pi_coder_save_spec",
   "pi_coder_read_spec",
 "pi_coder_advance_fsm",
+  "pi_coder_approve_spec",
+  "pi_coder_approve_final",
   "upsert_knowledge",
   "interview",
   "intercom",
