@@ -443,6 +443,11 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       lines.push("| NEEDS_CHANGES | IMPLEMENTING | Functional or comprehensive fix |");
       lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
       lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+      if (!this._config.mergeBranch) {
+        lines.push("| MERGING | COMPLETE | Merge disabled — branch ready for PR/manual merge |");
+      } else {
+        lines.push(`| MERGING | COMPLETE | Merge feature branch (strategy: ${this._config.mergeBranch}) |`);
+      }
       lines.push("| Any | BLOCKED | Emergency override |");
       lines.push("| Any | IDLE | Abort cycle |");
       lines.push("");
@@ -471,6 +476,11 @@ export class BaseStateMachine<S extends string> implements IStateMachine {
       lines.push("| NEEDS_CHANGES | TDD_GREEN_WRITE | Functional fix with existing test coverage |");
       lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
       lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+      if (!this._config.mergeBranch) {
+        lines.push("| MERGING | COMPLETE | Merge disabled — branch ready for PR/manual merge |");
+      } else {
+        lines.push(`| MERGING | COMPLETE | Merge feature branch (strategy: ${this._config.mergeBranch}) |`);
+      }
       lines.push("| Any | IDLE | Abort cycle |");
       lines.push("");
       lines.push("⚠️ IMPORTANT: The table above is COMPLETE. No other transitions are valid.");

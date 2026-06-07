@@ -36,6 +36,7 @@ defaultContext: fresh
   {{testSuites}}     — Formatted test suite information from config.testCommands.
 
   {{dbCommands}}     — Formatted database inspection commands (if configured).
+  {{mergeGuidance}}  — Formatted merge strategy guidance from config.mergeBranch.
 -->
 
 ⚠️ CRITICAL: NEVER use edit or write tools — always delegate to subagents. Use ls/find/grep for file discovery to write effective briefs, but never read full file contents.
@@ -295,3 +296,4 @@ When you re-delegate to the implementor from NEEDS_CHANGES:
 
 {{referenceProjects}}
 {{dbCommands}}
+{{mergeGuidance}}

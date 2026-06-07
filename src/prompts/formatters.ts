@@ -5,7 +5,7 @@
  * Extracted from extensions/index.ts for testability.
  */
 
-import type { TestCommands, DbCommandsConfig } from "../types.ts";
+import type { TestCommands, DbCommandsConfig, PiCoderConfig } from "../types.ts";
 
 /**
  * Format referenceProjects config into a prompt section.
@@ -44,6 +44,21 @@ export function formatTestSuites(testCommands: TestCommands | undefined): string
   lines.push("Default suite is 'unit'. Use suite='all' to run every suite.");
   lines.push("When a spec unit has testSuite set, pass that suite name when running tests for that unit.");
   return lines.join("\n");
+}
+
+/**
+ * Format mergeBranch config into a prompt section.
+ * Tells the orchestrator what to do when reaching the MERGING state.
+ */
+export function formatMergeGuidance(mergeBranch: PiCoderConfig["mergeBranch"]): string {
+  if (mergeBranch === false) {
+    return [
+      "**Merge is disabled** (mergeBranch: false). When you reach the MERGING state, do NOT call pi_coder_git merge. Instead, tell the user the feature branch is ready for a PR or manual merge. The FSM will still advance through MERGING → COMPLETE, but no git merge will be performed.",
+    ].join("\n");
+  }
+  return [
+    `**Merge strategy: ${mergeBranch}.** When you reach the MERGING state, call pi_coder_git merge to merge the feature branch using ${mergeBranch === "squash" ? "squash merge (all commits compressed into one)" : "a regular merge commit"}.`,
+  ].join("\n");
 }
 
 /**

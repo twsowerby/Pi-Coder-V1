@@ -265,6 +265,11 @@ export class DevStateMachine extends BaseStateMachine<DevFSMState> {
     lines.push("| NEEDS_CHANGES | IMPLEMENTING | Functional fix (verify/skip unit) |");
     lines.push("| NEEDS_CHANGES | REVIEWING | Non-functional fix only |");
     lines.push("| APPROVED | MERGING or FINAL_APPROVAL | User approved merge |");
+    if (!this._config.mergeBranch) {
+      lines.push("| MERGING | COMPLETE | Merge disabled — branch ready for PR/manual merge |");
+    } else {
+      lines.push(`| MERGING | COMPLETE | Merge feature branch (strategy: ${this._config.mergeBranch}) |`);
+    }
     lines.push("| Any | IDLE | Abort cycle |");
     lines.push("");
     lines.push("⚠️ IMPORTANT: The table above is COMPLETE. No other transitions are valid.");

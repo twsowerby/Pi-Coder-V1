@@ -8,7 +8,7 @@
  */
 
 import type { PiCoderConfig, IStateMachine } from "../types.ts";
-import { formatReferenceProjects, formatTestSuites, formatDbCommands } from "./formatters.ts";
+import { formatReferenceProjects, formatTestSuites, formatDbCommands, formatMergeGuidance } from "./formatters.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -156,7 +156,8 @@ Available tools:
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
     .replace("{{testSuites}}", formatTestSuites(config.testCommands))
-    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands))
+    .replace("{{mergeGuidance}}", formatMergeGuidance(config.mergeBranch));
 }
 
 /**
@@ -186,7 +187,8 @@ function buildOrchestratorPrompt(
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
     .replace("{{testSuites}}", formatTestSuites(config.testCommands))
-    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands))
+    .replace("{{mergeGuidance}}", formatMergeGuidance(config.mergeBranch));
 }
 
 /**
@@ -252,7 +254,8 @@ Available tools:
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
     .replace("{{testSuites}}", formatTestSuites(config.testCommands))
-    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands))
+    .replace("{{mergeGuidance}}", formatMergeGuidance(config.mergeBranch));
 }
 
 /**
@@ -329,7 +332,8 @@ Available tools:
     .replace("{{toolList}}", toolList)
     .replace("{{referenceProjects}}", formatReferenceProjects(config.referenceProjects))
     .replace("{{testSuites}}", formatTestSuites(config.testCommands))
-    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands));
+    .replace("{{dbCommands}}", formatDbCommands(config.dbCommands))
+    .replace("{{mergeGuidance}}", formatMergeGuidance(config.mergeBranch));
 }
 
 // ---------------------------------------------------------------------------

@@ -135,3 +135,4 @@ When you re-delegate to the implementor from NEEDS_CHANGES:
 
 {{referenceProjects}}
 {{dbCommands}}
+{{mergeGuidance}}
