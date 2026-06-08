@@ -184,6 +184,9 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
     // Listen for subagent control events
     if (ctx.subagentsAvailable && ctx.config.subagentControl.enabled) {
       ctx.pi.events.on("subagent:control-event", (data: unknown) => {
+        // Debug: log raw event receipt before any filtering
+        ctx.logEvent("control_event_received", { rawData: JSON.stringify(data).slice(0, 200) });
+
         if (ctx.piCoderMode === "off") return;
         const event = data as {
           event?: { type: string; agent: string; runId: string; message: string; reason?: string; turns?: number; toolCount?: number; currentTool?: string; elapsedMs?: number };

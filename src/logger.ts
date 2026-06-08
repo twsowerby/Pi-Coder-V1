@@ -88,7 +88,9 @@ export type LogEventType =
   | "guard_truncated"
   | "guard_context_pruned"
   | "guard_compaction_summary"
-  | "research_summary_injected";
+  | "research_summary_injected"
+  | "control_injection"
+  | "control_event_received";
 
 /**
  * Mapping from event type to the minimum log level required.
@@ -168,6 +170,8 @@ export const LOG_LEVEL_MAP: Record<LogEventType, "minimal" | "standard" | "verbo
   guard_context_pruned: "verbose",
   guard_compaction_summary: "standard",
   research_summary_injected: "standard",
+  control_injection: "standard",
+  control_event_received: "standard",
 
   // Verbose: + nudge
   nudge_fired: "verbose",

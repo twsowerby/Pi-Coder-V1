@@ -199,8 +199,8 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         // Foreground subagents are blocked, so control events CANNOT trigger
         // a new orchestrator turn — they just make the problem visible.
         const existingControl = (input as Record<string, unknown>).control as Record<string, unknown> | undefined;
-        (input as Record<string, unknown>).control = {
-          enabled: true,
+        const resolvedControl = {
+          enabled: true as boolean,
           needsAttentionAfterMs: 60_000,
           activeNoticeAfterMs: 180_000,
           activeNoticeAfterTurns: 20,
@@ -209,6 +209,15 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
           notifyChannels: ["event", "intercom"],
           ...(typeof existingControl === "object" && existingControl ? existingControl : {}),
         };
+        (input as Record<string, unknown>).control = resolvedControl;
+
+        // Debug: confirm the control mutation was applied
+        ctx.logEvent("control_injection", {
+          targetAgent,
+          previousControl: existingControl,
+          resolvedControl,
+          mutationApplied: (input as Record<string, unknown>).control === resolvedControl,
+        });
 
         // Inject `output` parameter for reviewer subagent calls.
         // When pi-intercom is active, the intercom bridge strips `finalOutput`
