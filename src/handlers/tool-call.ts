@@ -199,15 +199,36 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         // Foreground subagents are blocked, so control events CANNOT trigger
         // a new orchestrator turn — they just make the problem visible.
         const existingControl = (input as Record<string, unknown>).control as Record<string, unknown> | undefined;
+        // Merge LLM's control config with our required defaults.
+        // notifyOn and notifyChannels are infrastructure concerns — we ALWAYS
+        // need both needs_attention and active_long_running, and we always
+        // need the event channel. The LLM's values are merged in but cannot
+        // override these critical settings.
+        const mergedNotifyOn = new Set(["needs_attention", "active_long_running"]);
+        const mergedNotifyChannels = new Set(["event", "intercom"]);
+        if (typeof existingControl === "object" && existingControl) {
+          if (Array.isArray(existingControl.notifyOn)) {
+            for (const n of existingControl.notifyOn as string[]) mergedNotifyOn.add(n);
+          }
+          if (Array.isArray(existingControl.notifyChannels)) {
+            for (const ch of existingControl.notifyChannels as string[]) mergedNotifyChannels.add(ch);
+          }
+        }
         const resolvedControl = {
           enabled: true as boolean,
           needsAttentionAfterMs: 60_000,
           activeNoticeAfterMs: 180_000,
           activeNoticeAfterTurns: 20,
           failedToolAttemptsBeforeAttention: 5,
-          notifyOn: ["needs_attention", "active_long_running"],
-          notifyChannels: ["event", "intercom"],
-          ...(typeof existingControl === "object" && existingControl ? existingControl : {}),
+          ...(typeof existingControl === "object" && existingControl
+            ? {
+                ...existingControl,
+                // Force infrastructure-critical settings — LLM cannot override these
+                enabled: true as boolean,
+                notifyOn: [...mergedNotifyOn],
+                notifyChannels: [...mergedNotifyChannels],
+              }
+            : {}),
         };
         (input as Record<string, unknown>).control = resolvedControl;
 
