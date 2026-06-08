@@ -201,8 +201,14 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
             reason: ctrl.reason,
             currentTool: ctrl.currentTool,
           });
-          if (!ctx.subagentMonitor.running) return;
-          // No pi.sendMessage for foreground subagents
+          // Surface as user-visible notification so the user can intervene.
+          // pi-subagents already injects a notice via pi.sendMessage(display:true),
+          // but this adds a ctx.ui.notify() as a backup for terminals that don't
+          // show inline notices prominently.
+          ctx.sessionCtx?.ui.notify(
+            `⚠️ ${ctrl.agent} needs attention (${ctrl.reason ?? "idle"}). Current tool: ${ctrl.currentTool ?? "unknown"}. Press Ctrl+C to intervene.`,
+            "warning",
+          );
         } else if (ctrl.type === "active_long_running") {
           const elapsed = ctrl.elapsedMs ? Math.floor(ctrl.elapsedMs / 1000) : "?";
           ctx.logEvent("subagent_control", {
@@ -212,6 +218,10 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
             elapsedSeconds: elapsed,
             currentTool: ctrl.currentTool,
           });
+          ctx.sessionCtx?.ui.notify(
+            `⏱️ ${ctrl.agent} has been running for ${elapsed}s. Current tool: ${ctrl.currentTool ?? "unknown"}. Consider interrupting if stuck.`,
+            "info",
+          );
         }
       });
     }
