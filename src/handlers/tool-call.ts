@@ -191,8 +191,24 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
           // NEEDS_CHANGES → TDD_RED_WRITE has no evidence gate.
         }
 
-        // Disable pi-subagents control events for foreground runs
-        (input as Record<string, unknown>).control = { enabled: false };
+        // Enable pi-subagents control events for foreground runs.
+        // This allows pi-subagents to emit needs_attention and active_long_running
+        // events when a subagent is stuck or running too long. These are surfaced
+        // as visible notices in the TUI so the user can intervene (Ctrl+C).
+        // The events are also logged and tracked by the subagent monitor.
+        // Foreground subagents are blocked, so control events CANNOT trigger
+        // a new orchestrator turn — they just make the problem visible.
+        const existingControl = (input as Record<string, unknown>).control as Record<string, unknown> | undefined;
+        (input as Record<string, unknown>).control = {
+          enabled: true,
+          needsAttentionAfterMs: 60_000,
+          activeNoticeAfterMs: 180_000,
+          activeNoticeAfterTurns: 20,
+          failedToolAttemptsBeforeAttention: 5,
+          notifyOn: ["needs_attention", "active_long_running"],
+          notifyChannels: ["event", "intercom"],
+          ...(typeof existingControl === "object" && existingControl ? existingControl : {}),
+        };
 
         // Inject `output` parameter for reviewer subagent calls.
         // When pi-intercom is active, the intercom bridge strips `finalOutput`
