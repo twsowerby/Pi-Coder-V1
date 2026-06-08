@@ -23,6 +23,7 @@ import { resetLightModePromptCache, resetPlanModePromptCache, resetDevModePrompt
 import { registerCompactionHandler } from "../compaction.ts";
 import type { HandlerContext } from "../handlers/types.ts";
 import type { LightFSMState, DevFSMState } from "../types.ts";
+import { registerSubagentContextGuard } from "../handlers/subagent-context-guard.ts";
 
 /** Register the session_start event handler and its sub-listeners. */
 export function registerSessionStartHandler(ctx: HandlerContext): void {
@@ -34,8 +35,70 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
 
     // --- Child Process Guard ---
     if (Number(process.env.PI_SUBAGENT_DEPTH ?? "0") > 0) {
-      ctx.piCoderMode = "off";
+      // Load minimal config for guard limits
+      const configResult = loadConfig(cmdCtx.cwd);
+      ctx.config = configResult.config;
+
+      // Reuse the orchestrator's session ID so guard events log to the
+      // same directory as the orchestrator session — not a separate dir.
+      // PI_CODER_SESSION_ID is set by the orchestrator process so child
+      // processes inherit it via the environment.
+      const orchestratorSessionId = process.env.PI_CODER_SESSION_ID;
+      ctx.sessionId = orchestratorSessionId ?? randomUUID();
+      const logDir = join(cmdCtx.cwd, ".pi-coder", "logs");
+      ctx.logger = new Logger(logDir, ctx.config.logging, ctx.sessionId);
+      ctx.projectCwd = cmdCtx.cwd;
+
+      if (ctx.config.subagentContextGuard?.enabled !== false) {
+        ctx.piCoderMode = "subagent-guard";
+        ctx.logEvent("subagent_guard_activated", {
+          childAgent: process.env.PI_SUBAGENT_CHILD_AGENT ?? "unknown",
+        });
+      } else {
+        ctx.piCoderMode = "off";
+      }
       ctx.stateMachine = null;
+      registerSubagentContextGuard(ctx);
+
+      // Register token tracking for the subagent process so usage is logged.
+      // The orchestrator's turn_end/session_shutdown handlers skip subagent-guard
+      // mode, so the guard must manage its own token capture.
+      ctx.pi.on("turn_end", async (event) => {
+        if (ctx.piCoderMode !== "subagent-guard") return;
+        const msg = event.message as { usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number }; totalTokens: number } };
+        const usage = msg?.usage;
+        if (!usage) return;
+
+        const inVal = usage.input ?? 0;
+        const outVal = usage.output ?? 0;
+        const crVal = usage.cacheRead ?? 0;
+        const cwVal = usage.cacheWrite ?? 0;
+        const costVal = usage.cost?.total ?? 0;
+
+        ctx.tokenTracker.accrueOrchestrator({ input: inVal, output: outVal, cacheRead: crVal, cacheWrite: cwVal, cost: costVal });
+        ctx.logEvent("turn_usage", {
+          input: inVal,
+          output: outVal,
+          cacheRead: crVal,
+          cacheWrite: cwVal,
+          cost: costVal,
+          model: (event.message as { model?: string }).model ?? null,
+          fsmState: "N/A",
+        });
+      });
+
+      ctx.pi.on("session_shutdown", async () => {
+        if (ctx.piCoderMode !== "subagent-guard") return;
+        ctx.logEvent("session_summary", {
+          totalTurns: ctx.tokenTracker.sessionTurnCount,
+          totalTokens: ctx.tokenTracker.snapshotLifecycleTokens(),
+          specsAttempted: ctx.tokenTracker.sessionSpecCount,
+          finalMode: "subagent-guard",
+          finalFsmState: "N/A",
+          sessionDurationMs: ctx.tokenTracker.sessionStartTime !== null ? Date.now() - ctx.tokenTracker.sessionStartTime : null,
+        });
+      });
+
       return;
     }
 
@@ -50,6 +113,9 @@ export function registerSessionStartHandler(ctx: HandlerContext): void {
 
     // Generate session ID and initialize logger
     ctx.sessionId = randomUUID();
+    // Expose session ID to child processes so subagent guard can log to
+    // the same session directory (child processes inherit env vars)
+    process.env.PI_CODER_SESSION_ID = ctx.sessionId;
     const logDir = join(cwd, ".pi-coder", "logs");
     ctx.logger = new Logger(logDir, ctx.config.logging, ctx.sessionId);
 

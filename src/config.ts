@@ -41,6 +41,13 @@ export const DEFAULT_CONFIG: PiCoderConfig = {
   subagentControl: {
     enabled: true,
   },
+  subagentContextGuard: {
+    enabled: true,
+    readLineLimit: 200,
+    bashCharLimit: 5000,
+    grepResultLimit: 50,
+    contextPruneTurns: 4,
+  },
   notifications: {
     enabled: false,
   },
@@ -170,7 +177,7 @@ export function loadConfig(cwd: string): ConfigValidationResult {
         parsed.referenceProjects = Object.keys(resolved).length > 0 ? resolved : undefined;
       }
 
-      return validateConfig({ ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) }, retryEscalation: { ...DEFAULT_CONFIG.retryEscalation, ...(parsed.retryEscalation ?? {}) } });
+      return validateConfig({ ...DEFAULT_CONFIG, ...parsed, nudge: { ...DEFAULT_CONFIG.nudge, ...(parsed.nudge ?? {}) }, logging: { ...DEFAULT_CONFIG.logging, ...(parsed.logging ?? {}) }, subagentControl: { ...DEFAULT_CONFIG.subagentControl, ...(parsed.subagentControl ?? {}) }, subagentContextGuard: { ...DEFAULT_CONFIG.subagentContextGuard, ...(parsed.subagentContextGuard ?? {}) }, notifications: { ...DEFAULT_CONFIG.notifications, ...(parsed.notifications ?? {}) }, retryEscalation: { ...DEFAULT_CONFIG.retryEscalation, ...(parsed.retryEscalation ?? {}) } });
     }
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);

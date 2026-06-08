@@ -19,7 +19,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
     ctx.tokenTracker.sessionTurnCount++;
 
     // When off or subagents not available, let pi run normally
-    if (ctx.piCoderMode === "off" || !ctx.subagentsAvailable) return;
+    if (ctx.piCoderMode === "off" || ctx.piCoderMode === "subagent-guard" || !ctx.subagentsAvailable) return;
 
     const { systemPromptOptions } = event;
 
@@ -52,6 +52,7 @@ export function registerBeforeAgentStartHandler(ctx: HandlerContext): void {
       dev: "[MODE: DEV] FSM is active with per-unit test strategy (tdd/verify/skip). Follow the FSM lifecycle.",
       light: "[MODE: LIGHT] FSM is active. Follow the lifecycle: spec → implement → review → merge. No TDD phases.",
       plan: "[MODE: PLAN] Investigation and discussion only. Delegate to pi-coder.researcher. No specs, no git, no FSM.",
+      "subagent-guard": "", // Never reached — subagent-guard mode returns early
       off: "", // Never reached — off mode returns early
     };
     fullPrompt = modeIndicator[ctx.piCoderMode] + "\n\n" + fullPrompt;

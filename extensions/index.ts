@@ -85,8 +85,8 @@ function refreshUI(): void {
   if (!sessionCtx) return;
   const ctx = sessionCtx;
 
-  if (piCoderMode === "off") {
-    // Pi-coder OFF — clear everything
+  if (piCoderMode === "off" || piCoderMode === "subagent-guard") {
+    // Pi-coder OFF or in subagent-guard mode — clear everything
     ctx.ui.setWidget("pi-coder-state", undefined);
     ctx.ui.setWidget("pi-coder-subagent", undefined);
     ctx.ui.setStatus("pi-coder", undefined);
@@ -464,7 +464,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("agent_end", async () => {
-    if (piCoderMode === "off") return;
+    if (piCoderMode === "off" || piCoderMode === "subagent-guard") return;
     notify(config, "agent_end", "Pi Coder \u00b7 Idle", "Waiting for your input");
   });
 
@@ -473,7 +473,7 @@ export default function piCoderExtension(pi: ExtensionAPI): void {
   // -----------------------------------------------------------------------
 
   pi.on("turn_end", async (event) => {
-    if (piCoderMode === "off") return;
+    if (piCoderMode === "off" || piCoderMode === "subagent-guard") return;
     // Extract usage from the assistant message in this turn
     const msg = event.message as { usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number }; totalTokens: number } };
     const usage = msg?.usage;

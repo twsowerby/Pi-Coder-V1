@@ -133,8 +133,8 @@ function findCompactionBoundary(previousState: string, newState: string): Compac
  * fired after TDD_GREEN_VALIDATE with generic instructions.
  */
 function checkBoundaryCompaction(ctx: HandlerContext, previousState: string, newState: string): void {
-  // Only trigger in active FSM modes
-  if (ctx.piCoderMode === "off" || ctx.piCoderMode === "plan") return;
+  // Only trigger in active FSM modes (not plan, not subagent-guard)
+  if (ctx.piCoderMode === "off" || ctx.piCoderMode === "plan" || ctx.piCoderMode === "subagent-guard") return;
 
   // Find matching boundary
   const boundary = findCompactionBoundary(previousState, newState);
@@ -289,6 +289,77 @@ async function saveReviewToFile(ctx: HandlerContext, reviewText: string): Promis
   }
 }
 
+/** Read the researcher output file from .pi-coder/tmp/research-output.md.
+ *  The researcher uses outputMode: "file-only" — the in-memory result contains
+ *  only a file reference. This reads the actual content for summary extraction. */
+function readResearchOutputFile(cwd: string): string | undefined {
+  const filePath = resolve(cwd, ".pi-coder", "tmp", "research-output.md");
+  try {
+    if (existsSync(filePath)) {
+      const content = readFileSync(filePath, "utf-8");
+      if (content.length > 0) return content;
+    }
+  } catch { /* continue */ }
+  return undefined;
+}
+
+/** Build a compressed summary from the full researcher report.
+ *  Extracts key structured data (summary, key files, risks) rather than
+ *  returning the full 10-30K report to the orchestrator context. */
+function buildResearchSummary(fullReport: string): string {
+  const lines: string[] = ["## RESEARCH SUMMARY"];
+
+  // Extract the first substantial paragraph as a brief summary
+  const paragraphs = fullReport.split(/\n{2,}/);
+  const firstSubstantial = paragraphs.find(p => p.trim().length > 20 && !p.trim().startsWith("#"));
+  if (firstSubstantial) {
+    const brief = firstSubstantial.trim().slice(0, 300);
+    lines.push(brief);
+  }
+
+  // Extract key sections by heading
+  const sectionPattern = /^(#{1,3}\s+(.+))$/gm;
+  const sections: Array<{ heading: string; content: string }> = [];
+  let match: RegExpExecArray | null;
+  let lastIndex = 0;
+
+  while ((match = sectionPattern.exec(fullReport)) !== null) {
+    if (lastIndex > 0 || match.index > 0) {
+      const prevContent = fullReport.slice(lastIndex, match.index).trim();
+      if (sections.length > 0 && prevContent) {
+        sections[sections.length - 1].content = prevContent;
+      }
+    }
+    sections.push({ heading: match[2].trim(), content: "" });
+    lastIndex = match.index + match[0].length;
+  }
+  // Capture content after last heading
+  if (sections.length > 0) {
+    sections[sections.length - 1].content = fullReport.slice(lastIndex).trim();
+  }
+
+  // Extract key sections
+  for (const section of sections) {
+    if (section.heading.match(/key\s+files|architecture|structure|relevant\s+files/i)) {
+      lines.push("");
+      lines.push("### Key Files");
+      lines.push(section.content.slice(0, 500));
+    } else if (section.heading.match(/risk|constraint|caveat|caution|warn/i)) {
+      lines.push("");
+      lines.push("### Risks & Constraints");
+      lines.push(section.content.slice(0, 300));
+    } else if (section.heading.match(/applied\s+knowledge|knowledge\s+base|rules/i)) {
+      lines.push("");
+      lines.push("### Applied Knowledge");
+      lines.push(section.content.slice(0, 300));
+    }
+  }
+
+  lines.push("");
+  lines.push("Full report: .pi-coder/tmp/research-output.md");
+  return lines.join("\n");
+}
+
 /** Build a structured summary from the extracted review verdict (for orchestrator context). */
 function buildReviewSummary(verdict: ReviewVerdict, ctx: HandlerContext): string {
   const lines: string[] = [];
@@ -391,7 +462,7 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
       }
     }
 
-    if (ctx.piCoderMode === "off") return;
+    if (ctx.piCoderMode === "off" || ctx.piCoderMode === "subagent-guard") return;
     const isPlanMode = ctx.piCoderMode === "plan";
 
     const { details } = event;
@@ -486,6 +557,23 @@ export function registerToolResultHandler(ctx: HandlerContext): void {
 
           const summary = `${statusIcon} ${r.agent} ${stats.length > 0 ? `· ${stats.join(" · ")}` : ""} — ${taskBrief.replace(/\n/g, " ")}`;
           ctx.sessionCtx?.ui.notify(summary, r.exitCode === 0 ? "info" : "error");
+        }
+      }
+
+      // --- Researcher: read output file and inject pruned summary ---
+      // The researcher uses outputMode: "file-only" — the in-memory result
+      // contains only a file reference. Read the file and inject a compressed
+      // summary so the orchestrator gets key findings without 10-30K of raw output.
+      if (ctx.subagentMonitor.lastAgent === "pi-coder.researcher") {
+        const researchOutput = readResearchOutputFile(ctx.projectCwd);
+        if (researchOutput && Array.isArray(rawContent) && rawContent.length >= 1 && rawContent[0]?.type === "text") {
+          const summary = buildResearchSummary(researchOutput);
+          (rawContent[0] as { type: string; text: string }).text = summary;
+          ctx.logEvent("research_summary_injected", {
+            fullLength: researchOutput.length,
+            summaryLength: summary.length,
+            specId: ctx.activeSpecId,
+          });
         }
       }
 

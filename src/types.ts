@@ -292,7 +292,7 @@ export interface NotificationsConfig {
   events?: NotificationEvent[];
 }
 
-export type PiCoderMode = "off" | "plan" | "light" | "dev";
+export type PiCoderMode = "off" | "plan" | "light" | "dev" | "subagent-guard";
 
 export interface TestCommands {
   /** Command to run tests for this suite (e.g. "npx vitest run", "npm test") */
@@ -316,6 +316,26 @@ export type DbStack = "supabase" | "prisma" | "drizzle" | "raw-pg" | "raw-mysql"
 export interface DbCommandsConfig {
   /** DB stack identifier — controls which inspection instructions are provided */
   stack: DbStack;
+}
+
+/** Context guard configuration for subagent processes.
+ *  When PI_SUBAGENT_DEPTH > 0, the extension activates in guard mode instead
+ *  of disabling entirely. Guard mode truncates large tool outputs, prunes
+ *  old context, and provides subagent-aware compaction summaries. */
+export interface SubagentContextGuardConfig {
+  /** Enable the subagent context guard. Default: true */
+  enabled: boolean;
+  /** Maximum lines returned from read tool calls. Default: 200 */
+  readLineLimit: number;
+  /** Maximum characters returned from bash tool calls. Default: 5000 */
+  bashCharLimit: number;
+  /** Maximum lines returned from grep tool calls. Default: 50 */
+  grepResultLimit: number;
+  /** Prune tool results older than N assistant turns. 0 = disabled. Default: 4 */
+  contextPruneTurns: number;
+  /** Per-agent truncation limit overrides.
+   *  Key is the agent name after "pi-coder." (e.g., "implementor") */
+  agentOverrides?: Partial<Record<"implementor" | "researcher" | "reviewer", Partial<Pick<SubagentContextGuardConfig, "readLineLimit" | "bashCharLimit" | "grepResultLimit">>>>;
 }
 
 export interface PiCoderConfig {
@@ -343,6 +363,8 @@ export interface PiCoderConfig {
   notifications: NotificationsConfig;
   /** Per-state retry escalation configuration */
   retryEscalation: RetryEscalationConfig;
+  /** Context guard configuration for subagent processes */
+  subagentContextGuard?: SubagentContextGuardConfig;
   /** ⚠️ EXPERIMENTAL: Named reference projects accessible by the researcher subagent */
   referenceProjects?: Record<string, string>;
   /** Database inspection commands. When configured, orchestrator includes DB inspection
