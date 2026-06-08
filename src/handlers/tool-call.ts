@@ -232,12 +232,10 @@ export function registerToolCallHandler(ctx: HandlerContext): void {
         };
         (input as Record<string, unknown>).control = resolvedControl;
 
-        // Debug: confirm the control mutation was applied
         ctx.logEvent("control_injection", {
           targetAgent,
-          previousControl: existingControl,
-          resolvedControl,
-          mutationApplied: (input as Record<string, unknown>).control === resolvedControl,
+          notifyOn: resolvedControl.notifyOn,
+          activeNoticeAfterTurns: resolvedControl.activeNoticeAfterTurns,
         });
 
         // Inject `output` parameter for reviewer subagent calls.
